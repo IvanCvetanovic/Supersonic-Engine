@@ -11,6 +11,9 @@
 #elif defined(__APPLE__)
 #include <mach-o/dyld.h>
 #include <cstdint>
+#elif defined(__ANDROID__)
+#include <unistd.h>
+#include "platform/android/AndroidApp.hpp"
 #else
 #include <unistd.h>
 #endif
@@ -209,6 +212,13 @@ std::filesystem::path UserDataDirectory(const std::string& application) {
     if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
         base = std::filesystem::path(home) / "Library" / "Application Support";
     }
+#elif defined(__ANDROID__)
+    // The app's private internal storage (Context.getFilesDir()), which is
+    // what an Android app has instead of a home directory: nobody else can
+    // read it, it needs no permission, and uninstalling removes it. Before the
+    // Linux branch below, which __ANDROID__ would otherwise fall into - and
+    // there HOME is unset or "/" for an app process.
+    base = std::filesystem::path(Android::InternalDataPath());
 #else
     // XDG first, and only when it is ABSOLUTE. The specification says a
     // relative value is invalid and must be ignored, and honouring one would

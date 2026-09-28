@@ -38,6 +38,7 @@ VulkanDevice::~VulkanDevice() {
 }
 
 void VulkanDevice::createSurface(Window& window) {
+#if SUPERSONIC_WINDOW_GLFW
     VkSurfaceKHR rawSurface = VK_NULL_HANDLE;
     VkResult result = glfwCreateWindowSurface(
         static_cast<VkInstance>(m_instance),
@@ -49,10 +50,42 @@ void VulkanDevice::createSurface(Window& window) {
     if (result != VK_SUCCESS) {
         throw std::runtime_error("Failed to create GLFW window surface! VkResult: " + std::to_string(static_cast<int>(result)));
     }
+#else
+    VkSurfaceKHR rawSurface = VK_NULL_HANDLE;
+    const VkResult result = window.CreateSurface(static_cast<VkInstance>(m_instance), &rawSurface);
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create the native window surface! VkResult: " + std::to_string(static_cast<int>(result)));
+    }
+#endif
 
     m_surface = rawSurface;
     SUPERSONIC_LOG_INFO("VulkanDevice") << "Vulkan Window Surface created successfully." << std::endl;
 }
+
+#if !SUPERSONIC_WINDOW_GLFW
+void VulkanDevice::DestroySurface() {
+    if (m_surface && m_instance) {
+        m_instance.destroySurfaceKHR(m_surface);
+        m_surface = nullptr;
+        SUPERSONIC_LOG_INFO("VulkanDevice") << "Window surface released with its window.";
+    }
+}
+
+void VulkanDevice::RecreateSurface(Window& window) {
+    DestroySurface();
+    createSurface(window);
+
+    // The queue chosen to present was chosen for the FIRST surface. Every
+    // Android device presents from its graphics queue, but a device that
+    // stopped presenting to the new one should say so here rather than fail at
+    // the first vkQueuePresentKHR with a message about something else.
+    const vk::Bool32 presentable = m_physicalDevice.getSurfaceSupportKHR(
+        m_queueFamilyIndices.presentFamily.value(), m_surface);
+    if (!presentable) {
+        SUPERSONIC_LOG_ERROR("VulkanDevice") << "The present queue cannot present to the new window's surface.";
+    }
+}
+#endif
 
 void VulkanDevice::pickPhysicalDevice() {
     std::vector<vk::PhysicalDevice> devices = m_instance.enumeratePhysicalDevices();
@@ -246,6 +279,15 @@ void VulkanDevice::initVMA() {
     allocatorCreateInfo.instance = static_cast<VkInstance>(m_instance);
     allocatorCreateInfo.physicalDevice = static_cast<VkPhysicalDevice>(m_physicalDevice);
     allocatorCreateInfo.device = static_cast<VkDevice>(m_device);
+
+#if defined(__ANDROID__)
+    // VMA fetches its entry points at run time on Android (CMakeLists.txt says
+    // why), starting from these two.
+    VmaVulkanFunctions functions{};
+    functions.vkGetInstanceProcAddr = &vkGetInstanceProcAddr;
+    functions.vkGetDeviceProcAddr = &vkGetDeviceProcAddr;
+    allocatorCreateInfo.pVulkanFunctions = &functions;
+#endif
 
     VkResult result = vmaCreateAllocator(&allocatorCreateInfo, &m_allocator);
     if (result != VK_SUCCESS) {

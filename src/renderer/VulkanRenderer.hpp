@@ -83,6 +83,21 @@ public:
 
     void RecreateSwapchain();
 
+#if !SUPERSONIC_WINDOW_GLFW
+    // The window is being taken away (WindowBackend.hpp): wait for the GPU and
+    // destroy everything made from it - framebuffers, swapchain, surface - so
+    // nothing is presented to a window that no longer exists. Everything else
+    // the renderer holds (pipelines, textures, meshes, the offscreen target)
+    // does not belong to the window and survives.
+    void ReleaseSurface();
+
+    // A window has come back: a surface from it and a swapchain on that.
+    void RestoreSurface();
+
+    // Whether there is a swapchain to draw into right now.
+    bool HasSurface() const;
+#endif
+
     vk::RenderPass GetRenderPass() const { return m_renderPass; }
     vk::RenderPass GetOffscreenRenderPass() const { return m_offscreenRenderPass; }
     void SetOffscreenRenderPass(vk::RenderPass pass, vk::SampleCountFlagBits samples);

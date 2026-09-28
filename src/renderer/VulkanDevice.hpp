@@ -110,6 +110,16 @@ public:
     ) const;
     vk::Format FindDepthFormat() const;
 
+#if !SUPERSONIC_WINDOW_GLFW
+    // A borrowed window (WindowBackend.hpp) can be taken away while the app
+    // runs - Android destroys it whenever the app leaves the screen - and every
+    // surface made from it must go first. The device itself survives: the
+    // physical device, queues and allocations do not belong to the window, and
+    // the next window's surface is made on the same device when it arrives.
+    void DestroySurface();
+    void RecreateSurface(Window& window);
+#endif
+
 private:
     void createSurface(Window& window);
     void pickPhysicalDevice();

@@ -16,7 +16,9 @@
 
 
 #include "imgui.h"
+#if SUPERSONIC_WINDOW_GLFW
 #include "backends/imgui_impl_glfw.h"
+#endif
 #include "backends/imgui_impl_vulkan.h"
 #include "ImGuizmo.h"
 
@@ -84,7 +86,9 @@ VulkanRenderer::~VulkanRenderer() {
     vk::Device device = m_deviceRef.GetDevice();
 
     ImGui_ImplVulkan_Shutdown();
+#if SUPERSONIC_WINDOW_GLFW
     ImGui_ImplGlfw_Shutdown();
+#endif
     ImGui::DestroyContext();
 
     if (m_imguiPool) {
@@ -174,11 +178,19 @@ void VulkanRenderer::cleanupSwapchain() {
 
 void VulkanRenderer::RecreateSwapchain() {
     int width = 0, height = 0;
+#if SUPERSONIC_WINDOW_GLFW
     glfwGetFramebufferSize(m_windowRef.GetNativeWindow(), &width, &height);
     while (width == 0 || height == 0) {
         glfwGetFramebufferSize(m_windowRef.GetNativeWindow(), &width, &height);
         glfwWaitEvents();
     }
+#else
+    // Not a wait here: with no window there is nothing to build on, and the
+    // app waits for one in Window::PollEvents, after which RestoreSurface
+    // builds everything this would.
+    m_windowRef.GetFramebufferSize(width, height);
+    if (width == 0 || height == 0 || !m_deviceRef.GetSurface()) return;
+#endif
 
     m_deviceRef.GetDevice().waitIdle();
     cleanupSwapchain();
@@ -195,6 +207,24 @@ void VulkanRenderer::RecreateSwapchain() {
     m_windowRef.ResetResizedFlag();
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "Swapchain recreated for window size (" << width << "x" << height << ")." << std::endl;
 }
+
+#if !SUPERSONIC_WINDOW_GLFW
+void VulkanRenderer::ReleaseSurface() {
+    m_deviceRef.GetDevice().waitIdle();
+    cleanupSwapchain();
+    m_swapchainRef.Cleanup();
+    m_deviceRef.DestroySurface();
+}
+
+void VulkanRenderer::RestoreSurface() {
+    m_deviceRef.RecreateSurface(m_windowRef);
+    RecreateSwapchain();
+}
+
+bool VulkanRenderer::HasSurface() const {
+    return m_deviceRef.GetSurface() && m_swapchainRef.GetSwapChain();
+}
+#endif
 
 void VulkanRenderer::createRenderPass() {
     vk::AttachmentDescription colorAttachment{};
@@ -1203,19 +1233,27 @@ void VulkanRenderer::initImGui() {
     // editor is legible on a 4K panel instead of being rendered at a third the
     // intended size.
     float dpiScale = 1.0f;
+#if SUPERSONIC_WINDOW_GLFW
     if (GLFWmonitor* monitor = glfwGetPrimaryMonitor()) {
         float xScale = 1.0f;
         float yScale = 1.0f;
         glfwGetMonitorContentScale(monitor, &xScale, &yScale);
         if (xScale > 0.0f) dpiScale = xScale;
     }
+#endif
 
     // Whoever owns the UI decides how it looks. See UiStyleCallback for why
     // this is a callback and why it has to happen exactly here.
     if (m_styleUi) m_styleUi(dpiScale);
 
     // 3. Init ImGui GLFW and Vulkan Backends
+#if SUPERSONIC_WINDOW_GLFW
     ImGui_ImplGlfw_InitForVulkan(m_windowRef.GetNativeWindow(), true);
+#else
+    // No platform backend for a borrowed window: NewImGuiFrame sets the display
+    // size and the clock, and the platform feeds the pointer as it arrives.
+    io.BackendPlatformName = "supersonic_native_surface";
+#endif
 
     ImGui_ImplVulkan_InitInfo initInfo{};
     initInfo.Instance = static_cast<VkInstance>(m_deviceRef.GetInstance());
@@ -1238,7 +1276,25 @@ void VulkanRenderer::initImGui() {
 
 void VulkanRenderer::NewImGuiFrame() {
     ImGui_ImplVulkan_NewFrame();
+#if SUPERSONIC_WINDOW_GLFW
     ImGui_ImplGlfw_NewFrame();
+#else
+    {
+        // What ImGui_ImplGlfw_NewFrame would have set. The display is the
+        // swapchain's size, the size the draw data is rendered at - which the
+        // game view hands on to the offscreen target - and the pointer the
+        // platform feeds is in the same window pixels.
+        ImGuiIO& io = ImGui::GetIO();
+        const vk::Extent2D extent = m_swapchainRef.GetExtent();
+        io.DisplaySize = ImVec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
+        io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+        static double lastTime = 0.0;
+        const double now = m_windowRef.GetTime();
+        const float elapsed = lastTime > 0.0 ? static_cast<float>(now - lastTime) : 1.0f / 60.0f;
+        io.DeltaTime = elapsed > 1.0e-4f ? elapsed : 1.0e-4f;
+        lastTime = now;
+    }
+#endif
     ImGui::NewFrame();
     ImGuizmo::BeginFrame();
 }
@@ -1300,6 +1356,12 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         RecreateSwapchain();
         return;
     }
+#if !SUPERSONIC_WINDOW_GLFW
+    // The window went between the last poll and this acquire. The platform's
+    // command saying so is already queued; the next poll releases the surface
+    // and waits for a new one, so this frame is simply not drawn.
+    if (acquireResult == VK_ERROR_SURFACE_LOST_KHR) return;
+#endif
     if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("Failed to acquire Vulkan swapchain image!");
     }
@@ -2050,6 +2112,17 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     presentInfo.pImageIndices = &imageIndex;
 
     VkResult presentResult = static_cast<VkResult>(m_deviceRef.GetPresentQueue().presentKHR(&presentInfo));
+#if !SUPERSONIC_WINDOW_GLFW
+    // SUBOPTIMAL is not a size change here. Android returns it on every
+    // present whose pre-transform differs from the display's rotation, which
+    // an IDENTITY swapchain on a turned display always does (VulkanSwapchain
+    // says why that is the choice) - rebuilt for it, the swapchain would be
+    // rebuilt every frame. A real size change arrives as a window resize, and
+    // a lost surface as the platform taking the window away.
+    if (presentResult == VK_SUBOPTIMAL_KHR || presentResult == VK_ERROR_SURFACE_LOST_KHR) {
+        presentResult = VK_SUCCESS;
+    }
+#endif
     if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
         RecreateSwapchain();
     } else if (presentResult != VK_SUCCESS) {

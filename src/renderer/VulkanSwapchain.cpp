@@ -73,6 +73,24 @@ vk::PresentModeKHR VulkanSwapchain::chooseSwapPresentMode(const std::vector<vk::
 }
 
 vk::Extent2D VulkanSwapchain::chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities, Window& window) {
+#if !SUPERSONIC_WINDOW_GLFW
+    // As reported, NOT swapped for the rotation. A landscape app on a portrait
+    // panel is told 1280x720 with a quarter-turn currentTransform (measured on
+    // the Android emulator): the extent is the WINDOW's, in the app's
+    // orientation, and the transform says how the display is turned under it.
+    // Swapping is for a swapchain that pre-rotates (preTransform =
+    // currentTransform, rendering sideways into panel-shaped images); this one
+    // presents with IDENTITY and lets the compositor turn it (createSwapChain),
+    // so its images are the window's shape. Swapped, the whole frame came out
+    // 720x1280 and was squeezed into the landscape window.
+    if (capabilities.currentExtent.width == std::numeric_limits<uint32_t>::max()) {
+        int width = 0;
+        int height = 0;
+        window.GetFramebufferSize(width, height);
+        return vk::Extent2D{static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
+    }
+    return capabilities.currentExtent;
+#else
     if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
         return capabilities.currentExtent;
     } else {
@@ -94,6 +112,7 @@ vk::Extent2D VulkanSwapchain::chooseSwapExtent(const vk::SurfaceCapabilitiesKHR&
 
         return actualExtent;
     }
+#endif
 }
 
 void VulkanSwapchain::createSwapChain(Window& window) {
@@ -136,6 +155,31 @@ void VulkanSwapchain::createSwapChain(Window& window) {
 
     createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
     createInfo.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
+#if !SUPERSONIC_WINDOW_GLFW
+    {
+        const vk::SurfaceCapabilitiesKHR& caps = swapChainSupport.capabilities;
+        // IDENTITY, so the images are in the app's orientation and nothing
+        // drawn into them has to know which way the display is turned; the
+        // compositor rotates them. The alternative - matching currentTransform
+        // and rotating every pass into panel-shaped images - saves the
+        // compositor that work and is a renderer change, not a platform one.
+        // chooseSwapExtent agrees.
+        if (caps.supportedTransforms & vk::SurfaceTransformFlagBitsKHR::eIdentity) {
+            createInfo.preTransform = vk::SurfaceTransformFlagBitsKHR::eIdentity;
+        }
+        // Android offers INHERIT and not always OPAQUE; asking for one the
+        // surface does not list is invalid, not merely ignored.
+        if (!(caps.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::eOpaque)) {
+            createInfo.compositeAlpha = (caps.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::eInherit)
+                                            ? vk::CompositeAlphaFlagBitsKHR::eInherit
+                                            : vk::CompositeAlphaFlagBitsKHR::ePreMultiplied;
+        }
+        SUPERSONIC_LOG_INFO("VulkanSwapchain")
+            << "Surface transform " << vk::to_string(caps.currentTransform) << ", presenting with "
+            << vk::to_string(createInfo.preTransform) << "; format " << vk::to_string(surfaceFormat.format)
+            << ", " << vk::to_string(presentMode) << ".";
+    }
+#endif
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = nullptr;

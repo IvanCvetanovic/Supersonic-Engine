@@ -78,7 +78,15 @@ add_compile_definitions(${SUPERSONIC_PLATFORM_DEFINITION})
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
-find_package(Vulkan QUIET)
+# Not on Android: the NDK sysroot ships vulkan.h and libvulkan.so, so
+# FindVulkan succeeds there - and then vulkan.hpp, which only the SDK and the
+# vendored headers carry, is missing from every file that includes it. Skipped,
+# Android takes the fallback below: the vendored headers, and the loader found
+# by name, which under the NDK toolchain is the sysroot's libvulkan.so for the
+# API level being built.
+if (NOT ANDROID)
+    find_package(Vulkan QUIET)
+endif()
 
 if (Vulkan_FOUND)
     message(STATUS "Vulkan SDK found: ${Vulkan_LIBRARY}")
@@ -214,7 +222,15 @@ file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS
 
 # Android-only sources must not enter a desktop build.
 if (NOT ANDROID)
-    list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/platform/AndroidNativeApp\\.(cpp|hpp)$")
+    list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/platform/android/")
+endif()
+
+# And the GLFW backends must not enter an Android one. src/platform/android/
+# implements the same classes - Window, InputPolling, NativeWindowControl,
+# Gamepads - over the NDK instead, so everything above them compiles unchanged.
+if (ANDROID)
+    list(FILTER ENGINE_SOURCES EXCLUDE REGEX
+         "/src/platform/(Window|InputPolling|NativeWindowControl|Gamepads)\\.cpp$")
 endif()
 
 # main.cpp belongs to the executable, not the library: linking a static library
@@ -387,6 +403,43 @@ if (NOT ANDROID)
     target_link_libraries(SupersonicCore PUBLIC glfw)
 endif()
 
+# What stands where GLFW does on Android: the NDK's NativeActivity glue, its
+# window and input, and the Vulkan loader.
+#
+#  - android_native_app_glue.c is the NDK's own source, compiled here rather
+#    than by each game, because the engine is what implements android_main
+#    (src/platform/android/AndroidApp.cpp) and a game is then an ordinary
+#    SHARED library that links SupersonicCore. `-u ANativeActivity_onCreate`
+#    keeps the glue's entry point, which nothing in the library names, from
+#    being dropped by the linker.
+#  - GLFW's HEADER, and only its header: Input.hpp's key codes are GLFW's by
+#    value, and code on every platform - the engine's key tables, a game's
+#    settings - spells them GLFW_KEY_*. No GLFW function is linked.
+#  - VMA fetches its Vulkan entry points at run time. Statically bound it names
+#    the 1.1+ functions (vkGetBufferMemoryRequirements2 and the rest), which the
+#    NDK's libvulkan.so does not export below API 28, so an API-26 link fails.
+#    VulkanDevice::initVMA hands it the two getters it starts from.
+if (ANDROID)
+    set(_ndkGlueDir "${ANDROID_NDK}/sources/android/native_app_glue")
+    add_library(SupersonicAndroidGlue STATIC "${_ndkGlueDir}/android_native_app_glue.c")
+    target_include_directories(SupersonicAndroidGlue PUBLIC "${_ndkGlueDir}")
+    target_link_libraries(SupersonicAndroidGlue PUBLIC android log)
+    set_source_files_properties("${_ndkGlueDir}/android_native_app_glue.c" PROPERTIES COMPILE_OPTIONS "-w")
+
+    target_link_libraries(SupersonicCore PUBLIC SupersonicAndroidGlue android log)
+    target_link_options(SupersonicCore INTERFACE "-u" "ANativeActivity_onCreate")
+    target_include_directories(SupersonicCore PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw-3.4/include)
+    target_compile_definitions(SupersonicCore PUBLIC
+        VMA_STATIC_VULKAN_FUNCTIONS=0
+        VMA_DYNAMIC_VULKAN_FUNCTIONS=1)
+    # vk_mem_alloc.h spells its pointer annotations with clang's _Nonnull and
+    # _Nullable wherever the compiler has them, which under -Wpedantic is
+    # thousands of lines per build of "a Clang extension" about a header this
+    # engine does not maintain.
+    target_compile_options(SupersonicCore PUBLIC -Wno-nullability-extension)
+endif()
+
 # Audio output.
 #
 # XAudio2 ships with Windows, so that path adds no third-party dependency.
@@ -414,6 +467,13 @@ elseif (UNIX AND NOT APPLE AND NOT ANDROID)
     else()
         message(STATUS "Audio backend: none (install libasound2-dev for sound on Linux)")
     endif()
+elseif (ANDROID)
+    # AAudio is in the NDK from API 26, the minimum this target builds for, so
+    # like XAudio2 on Windows it is unconditional. The same AudioMixer the ALSA
+    # path uses does the summing, pulled from AAudio's data callback.
+    message(STATUS "Audio backend: AAudio")
+    target_compile_definitions(SupersonicCore PRIVATE SUPERSONIC_AUDIO_AAUDIO=1)
+    target_link_libraries(SupersonicCore PRIVATE aaudio)
 endif()
 
 # Assets are loaded with paths relative to the working directory, so make F5

@@ -17,6 +17,15 @@
 #include <vector>
 
 #include "core/AudioMixer.hpp"
+#elif defined(SUPERSONIC_AUDIO_AAUDIO)
+#include <aaudio/AAudio.h>
+
+#include <atomic>
+#include <mutex>
+#include <thread>
+
+#include "core/AudioMixer.hpp"
+#include "platform/android/AndroidApp.hpp"
 #endif
 
 namespace Supersonic {
@@ -297,6 +306,194 @@ void AudioEngine::SetVoiceParameters(VoiceId voice, float volume, float pitch, f
 bool AudioEngine::IsVoicePlaying(VoiceId voice) const {
     if (!m_available) return false;
     return m_impl->mixer.IsPlaying(voice);
+}
+
+#elif defined(SUPERSONIC_AUDIO_AAUDIO)
+
+// ---------------------------------------------------------------------------
+// AAudio backend, Android's own output API from API 26 (the minimum the
+// Android build targets). The ALSA path's shape with the thread turned
+// inside out: AudioMixer does the summing, and instead of an engine-owned
+// thread writing into the device, AAudio calls back from a thread it owns
+// whenever the device wants frames.
+//
+// Two things a desktop device never does happen here as a matter of course,
+// and both are handled on the engine's side of the stream:
+//  - THE APP GOES TO THE BACKGROUND. The stream is paused with the activity
+//    (AndroidApp's suspend handler) and started again when it resumes;
+//    otherwise the game's music would play on over the home screen, with the
+//    simulation that drives it stopped.
+//  - THE DEVICE GOES AWAY - headphones pulled, a Bluetooth headset connected.
+//    AAudio reports a disconnect on its callback thread, where the stream must
+//    not be closed, so a thread of the engine's closes it and opens another.
+//    The voices live in the mixer, not the stream, and carry on.
+// ---------------------------------------------------------------------------
+namespace {
+constexpr int32_t kAAudioRate = 48000;
+constexpr int32_t kAAudioChannels = 2;
+} // namespace
+
+struct AudioEngine::Impl {
+    std::unique_ptr<AudioMixer> mixer;
+
+    std::mutex streamMutex;   // open, close, pause and start
+    AAudioStream* stream{nullptr};
+    int32_t rate{kAAudioRate};
+    bool suspended{false};    // under streamMutex
+
+    std::atomic<bool> reopening{false};
+    std::thread reopenThread;
+
+    static aaudio_data_callback_result_t onData(AAudioStream*, void* user, void* audioData, int32_t frames) {
+        auto* impl = static_cast<Impl*>(user);
+        impl->mixer->MixInt16(static_cast<int16_t*>(audioData), static_cast<size_t>(frames));
+        return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    }
+
+    static void onError(AAudioStream*, void* user, aaudio_result_t error) {
+        auto* impl = static_cast<Impl*>(user);
+        SUPERSONIC_LOG_WARN("AudioEngine") << "AAudio stream error: " << AAudio_convertResultToText(error) << ".";
+        if (error != AAUDIO_ERROR_DISCONNECTED) return;
+        bool expected = false;
+        if (!impl->reopening.compare_exchange_strong(expected, true)) return;
+        // The previous reopen, if any, has finished: it clears the flag last.
+        if (impl->reopenThread.joinable()) impl->reopenThread.join();
+        impl->reopenThread = std::thread([impl] {
+            std::lock_guard<std::mutex> lock(impl->streamMutex);
+            impl->closeLocked();
+            std::string error;
+            if (impl->openLocked(error)) {
+                SUPERSONIC_LOG_INFO("AudioEngine") << "AAudio stream reopened on the new device.";
+            } else {
+                SUPERSONIC_LOG_ERROR("AudioEngine") << error;
+            }
+            impl->reopening.store(false);
+        });
+    }
+
+    bool openLocked(std::string& error) {
+        AAudioStreamBuilder* builder = nullptr;
+        aaudio_result_t result = AAudio_createStreamBuilder(&builder);
+        if (result != AAUDIO_OK) {
+            error = std::string("AAudio_createStreamBuilder failed: ") + AAudio_convertResultToText(result);
+            return false;
+        }
+        AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
+        AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
+        AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+        AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
+        AAudioStreamBuilder_setChannelCount(builder, kAAudioChannels);
+        AAudioStreamBuilder_setSampleRate(builder, rate);
+        AAudioStreamBuilder_setDataCallback(builder, &Impl::onData, this);
+        AAudioStreamBuilder_setErrorCallback(builder, &Impl::onError, this);
+        result = AAudioStreamBuilder_openStream(builder, &stream);
+        AAudioStreamBuilder_delete(builder);
+        if (result != AAUDIO_OK) {
+            stream = nullptr;
+            error = std::string("AAudioStreamBuilder_openStream failed: ") + AAudio_convertResultToText(result);
+            return false;
+        }
+
+        // The mixer's rate is fixed when it is made; a device that would not
+        // take the rate asked for gets a mixer at the rate it gave.
+        const int32_t actualRate = AAudioStream_getSampleRate(stream);
+        if (!mixer) {
+            rate = actualRate;
+            mixer = std::make_unique<AudioMixer>(static_cast<uint32_t>(rate),
+                                                 static_cast<uint16_t>(kAAudioChannels));
+        } else if (actualRate != rate) {
+            SUPERSONIC_LOG_WARN("AudioEngine") << "The new AAudio stream runs at " << actualRate
+                                               << " Hz, not " << rate << "; sounds play at the wrong pitch.";
+        }
+        if (AAudioStream_getFormat(stream) != AAUDIO_FORMAT_PCM_I16 ||
+            AAudioStream_getChannelCount(stream) != kAAudioChannels) {
+            error = "AAudio would not give a 16-bit stereo stream";
+            closeLocked();
+            return false;
+        }
+
+        if (!suspended) {
+            result = AAudioStream_requestStart(stream);
+            if (result != AAUDIO_OK) {
+                error = std::string("AAudioStream_requestStart failed: ") + AAudio_convertResultToText(result);
+                closeLocked();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void closeLocked() {
+        if (!stream) return;
+        AAudioStream_requestStop(stream);
+        AAudioStream_close(stream);
+        stream = nullptr;
+    }
+
+    void setSuspended(bool suspend) {
+        std::lock_guard<std::mutex> lock(streamMutex);
+        suspended = suspend;
+        if (!stream) return;
+        const aaudio_result_t result = suspend ? AAudioStream_requestPause(stream) : AAudioStream_requestStart(stream);
+        if (result != AAUDIO_OK) {
+            SUPERSONIC_LOG_WARN("AudioEngine") << "AAudio " << (suspend ? "pause" : "start")
+                                               << " failed: " << AAudio_convertResultToText(result) << ".";
+        }
+    }
+};
+
+AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
+    std::string error;
+    {
+        std::lock_guard<std::mutex> lock(m_impl->streamMutex);
+        if (!m_impl->openLocked(error)) {
+            m_status = error;
+            SUPERSONIC_LOG_ERROR("AudioEngine") << m_status << std::endl;
+            return;
+        }
+    }
+
+    Impl* impl = m_impl.get();
+    Android::SetAudioSuspendHandler([impl](bool suspended) { impl->setSuspended(suspended); });
+
+    m_available = true;
+    m_status = "AAudio output stream ready (" + std::to_string(m_impl->rate) + " Hz)";
+    SUPERSONIC_LOG_INFO("AudioEngine") << m_status << "." << std::endl;
+}
+
+AudioEngine::~AudioEngine() {
+    Android::SetAudioSuspendHandler(nullptr);
+    // A reopen in flight holds the stream mutex; let it finish, then close.
+    while (m_impl->reopening.load()) std::this_thread::yield();
+    if (m_impl->reopenThread.joinable()) m_impl->reopenThread.join();
+    std::lock_guard<std::mutex> lock(m_impl->streamMutex);
+    m_impl->closeLocked();
+}
+
+AudioEngine::VoiceId AudioEngine::playImpl(const std::string& path, bool loop, float volume, float pitch) {
+    if (!m_available) return kInvalidVoice;
+
+    const AudioClip* clip = LoadClip(path);
+    if (!clip) return kInvalidVoice;
+
+    // As on ALSA: m_clips' nodes keep their addresses, so the callback thread
+    // can keep reading this clip while more are loaded.
+    return m_impl->mixer->Add(*clip, loop, volume, pitch);
+}
+
+void AudioEngine::stopImpl(VoiceId voice) {
+    if (!m_available) return;
+    m_impl->mixer->Remove(voice);
+}
+
+void AudioEngine::SetVoiceParameters(VoiceId voice, float volume, float pitch, float pan) {
+    if (!m_available) return;
+    m_impl->mixer->SetParameters(voice, volume, pitch, pan);
+}
+
+bool AudioEngine::IsVoicePlaying(VoiceId voice) const {
+    if (!m_available) return false;
+    return m_impl->mixer->IsPlaying(voice);
 }
 
 #else

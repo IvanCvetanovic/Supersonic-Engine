@@ -107,37 +107,59 @@ code quietly contradicts.
 Developed and tested on **Windows** with MSVC. **Linux** and **macOS** (MoltenVK)
 build from the same tree.
 
-**Android and iOS do not work, and the scripts under `platform/` do not change
-that.** This section used to say those targets "configure and compile but are not
-yet soak-tested". That was wrong in the worst direction — it read as *nearly
-there* when neither got past CMake configure. Android now does, and stops at the
-first file that needs a window:
+**Android runs a game, as a NativeActivity shared library; iOS does not work.**
+Measured on 28 September 2026: Penumbra (a game built on this engine in its
+own repository) boots to its main menu on an API 33 x86_64 emulator, renders
+through this Vulkan renderer (SwiftShader, Vulkan 1.2), takes taps on the menu
+as clicks and loads its first level. What that took, all of it under
+`src/platform/android/` or behind `#if !SUPERSONIC_WINDOW_GLFW` /
+`if (ANDROID)`, so a desktop build compiles exactly the code it did:
 
-- GLFW, its ImGui backend and its link are behind `if (NOT ANDROID)`
-  (`CMakeLists.txt:147`, `:174`, `:319`), so an NDK configure no longer dies on
-  X11 and Wayland. The compile then fails at `src/platform/Window.hpp`, which
-  includes `GLFW/glfw3.h`, and at `vulkan/vulkan.hpp`, which the NDK sysroot
-  does not ship — measured on 27 August with the NDK toolchain file and
-  recorded under Phase 5 of the Wolf Brigade port plan, which has since moved
-  with the port (`supersonic/docs/planning/2026-08-25-wolf-brigade-port.md` in
-  [The-Wolf-Brigade](https://github.com/IvanCvetanovic/The-Wolf-Brigade)).
-  Nothing yet stands where GLFW would: no `ANativeWindow` surface path.
-- `AndroidManifest.xml` expects a NativeActivity to `dlopen`
-  `libSupersonicEngine.so`. CMake produces a static library and an *executable*
-  (`CMakeLists.txt:209-210`), and there is no `android_main` or
-  `ANativeActivity_onCreate` anywhere in the tree.
-- `src/platform/AndroidNativeApp.cpp` has zero callers and is filtered OUT of
-  every non-Android build (`CMakeLists.txt:188-189`).
-- Audio has no Android branch (`CMakeLists.txt:334-347`), so Android gets the
-  documented no-op and a port that booted would be silent.
-- No platform delivers touch. `RawInputState` carries up to eight contacts and
-  `Input` derives Began, Moved and Ended from them (`src/core/Input.hpp`), but
-  the only thing that ever fills one in is the mouse — as contact 0 while the
-  left button is held, which is how a gesture machine gets tested on a desktop.
+- **The seam.** `src/platform/WindowBackend.hpp` names the window system a build
+  reaches the screen through: GLFW on desktop, a *borrowed* native surface on
+  Android. `Window.hpp` has a second class for the latter - the same public
+  face plus a surface from the native handle, the drawable size, a clock and a
+  callback for the window being taken away. iOS joins by adding itself to that
+  one condition and implementing the same functions over a `CAMetalLayer`.
+- **The entry.** The NDK's `android_native_app_glue` is compiled into the
+  engine and `android_main` is the engine's (`AndroidApp.cpp`): it waits for a
+  window, then calls the game's `SupersonicMain(argc, argv)`, and pumps the
+  looper from `Window::PollEvents`. A game builds a `SHARED` library instead of
+  an executable; everything else links as on desktop.
+- **The lifecycle.** The swapchain and surface are destroyed inside
+  `APP_CMD_TERM_WINDOW` and rebuilt on the next window; the frame waits while
+  the app is paused or has no window, and restarts its clock instead of
+  counting the time away as dropped. Focus loss reaches `Input::WindowFocused`,
+  and frames keep running for a quarter of a second after the activity pauses
+  (while it still has its window) so that a game pausing on focus loss sees it:
+  Android reported the pause before the focus in most Home presses measured.
+- **The swapchain** presents with an IDENTITY pre-transform and the window's
+  extent, lets the compositor rotate, and does not rebuild on the
+  `VK_SUBOPTIMAL_KHR` Android returns for exactly that; composite alpha is
+  chosen from what the surface offers.
+- **Input**: touch contacts (up to eight, ids stable across moves, pointers
+  going down and up mid-gesture), the first finger of a gesture as the mouse
+  (position and left button, with a tap too quick for any frame held for one),
+  Back as Escape, keyboard keys, and gamepads through
+  `src/platform/Gamepads.hpp` (platform-neutral, every connected pad; buttons
+  latched like keys). Measured: taps and holds, Back, and injected gamepad
+  buttons reaching the game. Not measured: more than one finger at a time
+  (`adb shell input` injects one pointer) and pad sticks, triggers and hats.
+- **Audio**: AAudio, with `AudioMixer` pulled from its data callback, paused
+  with the activity and reopened when the output device goes away. Measured
+  only through `dumpsys audio` - the stream started, paused on Home, started
+  again on return and was released on quit - because the emulator ran with
+  `-no-audio`; nothing was heard, and the reopen on a disconnect is unexercised.
+- **Vulkan**: the vendored headers (the NDK has no `vulkan.hpp`), the NDK's
+  loader, VMA's entry points fetched at run time (`libvulkan.so` below API 28
+  does not export the 1.1 ones), no validation layers.
 
-[ARCHITECTURE.md](ARCHITECTURE.md) has said **"Not functional"** for both all
-along, and so does the header of `platform/android/build_android.sh`. This file
-was the one disagreeing with them.
+Not done: the editor (it needs GLFW), iOS, immersive mode (hiding the
+navigation bar is a UI-thread call and a NativeActivity has no Java), and a
+gamepad or multi-touch run on real hardware - `adb shell input` injects one
+pointer at a time. Penumbra's `tools/build_android.sh` is the working build
+and packaging (NDK toolchain, aapt2, zipalign, apksigner - no Gradle);
+`platform/android/` here still describes the older attempt at the editor.
 
 ---
 

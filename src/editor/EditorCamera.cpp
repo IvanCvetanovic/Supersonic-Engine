@@ -69,6 +69,14 @@ void EditorCamera::SetOrthographic(bool orthographic) {
 }
 
 void EditorCamera::Update(Window& window, float deltaTime, bool viewportHovered) {
+#if !SUPERSONIC_WINDOW_GLFW
+    // The fly camera reads the mouse and keys through GLFW. A borrowed window
+    // (WindowBackend.hpp) only ever runs a game, which is never in edit mode
+    // and so never flies it.
+    (void)window;
+    (void)deltaTime;
+    (void)viewportHovered;
+#else
     GLFWwindow* native = window.GetNativeWindow();
 
     const bool rightHeld = glfwGetMouseButton(native, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
@@ -129,6 +137,7 @@ void EditorCamera::Update(Window& window, float deltaTime, bool viewportHovered)
     m_camera.yaw += dx;
     m_camera.pitch = std::clamp(m_camera.pitch + dy, -89.0f, 89.0f);
     m_camera.updateCameraVectors();
+#endif
 }
 
 // The 2D controls, which are not the 3D ones with the projection swapped.
@@ -150,6 +159,13 @@ void EditorCamera::Update(Window& window, float deltaTime, bool viewportHovered)
 // what you are looking at either way.
 void EditorCamera::updateOrthographic(GLFWwindow* native, float deltaTime,
                                       bool viewportHovered, bool rightHeld) {
+#if !SUPERSONIC_WINDOW_GLFW
+    // Update() never calls this without GLFW; see there.
+    (void)native;
+    (void)deltaTime;
+    (void)viewportHovered;
+    (void)rightHeld;
+#else
     if (viewportHovered) {
         m_camera.orthoHeight = ZoomedHeight(m_camera.orthoHeight, Input::Scroll());
     }
@@ -203,6 +219,7 @@ void EditorCamera::updateOrthographic(GLFWwindow* native, float deltaTime,
         if (glfwGetKey(native, GLFW_KEY_A) == GLFW_PRESS) m_camera.position -= m_camera.right * speed;
         if (glfwGetKey(native, GLFW_KEY_D) == GLFW_PRESS) m_camera.position += m_camera.right * speed;
     }
+#endif
 }
 
 void EditorCamera::FocusOn(const glm::vec3& target, float distance) {

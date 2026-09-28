@@ -102,7 +102,7 @@ why the demo's physics cube had already fallen before you could look at it.
 
 ```
 SupersonicApp
-├── AudioEngine        (XAudio2 on Windows, ALSA on Linux, no-op elsewhere)
+├── AudioEngine        (XAudio2 on Windows, ALSA on Linux, AAudio on Android, no-op elsewhere)
 ├── HotReloadEngine    (watches the script plugin)
 ├── Window
 ├── VulkanContext      (instance, debug messenger)
@@ -2922,7 +2922,7 @@ a guard is the editor viewport's pick test.
 
 ### 11. Audio
 
-`AudioEngine` is one class with three compile-time bodies. The preprocessor in
+`AudioEngine` is one class with four compile-time bodies. The preprocessor in
 `AudioEngine.cpp` chooses between them and CMake decides what to link, so
 nothing above `AudioEngine` carries a platform branch.
 
@@ -2931,7 +2931,8 @@ nothing above `AudioEngine` carries a platform branch.
 | Windows | XAudio2 | XAudio2 itself — one source voice per sound onto the mastering voice | unconditional; `xaudio2` and `ole32` ship with the OS |
 | Linux, ALSA headers present | ALSA | `AudioMixer`, on a thread the engine owns | `SUPERSONIC_AUDIO_ALSA=1`, defined when `find_path` and `find_library` both succeed |
 | Linux, headers absent | none | — | CMake prints `Audio backend: none (install libasound2-dev for sound on Linux)` and carries on |
-| macOS, Android, anything else | none | — | falls through to the `#else` no-op |
+| Android | AAudio | `AudioMixer`, pulled from AAudio's data callback on AAudio's own thread; the stream pauses with the activity and is reopened on a thread of the engine's when the device disconnects (the reopen is unexercised; the rest was seen only through `dumpsys audio` on an emulator run with `-no-audio`) | `SUPERSONIC_AUDIO_AAUDIO=1`, unconditional under the NDK (API 26+) |
+| macOS, anything else | none | — | falls through to the `#else` no-op |
 
 A missing ALSA package must not fail the build for someone who does not care
 about sound, so the no-backend path is a real implementation rather than a
@@ -3094,5 +3095,5 @@ Listed rather than hidden.
 | Windows | Working. Primary development target. |
 | Linux | Should build and run; not verified on hardware. |
 | macOS | Instance creation is wired for MoltenVK (portability enumeration + bit). Not verified on hardware. |
-| Android | **Not functional.** GLFW has no Android backend and the manifest expects a NativeActivity shared library CMake does not produce. See `platform/android/build_android.sh`. |
+| Android | **A game runs** (not the editor). `src/platform/android/` implements the native-surface `Window` (`WindowBackend.hpp`), `InputPolling`, `NativeWindowControl` and `Gamepads` over NativeActivity, and owns `android_main`; the game builds as a SHARED library with a `SupersonicMain`. Measured on an API 33 x86_64 emulator (SwiftShader Vulkan 1.2): menu, taps, a level, suspend/resume with the surface rebuilt. The README's Platforms section lists what is not done. |
 | iOS | **Not functional.** Same windowing problem, plus bundling and signing. |

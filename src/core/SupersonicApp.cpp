@@ -254,6 +254,15 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
             Theme::ApplyEngineDarkTheme(dpiScale);
         });
 
+#if !SUPERSONIC_WINDOW_GLFW
+    // The platform can take the window away at any time (WindowBackend.hpp),
+    // and tells the window just before it does. The swapchain and surface go
+    // with it; Run() builds them again on the next window.
+    m_window->SetSurfaceLostCallback([this] {
+        if (m_renderer) m_renderer->ReleaseSurface();
+    });
+#endif
+
     // GEOMETRY A GAME BUILT, reachable by the game that built it.
     //
     // MeshComponent::meshKey names geometry the game uploaded, and
@@ -970,7 +979,11 @@ void SupersonicApp::initECS() {
 void SupersonicApp::Run() {
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Starting Main 3D Game Loop..." << std::endl;
 
+#if SUPERSONIC_WINDOW_GLFW
     double lastTime = glfwGetTime();
+#else
+    double lastTime = m_window->GetTime();
+#endif
 
     // --frames renders a fixed count and exits. The check is at the top of the
     // loop rather than the bottom so --frames 0 keeps meaning "run until the
@@ -1236,6 +1249,21 @@ void SupersonicApp::Run() {
 
         m_window->PollEvents();
 
+#if !SUPERSONIC_WINDOW_GLFW
+        // A borrowed window (WindowBackend.hpp). PollEvents has just waited out
+        // any time in the background; that time is not the simulation's, so the
+        // frame timer starts again from here rather than handing the next tick
+        // a clamped hitch and counting the rest as dropped. And the window it
+        // came back with needs a surface before anything can be drawn - the old
+        // one went with the old window (the callback set in the constructor).
+        if (m_window->TakeResumedFromSuspend()) lastTime = m_window->GetTime();
+        if (m_window->ShouldClose()) continue;
+        if (!m_renderer->HasSurface()) {
+            m_renderer->RestoreSurface();
+            if (!m_renderer->HasSurface()) continue;
+        }
+#endif
+
         // Who owns the pointer this frame, decided before anything reads it.
         //
         // The editor's veto, and it is not politeness. Under a locked pointer
@@ -1290,7 +1318,11 @@ void SupersonicApp::Run() {
         Input::SetTextCaptureActive(UIInput::AnyTextFieldFocused(m_registry));
         InputPolling::ApplyCursorMode(*m_window);
 
+#if SUPERSONIC_WINDOW_GLFW
         const double currentTime = glfwGetTime();
+#else
+        const double currentTime = m_window->GetTime();
+#endif
         const float rawDelta = static_cast<float>(currentTime - lastTime);
         lastTime = currentTime;
 

@@ -510,7 +510,13 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Alt+F4")) {
+#if SUPERSONIC_WINDOW_GLFW
                 glfwSetWindowShouldClose(window.GetNativeWindow(), GLFW_TRUE);
+#else
+                // The editor never runs on a borrowed window (WindowBackend.hpp);
+                // this keeps the file compiling there.
+                (void)window;
+#endif
             }
             ImGui::EndMenu();
         }
