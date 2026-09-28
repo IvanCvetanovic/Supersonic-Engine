@@ -106,6 +106,24 @@ VulkanImage::VulkanImage(
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = m_arrayLayers;
 
+#if defined(__APPLE__)
+    // The whole-array (or cube) view is only ever SAMPLED: every attachment is
+    // one of the per-layer views below. Said so, MoltenVK creates it on a GPU
+    // that cannot render to layered attachments - the iOS simulator's (GPU
+    // family Apple 2) - which refuses an array view of any image that is an
+    // attachment (VK_ERROR_FEATURE_NOT_PRESENT) unless the view's own usage
+    // leaves the attachment bits out.
+    const vk::ImageUsageFlags attachmentUsage = vk::ImageUsageFlagBits::eColorAttachment |
+                                                vk::ImageUsageFlagBits::eDepthStencilAttachment |
+                                                vk::ImageUsageFlagBits::eInputAttachment |
+                                                vk::ImageUsageFlagBits::eTransientAttachment;
+    vk::ImageViewUsageCreateInfo sampledOnly{};
+    sampledOnly.usage = usage & ~attachmentUsage;
+    if (m_arrayLayers > 1 && (usage & attachmentUsage) && sampledOnly.usage) {
+        viewInfo.pNext = &sampledOnly;
+    }
+#endif
+
     m_imageView = m_deviceRef.GetDevice().createImageView(viewInfo);
 
     // Per-layer views for framebuffer attachments. Only worth creating for an
@@ -114,6 +132,9 @@ VulkanImage::VulkanImage(
         m_layerViews.reserve(m_arrayLayers);
         for (uint32_t layer = 0; layer < m_arrayLayers; ++layer) {
             vk::ImageViewCreateInfo layerInfo = viewInfo;
+#if defined(__APPLE__)
+            layerInfo.pNext = nullptr;   // these ARE the attachments: the image's full usage
+#endif
             layerInfo.viewType = vk::ImageViewType::e2D;
             layerInfo.subresourceRange.baseArrayLayer = layer;
             layerInfo.subresourceRange.layerCount = 1;

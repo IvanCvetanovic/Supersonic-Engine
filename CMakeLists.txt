@@ -1,13 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
 project(SupersonicEngine LANGUAGES C CXX)
 
-# Objective-C++ on Apple platforms only: the iOS backend (src/platform/ios/)
-# talks to UIKit, which has no C interface. Enabled here, where the engine is
-# built for itself; a game that builds the engine as a subproject enables it
-# in its own top directory as well (enable_language wants the highest
-# directory common to everything that links the language).
+# Objective-C and Objective-C++ on Apple platforms only: the iOS backend
+# (src/platform/ios/) talks to UIKit, which has no C interface, and GLFW's
+# Cocoa backend is Objective-C. Both, not only the one the engine writes: with
+# OBJCXX enabled and OBJC not, CMake compiled GLFW's .m files as Objective-C++,
+# where C's implicit conversions from void* are errors. Enabled here, where the
+# engine is built for itself; a game that builds the engine as a subproject
+# enables them in its own top directory as well (enable_language wants the
+# highest directory common to everything that links the language).
 if (APPLE)
-    enable_language(OBJCXX)
+    enable_language(OBJC OBJCXX)
 endif()
 
 set(CMAKE_CXX_STANDARD 20)

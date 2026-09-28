@@ -27,6 +27,8 @@
 #include <utility>
 #include <vector>
 
+#include <unistd.h>
+
 // Key codes only; nothing from GLFW is linked on iOS (CMakeLists.txt).
 #include <GLFW/glfw3.h>
 
@@ -36,7 +38,8 @@
 
 // The safe-area API (platform/SafeArea.hpp) is answered here where the engine
 // has it: each window backend defines SafeArea::Get itself, and on iOS it is
-// the view's safeAreaInsets.
+// what remains unsafe INSIDE the game's view (the view itself is sized to the
+// safe area; SupersonicViewController says how), in the drawable's pixels.
 #if __has_include("platform/SafeArea.hpp")
 #include "platform/SafeArea.hpp"
 #define SUPERSONIC_IOS_SAFE_AREA 1
@@ -592,13 +595,34 @@ SafeAreaInsets Get() {
 // Landscape only, nothing of the system's drawn over the game that can be
 // hidden, and the edges' system gestures asked to wait for a second swipe, so a
 // thumb on an on-screen button near the edge does not leave the app.
+//
+// The game is drawn CLEAR of the notch or Dynamic Island and the rounded
+// corners beside it: the Metal view is the safe area's width and height (black
+// outside it), not the screen's, so no HUD is cut. Down to the bottom edge,
+// though - the home indicator hides itself and covers nothing of the picture -
+// and what remains unsafe inside the view, that band, is what SafeArea::Get
+// reports, for on-screen controls to keep clear of.
 @interface SupersonicViewController : UIViewController
+@property(strong, nonatomic) SupersonicMetalView* metalView;
 @end
 
 @implementation SupersonicViewController
 
 - (void)loadView {
-    self.view = [[SupersonicMetalView alloc] initWithFrame:CGRectZero];
+    UIView* root = [[UIView alloc] initWithFrame:CGRectZero];
+    root.backgroundColor = UIColor.blackColor;
+    SupersonicMetalView* metal = [[SupersonicMetalView alloc] initWithFrame:CGRectZero];
+    metal.translatesAutoresizingMaskIntoConstraints = NO;
+    [root addSubview:metal];
+    UILayoutGuide* safe = root.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [metal.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
+        [metal.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
+        [metal.topAnchor constraintEqualToAnchor:safe.topAnchor],
+        [metal.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+    ]];
+    self.metalView = metal;
+    self.view = root;
 }
 
 - (BOOL)prefersStatusBarHidden {
@@ -666,7 +690,8 @@ SafeAreaInsets Get() {
     using namespace Supersonic::IOS;
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     SupersonicViewController* controller = [[SupersonicViewController alloc] init];
-    UIView* view = controller.view;   // loads it
+    [controller loadViewIfNeeded];   // and with it the Metal view
+    UIView* view = controller.metalView;
     // The display's own pixels, not the points UIKit lays out in - set before
     // the first layout, which is what sizes the drawable.
     g.scale = static_cast<float>(windowScene.screen.nativeScale);
@@ -675,11 +700,17 @@ SafeAreaInsets Get() {
     g.layer = (CAMetalLayer*)view.layer;
     self.window.rootViewController = controller;
     [self.window makeKeyAndVisible];
-    if (CGRectIsEmpty(view.bounds)) view.frame = self.window.bounds;
+    // Laid out now, so the view has its safe-area size before the game makes
+    // a swapchain for it.
+    [self.window layoutIfNeeded];
     refreshSize(view);
     refreshSafeArea(view);
-    SUPERSONIC_LOG_INFO("iOS") << "Scene connected: " << g.width << "x" << g.height << " pixels at scale " << g.scale
-                               << ".";
+    const UIEdgeInsets screenInsets = self.window.safeAreaInsets;
+    SUPERSONIC_LOG_INFO("iOS") << "Scene connected: the game's view " << g.width << "x" << g.height
+                               << " pixels at scale " << g.scale << ", inside screen safe-area insets (points) L"
+                               << screenInsets.left << " T" << screenInsets.top << " R" << screenInsets.right << " B"
+                               << screenInsets.bottom << "; insets left inside the view (pixels) L" << g.insetLeft
+                               << " T" << g.insetTop << " R" << g.insetRight << " B" << g.insetBottom << ".";
 
     // The game is entered once, from the run loop's next turn, rather than
     // from inside UIKit's connection callback: a timer, not the main dispatch
@@ -781,8 +812,10 @@ SafeAreaInsets Get() {
     std::fflush(stdout);
     std::fflush(stderr);
     // There is nothing to go back to: UIKit would keep showing the last frame
-    // of a game that has ended.
-    std::exit(status);
+    // of a game that has ended. _exit, not exit, as on Android: static
+    // destructors after a game that failed half-way (worker threads still
+    // joinable) end in std::terminate, and UIKit is still mid-callout.
+    _exit(status);
 }
 
 @end
