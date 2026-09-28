@@ -154,13 +154,26 @@ as clicks and loads its first level. What that took, all of it under
 - **Vulkan**: the vendored headers (the NDK has no `vulkan.hpp`), the NDK's
   loader, VMA's entry points fetched at run time (`libvulkan.so` below API 28
   does not export the 1.1 ones), no validation layers.
+- **The Java side**, one small class: `SupersonicActivity`
+  (`src/platform/android/java/`), a NativeActivity a game's manifest names in
+  its place. It does the two things only the UI thread may do: immersive
+  fullscreen (both system bars hidden, and hidden again after Home and resume;
+  measured with gesture and three-button navigation), and the window's
+  **safe area** - whatever still covers the window, a bar that shows or a
+  cutout - handed through JNI to `SafeArea::Get()`
+  (`src/platform/SafeArea.hpp`, window pixels, zero on the desktop). The window
+  itself is kept out of a display cutout (`LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER`),
+  so a game draws all of its picture where it can be seen: measured with the
+  emulator's tall-cutout overlay, the window became 1184x720 beside a 96 px
+  letterbox and the insets stayed zero. (Laid into the cutout instead, the
+  insets read 96 px on the left.)
 
-Not done: the editor (it needs GLFW), immersive mode (hiding the
-navigation bar is a UI-thread call and a NativeActivity has no Java), and a
-gamepad or multi-touch run on real hardware - `adb shell input` injects one
-pointer at a time. Penumbra's `tools/build_android.sh` is the working build
-and packaging (NDK toolchain, aapt2, zipalign, apksigner - no Gradle);
-`platform/android/` here still describes the older attempt at the editor.
+Not done: the editor (it needs GLFW), text entry from a soft keyboard, and
+a gamepad or multi-touch run on real hardware - `adb shell input` injects
+one pointer at a time. Penumbra's `tools/build_android.sh` is the working
+build and packaging (NDK toolchain, javac, d8, aapt2, zipalign, apksigner -
+no Gradle); `platform/android/` here still describes the older attempt at the
+editor.
 
 **macOS runs a game; iOS builds one and starts it.** Measured on 28 September
 2026 on GitHub's macos-15 arm64 runners (Xcode 26.3, MoltenVK 1.4.2), through

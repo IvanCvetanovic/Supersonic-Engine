@@ -37,14 +37,12 @@
 
 #include "core/Log.hpp"
 
-// The safe-area API (platform/SafeArea.hpp) is answered here where the engine
-// has it: each window backend defines SafeArea::Get itself, and on iOS it is
-// what remains unsafe INSIDE the game's view (the view itself is sized to the
-// safe area; SupersonicViewController says how), in the drawable's pixels.
-#if __has_include("platform/SafeArea.hpp")
+// SafeArea::Get (platform/SafeArea.hpp) is each window backend's own to
+// define, and on iOS it is what remains unsafe INSIDE the game's view - the
+// view itself is sized to the safe area (SupersonicViewController says how) -
+// in the drawable's pixels. SafeArea.cpp's zero is compiled only where the
+// window is GLFW's (WindowBackend.hpp).
 #include "platform/SafeArea.hpp"
-#define SUPERSONIC_IOS_SAFE_AREA 1
-#endif
 
 // What @autoreleasepool compiles to. The game's loop never returns to the run
 // loop that would drain the pool its Objective-C objects are autoreleased into
@@ -518,7 +516,6 @@ double Now() {
 
 } // namespace Supersonic::IOS
 
-#if defined(SUPERSONIC_IOS_SAFE_AREA)
 namespace Supersonic::SafeArea {
 
 // In the drawable's pixels, which is what the swapchain, the mouse and the
@@ -534,7 +531,6 @@ SafeAreaInsets Get() {
 }
 
 } // namespace Supersonic::SafeArea
-#endif
 
 // ---- UIKit ------------------------------------------------------------------------
 

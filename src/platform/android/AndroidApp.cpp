@@ -8,10 +8,12 @@
 #include <android/native_window.h>
 #include <android/window.h>
 #include <android_native_app_glue.h>
+#include <jni.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -25,6 +27,7 @@
 #include "imgui.h"
 
 #include "core/Log.hpp"
+#include "platform/SafeArea.hpp"
 
 namespace Supersonic::Android {
 
@@ -632,6 +635,15 @@ void WaitUntilDrawable() {
         g.resumedFromSuspend = true;
         if (!g.app->destroyRequested) SUPERSONIC_LOG_INFO("Android") << "Back in the foreground.";
     }
+    // The window's size, asked every frame rather than only when a command
+    // says it changed - a guard, not a measured fix. Seen once, on an emulator
+    // launched into a boot storm: the window was 1x1 at INIT_WINDOW, the
+    // WINDOW_RESIZED that followed still read 1x1, and nothing said so again,
+    // so the swapchain stayed 1x1 (the system was wedged at the time as well,
+    // for reasons that were not this app's). Asking every frame means a size
+    // that changes without a command is still picked up. Two cheap local
+    // queries.
+    refreshWindowSize();
 }
 
 void WindowSize(int& width, int& height) {
@@ -736,6 +748,51 @@ double Now() {
 
 } // namespace Supersonic::Android
 
+// ---- The safe area --------------------------------------------------------------
+
+namespace {
+// Written by the activity's UI thread (SupersonicActivity.java, whenever the
+// window's insets change) and read by the game's, so each edge is an atomic.
+// Four separate stores can be seen half-updated for a frame; the next frame
+// reads the whole of it, which is as soon as anything could act on it anyway.
+std::atomic<int> g_safeLeft{0};
+std::atomic<int> g_safeTop{0};
+std::atomic<int> g_safeRight{0};
+std::atomic<int> g_safeBottom{0};
+} // namespace
+
+namespace Supersonic::SafeArea {
+
+SafeAreaInsets Get() {
+    SafeAreaInsets insets;
+    insets.left = static_cast<float>(g_safeLeft.load(std::memory_order_relaxed));
+    insets.top = static_cast<float>(g_safeTop.load(std::memory_order_relaxed));
+    insets.right = static_cast<float>(g_safeRight.load(std::memory_order_relaxed));
+    insets.bottom = static_cast<float>(g_safeBottom.load(std::memory_order_relaxed));
+    return insets;
+}
+
+} // namespace Supersonic::SafeArea
+
+// Called by SupersonicActivity (src/platform/android/java/) on the UI thread,
+// in the decor view's pixels, which are the window's: the ANativeWindow is the
+// activity's whole window.
+extern "C" JNIEXPORT void JNICALL Java_com_ivancvetanovic_supersonic_SupersonicActivity_nativeSetSafeArea(
+    JNIEnv* /*env*/, jclass /*type*/, jint left, jint top, jint right, jint bottom) {
+    const auto clean = [](jint value) { return value > 0 ? static_cast<int>(value) : 0; };
+    const int l = clean(left);
+    const int t = clean(top);
+    const int r = clean(right);
+    const int b = clean(bottom);
+    if (l == g_safeLeft.load() && t == g_safeTop.load() && r == g_safeRight.load() && b == g_safeBottom.load()) return;
+    g_safeLeft.store(l);
+    g_safeTop.store(t);
+    g_safeRight.store(r);
+    g_safeBottom.store(b);
+    SUPERSONIC_LOG_INFO("Android") << "Safe area: left " << l << ", top " << t << ", right " << r << ", bottom " << b
+                                   << " (window pixels).";
+}
+
 // ---- The process's entry ------------------------------------------------------
 
 extern "C" void android_main(android_app* app) {
@@ -748,12 +805,10 @@ extern "C" void android_main(android_app* app) {
 
     // The status bar hidden and the screen kept on while the game runs. Both
     // are window flags, which the activity applies on its own thread. The
-    // navigation bar is not hidden: that is View.setSystemUiVisibility, which
-    // belongs to the UI thread (called from here through JNI, it raised a Java
-    // exception on the API 33 emulator), and an app with no Java has no code
-    // on that thread to make the call from. Gesture navigation draws only a
-    // handle over the game; three-button navigation takes a strip of the
-    // window, which the game's view adapts to like any other window size.
+    // navigation bar is the UI thread's to hide (called from here through JNI,
+    // it raised a Java exception), so an activity that is
+    // SupersonicActivity (java/ beside this file) hides both bars itself and
+    // keeps them hidden; a plain NativeActivity keeps its navigation bar.
     ANativeActivity_setWindowFlags(app->activity, AWINDOW_FLAG_FULLSCREEN | AWINDOW_FLAG_KEEP_SCREEN_ON, 0);
 
     SUPERSONIC_LOG_INFO("Android") << "android_main: waiting for a window.";
