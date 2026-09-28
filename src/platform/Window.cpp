@@ -15,6 +15,24 @@ Window::Window(int width, int height, const std::string& title)
         SUPERSONIC_LOG_ERROR("GLFW") << "error " << code << ": " << (description ? description : "(no detail)") << std::endl;
     });
 
+#if defined(__APPLE__)
+    // Two of GLFW's macOS defaults work against the engine, and both have to be
+    // changed before glfwInit.
+    //
+    // Inside an app bundle, glfwInit moves the working directory to
+    // Contents/Resources. The window is made after AnchorAssetRoot has chosen
+    // the directory every relative path resolves from, so the first shader
+    // would be looked for somewhere nobody chose.
+    //
+    // And GLFW finds Vulkan by loading libvulkan.1.dylib by that name, which is
+    // not there when the build links MoltenVK directly with no loader
+    // (SUPERSONIC_MOLTENVK_LIBRARY), and not on dyld's search path when the
+    // loader is Homebrew's. The entry point this program was linked against is
+    // handed over instead, so GLFW and the renderer use the same Vulkan.
+    glfwInitHint(GLFW_COCOA_CHDIR_RESOURCES, GLFW_FALSE);
+    glfwInitVulkanLoader(vkGetInstanceProcAddr);
+#endif
+
     if (!glfwInit()) {
         throw std::runtime_error("Failed to initialize GLFW!");
     }

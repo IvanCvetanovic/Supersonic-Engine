@@ -63,6 +63,7 @@ namespace Supersonic {
 // drawable size, a clock, and a way to be told the window is going away.
 //
 // Android: the ANativeWindow the activity has now (src/platform/android/).
+// iOS: the CAMetalLayer of the view the app's window shows (src/platform/ios/).
 class Window {
 public:
     // The size is what a desktop window would open at, and is ignored: a
@@ -83,7 +84,12 @@ public:
     // is a window to draw on again or the app has been asked to close.
     void PollEvents();
 
+#if defined(SUPERSONIC_PLATFORM_IOS)
+    // The view's CAMetalLayer, untyped so that C++ can include this header.
+    void* GetNativeWindow() const;
+#else
     ANativeWindow* GetNativeWindow() const;
+#endif
 
     int GetWidth() const;
     int GetHeight() const;

@@ -150,8 +150,28 @@ std::vector<const char*> VulkanContext::getRequiredExtensions(const std::vector<
     // enumerated at all unless this extension is requested and the portability
     // bit is set on the create info, so vkCreateInstance returned
     // VK_ERROR_INCOMPATIBLE_DRIVER on every Mac.
-    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-    extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+    //
+    // Asked for only where offered. A loader always offers both; MoltenVK
+    // linked directly (iOS, and a macOS build that names
+    // SUPERSONIC_MOLTENVK_LIBRARY) answers for itself, and an extension the
+    // instance does not have fails vkCreateInstance outright.
+    uint32_t availableCount = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &availableCount, nullptr);
+    std::vector<VkExtensionProperties> available(availableCount);
+    vkEnumerateInstanceExtensionProperties(nullptr, &availableCount, available.data());
+    available.resize(availableCount);
+    const auto offered = [&available](const char* name) {
+        for (const VkExtensionProperties& extension : available) {
+            if (std::strcmp(extension.extensionName, name) == 0) return true;
+        }
+        return false;
+    };
+    if (offered(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+        extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    }
+    if (offered(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
+        extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+    }
 #endif
 
     return extensions;
@@ -191,11 +211,16 @@ void VulkanContext::createInstance(const std::vector<const char*>& windowExtensi
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
-#if defined(__APPLE__)
-    createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
-#endif
-
     auto requiredExtensions = getRequiredExtensions(windowExtensions);
+#if defined(__APPLE__)
+    // The bit goes with the extension (getRequiredExtensions asks for it only
+    // where offered): set without it, the create info is invalid.
+    for (const char* name : requiredExtensions) {
+        if (std::strcmp(name, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0) {
+            createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        }
+    }
+#endif
     createInfo.enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size());
     createInfo.ppEnabledExtensionNames = requiredExtensions.data();
 

@@ -12,16 +12,18 @@
 // So the handful of places that touch the window system branch on THIS, rather
 // than on a list of platforms: `#if SUPERSONIC_WINDOW_GLFW` keeps the desktop
 // code exactly as it was, and the other branch is the native-surface seam that
-// src/platform/android/ implements today. An iOS backend joins it by adding
-// its platform to the condition below and implementing the same few functions
-// (platform/Window.hpp's native-surface Window) - nothing above the seam
-// changes.
+// src/platform/android/ and src/platform/ios/ implement: the same few
+// functions (platform/Window.hpp's native-surface Window), nothing above the
+// seam changed.
 //
 // Preprocessor only, with no includes, on purpose. PlatformDefs.hpp would be
 // the obvious home, and it cannot be included by a desktop header: it defines
 // VK_USE_PLATFORM_WIN32_KHR, which makes every later vulkan.h pull in
-// windows.h and its min/max macros.
-#if defined(SUPERSONIC_PLATFORM_ANDROID) || defined(__ANDROID__)
+// windows.h and its min/max macros. So iOS is known by the definition the
+// build gives every target that links the engine (CMakeLists.txt,
+// SUPERSONIC_PLATFORM_DEFINITION), not by TargetConditionals.h; macOS is not
+// in the condition, and stays on GLFW.
+#if defined(SUPERSONIC_PLATFORM_ANDROID) || defined(__ANDROID__) || defined(SUPERSONIC_PLATFORM_IOS)
 #define SUPERSONIC_WINDOW_GLFW 0
 #else
 #define SUPERSONIC_WINDOW_GLFW 1

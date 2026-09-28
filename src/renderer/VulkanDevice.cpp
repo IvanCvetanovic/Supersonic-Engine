@@ -265,6 +265,23 @@ void VulkanDevice::createLogicalDevice() {
     createInfo.enabledExtensionCount = static_cast<uint32_t>(m_deviceExtensions.size());
     createInfo.ppEnabledExtensionNames = m_deviceExtensions.data();
 
+#if defined(__APPLE__)
+    // A device that advertises VK_KHR_portability_subset (MoltenVK does) must
+    // have it enabled by whoever creates it: it is how the application says it
+    // knows the device is not full Vulkan. MoltenVK works without it; the
+    // validation layer reports it on every device creation. The name is spelled
+    // out because its macro is in vulkan_beta.h.
+    std::vector<const char*> appleExtensions = m_deviceExtensions;
+    for (const vk::ExtensionProperties& extension : m_physicalDevice.enumerateDeviceExtensionProperties()) {
+        if (std::strcmp(extension.extensionName.data(), "VK_KHR_portability_subset") == 0) {
+            appleExtensions.push_back("VK_KHR_portability_subset");
+            break;
+        }
+    }
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(appleExtensions.size());
+    createInfo.ppEnabledExtensionNames = appleExtensions.data();
+#endif
+
     m_device = m_physicalDevice.createDevice(createInfo);
     SUPERSONIC_LOG_INFO("VulkanDevice") << "Vulkan Logical Device created successfully." << std::endl;
 

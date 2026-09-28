@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 project(SupersonicEngine LANGUAGES C CXX)
 
+# Objective-C++ on Apple platforms only: the iOS backend (src/platform/ios/)
+# talks to UIKit, which has no C interface. Enabled here, where the engine is
+# built for itself; a game that builds the engine as a subproject enables it
+# in its own top directory as well (enable_language wants the highest
+# directory common to everything that links the language).
+if (APPLE)
+    enable_language(OBJCXX)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -78,17 +87,55 @@ add_compile_definitions(${SUPERSONIC_PLATFORM_DEFINITION})
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
+# APPLE ONLY, AND ONLY WHEN NAMED: MoltenVK linked into the program itself,
+# with no Vulkan loader in front of it. The path to a libMoltenVK.a (a slice of
+# the MoltenVK.xcframework from a KhronosGroup/MoltenVK release) or a
+# libMoltenVK.dylib.
+#
+# iOS has no loader to link: an app carries its Vulkan implementation inside
+# itself, and the xcframework is how MoltenVK ships for that. A macOS app
+# bundle is simplest the same way - one library linked in, no ICD manifest for
+# a loader to find at run time, no dylib whose install name has to be
+# rewritten into the bundle. What is given up is the loader's layers, the
+# validation layer among them, which no Apple build of this engine has had.
+#
+# Empty (the default), nothing changes: the SDK, then the loader found by
+# name, exactly as below.
+set(SUPERSONIC_MOLTENVK_LIBRARY "" CACHE FILEPATH
+    "Apple only: link this MoltenVK (libMoltenVK.a or .dylib) directly instead of a Vulkan loader")
+set(_supersonicMoltenVK FALSE)
+if (APPLE AND SUPERSONIC_MOLTENVK_LIBRARY)
+    set(_supersonicMoltenVK TRUE)
+endif()
+
 # Not on Android: the NDK sysroot ships vulkan.h and libvulkan.so, so
 # FindVulkan succeeds there - and then vulkan.hpp, which only the SDK and the
 # vendored headers carry, is missing from every file that includes it. Skipped,
 # Android takes the fallback below: the vendored headers, and the loader found
 # by name, which under the NDK toolchain is the sysroot's libvulkan.so for the
 # API level being built.
-if (NOT ANDROID)
+if (NOT ANDROID AND NOT _supersonicMoltenVK)
     find_package(Vulkan QUIET)
 endif()
 
-if (Vulkan_FOUND)
+if (_supersonicMoltenVK)
+    message(STATUS "Vulkan: MoltenVK linked directly, no loader: ${SUPERSONIC_MOLTENVK_LIBRARY}")
+    set(Vulkan_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/Vulkan-Headers-1.3.290/include")
+    # What MoltenVK's own README lists for linking it statically; a dylib
+    # brings its own and the extra names cost nothing.
+    set(_mvkFrameworks
+        "-framework Metal" "-framework Foundation" "-framework QuartzCore"
+        "-framework IOSurface" "-framework CoreGraphics")
+    if (IOS)
+        list(APPEND _mvkFrameworks "-framework UIKit")
+    else()
+        list(APPEND _mvkFrameworks "-framework IOKit" "-framework AppKit")
+    endif()
+    add_library(Vulkan::Vulkan INTERFACE IMPORTED)
+    set_target_properties(Vulkan::Vulkan PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${Vulkan_INCLUDE_DIRS}"
+        INTERFACE_LINK_LIBRARIES "${SUPERSONIC_MOLTENVK_LIBRARY};${_mvkFrameworks}")
+elseif (Vulkan_FOUND)
     message(STATUS "Vulkan SDK found: ${Vulkan_LIBRARY}")
 else()
     message(STATUS "No Vulkan SDK found - falling back to vendored headers + system loader")
@@ -180,7 +227,10 @@ endif()
 # is a real one; this only moves the failure from "cannot configure the tree" to
 # "has not written the windowing backend", which is progress of the kind that
 # can be worked on.
-if (NOT ANDROID)
+#
+# Nor on iOS, which GLFW does not support either: its Apple backend is Cocoa,
+# and src/platform/ios/ stands where it does, as src/platform/android/ does.
+if (NOT ANDROID AND NOT IOS)
     set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -207,7 +257,7 @@ set(IMGUI_SOURCES
 
 # The GLFW backend follows GLFW. ImGui itself is platform-agnostic and the
 # Vulkan backend is fine anywhere; only the window-system half has to go.
-if (NOT ANDROID)
+if (NOT ANDROID AND NOT IOS)
     list(APPEND IMGUI_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/backends/imgui_impl_glfw.cpp)
 endif()
@@ -231,6 +281,20 @@ endif()
 if (ANDROID)
     list(FILTER ENGINE_SOURCES EXCLUDE REGEX
          "/src/platform/(Window|InputPolling|NativeWindowControl|Gamepads)\\.cpp$")
+endif()
+
+# The iOS backend the same way: src/platform/ios/ in an iOS build only, in
+# place of the GLFW files. Its UIKit half is Objective-C++ (IOSApp.mm), which
+# the glob above does not collect, so it is named; ARC manages its objects.
+if (NOT IOS)
+    list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/platform/ios/")
+endif()
+if (IOS)
+    list(FILTER ENGINE_SOURCES EXCLUDE REGEX
+         "/src/platform/(Window|InputPolling|NativeWindowControl|Gamepads)\\.cpp$")
+    set(_iosAppSource ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ios/IOSApp.mm)
+    list(APPEND ENGINE_SOURCES ${_iosAppSource})
+    set_source_files_properties(${_iosAppSource} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()
 
 # main.cpp belongs to the executable, not the library: linking a static library
@@ -398,9 +462,30 @@ target_link_libraries(SupersonicCore PUBLIC
 )
 
 # glfw is PUBLIC on desktop for the reason above - Window.hpp includes it - and
-# simply absent on Android, where the target does not exist.
-if (NOT ANDROID)
+# simply absent on Android and iOS, where the target does not exist.
+if (NOT ANDROID AND NOT IOS)
     target_link_libraries(SupersonicCore PUBLIC glfw)
+endif()
+
+# Clang's -Wpedantic reports every _Nullable and _Nonnull in vk_mem_alloc.h,
+# which the renderer headers include - hundreds of lines per file about a
+# header this engine does not maintain. Android says the same below; Apple's
+# compiler is Clang as well.
+if (APPLE)
+    target_compile_options(SupersonicCore PUBLIC -Wno-nullability-extension)
+endif()
+
+# What stands where GLFW does on iOS (src/platform/ios/): UIKit's app, window
+# and touches, a CAMetalLayer for MoltenVK to present into, GameController's
+# pads and AVFoundation's audio session. GLFW's header, and only its header, for
+# the key codes, as on Android. The engine defines main() here (IOSApp.mm) and
+# enters the game through SupersonicMain, as android_main does.
+if (IOS)
+    target_include_directories(SupersonicCore PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw-3.4/include)
+    target_link_libraries(SupersonicCore PUBLIC
+        "-framework UIKit" "-framework QuartzCore" "-framework Metal"
+        "-framework GameController" "-framework AVFoundation" "-framework Foundation")
 endif()
 
 # What stands where GLFW does on Android: the NDK's NativeActivity glue, its
@@ -474,6 +559,13 @@ elseif (ANDROID)
     message(STATUS "Audio backend: AAudio")
     target_compile_definitions(SupersonicCore PRIVATE SUPERSONIC_AUDIO_AAUDIO=1)
     target_link_libraries(SupersonicCore PRIVATE aaudio)
+elseif (APPLE)
+    # CoreAudio's output unit, pulled from the same AudioMixer: the default
+    # output device on macOS, RemoteIO on iOS. Part of both systems, so like
+    # XAudio2 and AAudio it is unconditional.
+    message(STATUS "Audio backend: CoreAudio")
+    target_compile_definitions(SupersonicCore PRIVATE SUPERSONIC_AUDIO_COREAUDIO=1)
+    target_link_libraries(SupersonicCore PRIVATE "-framework AudioToolbox" "-framework CoreAudio")
 endif()
 
 # Assets are loaded with paths relative to the working directory, so make F5

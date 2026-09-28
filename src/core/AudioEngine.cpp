@@ -26,6 +26,21 @@
 
 #include "core/AudioMixer.hpp"
 #include "platform/android/AndroidApp.hpp"
+#elif defined(SUPERSONIC_AUDIO_COREAUDIO)
+// AssertMacros.h, which Apple's framework headers can reach, otherwise defines
+// check(), verify() and require() as macros for every line after it.
+#define __ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES 0
+#include <AudioToolbox/AudioToolbox.h>
+
+#include <atomic>
+#include <cstdint>
+#include <mutex>
+#include <string>
+
+#include "core/AudioMixer.hpp"
+#if defined(SUPERSONIC_PLATFORM_IOS)
+#include "platform/ios/IOSApp.hpp"
+#endif
 #endif
 
 namespace Supersonic {
@@ -494,6 +509,206 @@ void AudioEngine::SetVoiceParameters(VoiceId voice, float volume, float pitch, f
 bool AudioEngine::IsVoicePlaying(VoiceId voice) const {
     if (!m_available) return false;
     return m_impl->mixer->IsPlaying(voice);
+}
+
+#elif defined(SUPERSONIC_AUDIO_COREAUDIO)
+
+// ---------------------------------------------------------------------------
+// CoreAudio backend, macOS and iOS. The AAudio path's shape: AudioMixer does
+// the summing, pulled from a thread CoreAudio owns - here an output audio
+// unit's render callback. The unit is the system's default output on macOS
+// (it follows the device the user picks, headphones included) and RemoteIO on
+// iOS. Either converts from the stream this hands it - 48 kHz, 16-bit,
+// interleaved stereo, what the mixer writes - to whatever the hardware runs
+// at, so the mixer's rate never has to follow the device's.
+//
+// iOS also takes the app off the screen, and a phone call can take the audio
+// session away; the unit stops for both and starts again after
+// (platform/ios/IOSApp.hpp's suspend handler, as AndroidApp's is for AAudio).
+// A Mac game keeps playing unfocused, as it does on Windows and Linux.
+// ---------------------------------------------------------------------------
+namespace {
+constexpr uint32_t kCoreAudioRate = 48000;
+constexpr uint32_t kCoreAudioChannels = 2;
+
+std::string coreAudioError(const char* what, OSStatus status) {
+    return std::string(what) + " failed (OSStatus " + std::to_string(static_cast<long>(status)) + ")";
+}
+} // namespace
+
+struct AudioEngine::Impl {
+    AudioMixer mixer{kCoreAudioRate, static_cast<uint16_t>(kCoreAudioChannels)};
+    AudioComponentInstance unit{nullptr};
+
+    std::mutex unitMutex;     // start and stop
+    bool running{false};      // under unitMutex
+
+    // What the render callback has been asked for, for the log at shutdown:
+    // proof the device pulled, not merely that it opened.
+    std::atomic<uint64_t> framesPulled{0};
+    std::atomic<uint64_t> callbacks{0};
+
+    static OSStatus onRender(void* user, AudioUnitRenderActionFlags* /*flags*/, const AudioTimeStamp* /*time*/,
+                             UInt32 /*bus*/, UInt32 frames, AudioBufferList* data) {
+        auto* impl = static_cast<Impl*>(user);
+        if (data == nullptr || data->mNumberBuffers == 0 || data->mBuffers[0].mData == nullptr) return noErr;
+        // One interleaved buffer, as the stream format below asks.
+        const UInt32 capacity =
+            data->mBuffers[0].mDataByteSize / static_cast<UInt32>(sizeof(int16_t) * kCoreAudioChannels);
+        const UInt32 count = frames < capacity ? frames : capacity;
+        impl->mixer.MixInt16(static_cast<int16_t*>(data->mBuffers[0].mData), static_cast<size_t>(count));
+        impl->framesPulled.fetch_add(count, std::memory_order_relaxed);
+        impl->callbacks.fetch_add(1, std::memory_order_relaxed);
+        return noErr;
+    }
+
+    bool open(std::string& error) {
+        AudioComponentDescription description{};
+        description.componentType = kAudioUnitType_Output;
+#if defined(SUPERSONIC_PLATFORM_IOS)
+        description.componentSubType = kAudioUnitSubType_RemoteIO;
+#else
+        description.componentSubType = kAudioUnitSubType_DefaultOutput;
+#endif
+        description.componentManufacturer = kAudioUnitManufacturer_Apple;
+        AudioComponent component = AudioComponentFindNext(nullptr, &description);
+        if (component == nullptr) {
+            error = "no CoreAudio output unit on this system";
+            return false;
+        }
+        OSStatus status = AudioComponentInstanceNew(component, &unit);
+        if (status != noErr) {
+            unit = nullptr;
+            error = coreAudioError("AudioComponentInstanceNew", status);
+            return false;
+        }
+
+        AudioStreamBasicDescription format{};
+        format.mSampleRate = static_cast<Float64>(kCoreAudioRate);
+        format.mFormatID = kAudioFormatLinearPCM;
+        format.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
+        format.mChannelsPerFrame = kCoreAudioChannels;
+        format.mBitsPerChannel = 16;
+        format.mBytesPerFrame = static_cast<UInt32>(sizeof(int16_t) * kCoreAudioChannels);
+        format.mFramesPerPacket = 1;
+        format.mBytesPerPacket = format.mBytesPerFrame;
+        status = AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &format,
+                                      sizeof format);
+        if (status != noErr) {
+            error = coreAudioError("Setting the output unit's stream format", status);
+            close();
+            return false;
+        }
+
+        AURenderCallbackStruct callback{};
+        callback.inputProc = &Impl::onRender;
+        callback.inputProcRefCon = this;
+        status = AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0,
+                                      &callback, sizeof callback);
+        if (status != noErr) {
+            error = coreAudioError("Setting the output unit's render callback", status);
+            close();
+            return false;
+        }
+
+        status = AudioUnitInitialize(unit);
+        if (status != noErr) {
+            error = coreAudioError("AudioUnitInitialize", status);
+            close();
+            return false;
+        }
+        status = AudioOutputUnitStart(unit);
+        if (status != noErr) {
+            error = coreAudioError("AudioOutputUnitStart", status);
+            close();
+            return false;
+        }
+        running = true;
+        return true;
+    }
+
+    void close() {
+        if (unit == nullptr) return;
+        if (running) AudioOutputUnitStop(unit);
+        running = false;
+        AudioUnitUninitialize(unit);
+        AudioComponentInstanceDispose(unit);
+        unit = nullptr;
+    }
+
+    void setSuspended(bool suspend) {
+        std::lock_guard<std::mutex> lock(unitMutex);
+        if (unit == nullptr || running == !suspend) return;
+        const OSStatus status = suspend ? AudioOutputUnitStop(unit) : AudioOutputUnitStart(unit);
+        if (status == noErr) {
+            running = !suspend;
+        } else {
+            SUPERSONIC_LOG_WARN("AudioEngine") << coreAudioError(suspend ? "AudioOutputUnitStop" : "AudioOutputUnitStart",
+                                                                 status) << ".";
+        }
+    }
+};
+
+AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
+    std::string error;
+    {
+        std::lock_guard<std::mutex> lock(m_impl->unitMutex);
+        if (!m_impl->open(error)) {
+            m_status = error;
+            SUPERSONIC_LOG_ERROR("AudioEngine") << m_status << std::endl;
+            return;
+        }
+    }
+
+#if defined(SUPERSONIC_PLATFORM_IOS)
+    Impl* impl = m_impl.get();
+    IOS::SetAudioSuspendHandler([impl](bool suspended) { impl->setSuspended(suspended); });
+#endif
+
+    m_available = true;
+    m_status = "CoreAudio output unit ready (" + std::to_string(kCoreAudioRate) + " Hz)";
+    SUPERSONIC_LOG_INFO("AudioEngine") << m_status << "." << std::endl;
+}
+
+AudioEngine::~AudioEngine() {
+#if defined(SUPERSONIC_PLATFORM_IOS)
+    IOS::SetAudioSuspendHandler(nullptr);
+#endif
+    std::lock_guard<std::mutex> lock(m_impl->unitMutex);
+    if (m_impl->unit != nullptr) {
+        // Stopped, and so out of the callback, before the mixer it reads goes.
+        m_impl->close();
+        SUPERSONIC_LOG_INFO("AudioEngine") << "CoreAudio output closed: "
+                                           << m_impl->framesPulled.load(std::memory_order_relaxed)
+                                           << " frames pulled in "
+                                           << m_impl->callbacks.load(std::memory_order_relaxed) << " callbacks.";
+    }
+}
+
+AudioEngine::VoiceId AudioEngine::playImpl(const std::string& path, bool loop, float volume, float pitch) {
+    if (!m_available) return kInvalidVoice;
+
+    const AudioClip* clip = LoadClip(path);
+    if (!clip) return kInvalidVoice;
+
+    // As on ALSA and AAudio: m_clips' nodes keep their addresses, so the render
+    // callback can keep reading this clip while more are loaded.
+    return m_impl->mixer.Add(*clip, loop, volume, pitch);
+}
+
+void AudioEngine::stopImpl(VoiceId voice) {
+    if (!m_available) return;
+    m_impl->mixer.Remove(voice);
+}
+
+void AudioEngine::SetVoiceParameters(VoiceId voice, float volume, float pitch, float pan) {
+    if (!m_available) return;
+    m_impl->mixer.SetParameters(voice, volume, pitch, pan);
+}
+
+bool AudioEngine::IsVoicePlaying(VoiceId voice) const {
+    if (!m_available) return false;
+    return m_impl->mixer.IsPlaying(voice);
 }
 
 #else
