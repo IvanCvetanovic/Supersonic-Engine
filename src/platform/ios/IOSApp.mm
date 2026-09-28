@@ -11,6 +11,7 @@
 
 #import <AVFoundation/AVFoundation.h>
 #import <GameController/GameController.h>
+#import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <UIKit/UIKit.h>
 
@@ -829,6 +830,17 @@ int main(int argc, char* argv[]) {
     // the log as it happens.
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
     @autoreleasepool {
+        // MoltenVK's Metal argument buffers where the GPU has only Tier 1 of
+        // them - the iOS simulator's, and A11 and A12 devices - are off.
+        // Measured in the simulator: writing ImGui's sampler descriptor through
+        // them killed the simulator's Metal service, and under Metal validation
+        // asserted "No argument buffer is set"; with discrete bindings the
+        // engine initialised and ran. Before MoltenVK reads its configuration
+        // (at the first instance), and never over a value already set.
+        id<MTLDevice> gpu = MTLCreateSystemDefaultDevice();
+        if (gpu != nil && gpu.argumentBuffersSupport == MTLArgumentBuffersTier1) {
+            setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
+        }
         return UIApplicationMain(argc, argv, nil, NSStringFromClass([SupersonicAppDelegate class]));
     }
 }
