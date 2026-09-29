@@ -492,6 +492,242 @@ static void testAFullscreenModeRunsAtTheDesktopsRateWhenItCan() {
     CHECK(WindowControl::ChooseFullscreenMode({}, DisplayMode{}, 1280, 720) == DisplayMode{});
 }
 
+// --- A refresh rate named, and a window fitted to its monitor (opt-in) --------
+
+// A 1920x1200 panel whose desktop runs at 60 Hz and which also offers 165 Hz
+// at its own size (listed), 1280x800 at 60 and 120, and 800x600 at 60 only. The
+// desktop's own mode is left out of the list, as a platform may leave it.
+static void PutOnAFastPanel(StandInWindow& window) {
+    window.modes = {{800, 600, 60}, {1280, 800, 60}, {1280, 800, 120}, {1920, 1200, 165}};
+    window.desktop = {1920, 1200, 60};
+}
+
+static void testTheHighestRateIsChosenFromTheListAndTheDesktopAlike() {
+    StandInWindow window;
+    PutOnAFastPanel(window);
+    const std::vector<DisplayMode>& modes = window.modes;
+    const DisplayMode& desktop = window.desktop;
+    constexpr uint32_t kHighest = WindowControl::kHighestRefreshRate;
+
+    // At the desktop's own size the desktop's 60 Hz is not the answer just
+    // because it is the desktop's: 165 is listed there.
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1920, 1200, kHighest) ==
+          (DisplayMode{1920, 1200, 165}));
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1280, 800, kHighest) ==
+          (DisplayMode{1280, 800, 120}));
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 800, 600, kHighest) ==
+          (DisplayMode{800, 600, 60}));
+    // The desktop's mode counts although unlisted, and wins when nothing
+    // listed at its size is faster.
+    CHECK(WindowControl::ChooseFullscreenMode({}, desktop, 1920, 1200, kHighest) == desktop);
+    // A size neither listed nor the desktop's has no highest.
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1024, 768, kHighest) == DisplayMode{});
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 0, 0, kHighest) == DisplayMode{});
+
+    // Step 23's rule is what the call without a rate still gives: the desktop
+    // itself at its size, its rate where offered, else the highest.
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1920, 1200) == desktop);
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1280, 800) == (DisplayMode{1280, 800, 60}));
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1920, 1200, WindowControl::kDesktopRefreshRate) ==
+          desktop);
+}
+
+static void testANamedRateIsThatRateOrNothing() {
+    StandInWindow window;
+    PutOnAFastPanel(window);
+    const std::vector<DisplayMode>& modes = window.modes;
+    const DisplayMode& desktop = window.desktop;
+
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1280, 800, 120) == (DisplayMode{1280, 800, 120}));
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1280, 800, 60) == (DisplayMode{1280, 800, 60}));
+    // The desktop's own size and rate, unlisted: offered.
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1920, 1200, 60) == desktop);
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1920, 1200, 165) == (DisplayMode{1920, 1200, 165}));
+    // Not at that size, or not at all: zeroes, never the nearest.
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 800, 600, 120) == DisplayMode{});
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1920, 1200, 144) == DisplayMode{});
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1024, 768, 60) == DisplayMode{});
+}
+
+static void testAFullscreenRequestCarriesItsRate() {
+    StandInWindow window;
+    PutOnAFastPanel(window);
+
+    CHECK(window.SetFullscreenMode(1920, 1200, WindowControl::kHighestRefreshRate));
+    WindowControl::Requests taken = window.TakeRequests();
+    CHECK(taken.setFullscreen && taken.fullscreen);
+    CHECK(taken.fullscreenMode == glm::uvec2(1920u, 1200u));
+    CHECK_EQ(taken.fullscreenRate, WindowControl::kHighestRefreshRate);
+
+    CHECK(window.SetFullscreenMode(1280, 800, 120));
+    taken = window.TakeRequests();
+    CHECK_EQ(taken.fullscreenRate, 120u);
+
+    // Without a rate, the request is Step 23's to the byte: rate zero.
+    CHECK(window.SetFullscreenMode(1280, 800));
+    taken = window.TakeRequests();
+    CHECK_EQ(taken.fullscreenRate, WindowControl::kDesktopRefreshRate);
+    CHECK_EQ(WindowControl::kDesktopRefreshRate, 0u);
+
+    // A later plain request drops the rate with the size.
+    CHECK(window.SetFullscreenMode(1280, 800, 120));
+    window.SetFullscreen(true);
+    taken = window.TakeRequests();
+    CHECK(taken.fullscreenMode == glm::uvec2(0u));
+    CHECK_EQ(taken.fullscreenRate, WindowControl::kDesktopRefreshRate);
+
+    // A rate the monitor does not offer at the size is refused, and a refusal
+    // leaves an accepted request alone.
+    CHECK(window.SetFullscreenMode(1280, 800, 60));
+    CHECK_MSG(!window.SetFullscreenMode(800, 600, 120), "800x600 is offered at 60 only");
+    CHECK_MSG(!window.SetFullscreenMode(1920, 1200, 144), "nor 144 at the panel's size");
+    taken = window.TakeRequests();
+    CHECK(taken.fullscreenMode == glm::uvec2(1280u, 800u));
+    CHECK_EQ(taken.fullscreenRate, 60u);
+    CHECK(!window.Pending().Any());
+
+    // A zeroed Requests is what it always was.
+    const WindowControl::Requests none;
+    CHECK(!none.Any());
+    CHECK_EQ(none.fullscreenRate, WindowControl::kDesktopRefreshRate);
+    CHECK(!none.centreWindow && !none.fitWindow && !none.setRefreshRate);
+}
+
+static void testTheRatesOfASizeAreListedOnceLowestFirst() {
+    StandInWindow window;
+    PutOnAFastPanel(window);
+    using Rates = std::vector<uint32_t>;
+    CHECK(WindowControl::RefreshRatesAt(window.modes, window.desktop, 1920, 1200) == (Rates{60, 165}));
+    CHECK(WindowControl::RefreshRatesAt(window.modes, window.desktop, 1280, 800) == (Rates{60, 120}));
+    CHECK(WindowControl::RefreshRatesAt(window.modes, window.desktop, 800, 600) == (Rates{60}));
+    CHECK(WindowControl::RefreshRatesAt(window.modes, window.desktop, 1024, 768).empty());
+    CHECK(WindowControl::RefreshRatesAt(window.modes, window.desktop, 0, 0).empty());
+    // The desktop's rate listed too is still one rate; a rate of 0 (unknown,
+    // as a virtual X server reports) is none.
+    const std::vector<DisplayMode> twice = {{1920, 1200, 60}, {1920, 1200, 0}, {1920, 1200, 60}};
+    CHECK(WindowControl::RefreshRatesAt(twice, window.desktop, 1920, 1200) == (Rates{60}));
+    CHECK(WindowControl::RefreshRatesAt({{3000, 1600, 0}}, DisplayMode{3000, 1600, 0}, 3000, 1600).empty());
+}
+
+static void testAFittedWindowIsTheMonitorsShapeInsideItsWorkArea() {
+    using Rect = WindowControl::ScreenRect;
+    // A 1920x1200 panel above a 48-pixel taskbar: the height binds, and the
+    // width follows the panel's 16:10.
+    CHECK(WindowControl::FitWindowedSize(Rect{0, 0, 1920, 1152}, DisplayMode{1920, 1200, 60}, 0.85f) ==
+          glm::uvec2(1566u, 979u));
+    // 1080p over a taskbar.
+    CHECK(WindowControl::FitWindowedSize(Rect{0, 0, 1920, 1032}, DisplayMode{1920, 1080, 60}, 0.85f) ==
+          glm::uvec2(1559u, 877u));
+    // A taskbar down the side: the width binds.
+    CHECK(WindowControl::FitWindowedSize(Rect{62, 0, 1858, 1080}, DisplayMode{1920, 1080, 60}, 0.85f) ==
+          glm::uvec2(1579u, 888u));
+    // The whole of it.
+    CHECK(WindowControl::FitWindowedSize(Rect{0, 0, 1920, 1080}, DisplayMode{1920, 1080, 60}, 1.0f) ==
+          glm::uvec2(1920u, 1080u));
+    // No work area: the desktop's size stands in. No desktop: the area's shape.
+    CHECK(WindowControl::FitWindowedSize(Rect{}, DisplayMode{1920, 1200, 60}, 0.5f) == glm::uvec2(960u, 600u));
+    CHECK(WindowControl::FitWindowedSize(Rect{0, 0, 1000, 800}, DisplayMode{}, 0.5f) == glm::uvec2(500u, 400u));
+    // Nothing to measure, or a fraction that is not one: zeroes.
+    CHECK(WindowControl::FitWindowedSize(Rect{}, DisplayMode{}, 0.85f) == glm::uvec2(0u));
+    CHECK(WindowControl::FitWindowedSize(Rect{0, 0, 1920, 1080}, DisplayMode{1920, 1080, 60}, 0.0f) ==
+          glm::uvec2(0u));
+    CHECK(WindowControl::FitWindowedSize(Rect{0, 0, 1920, 1080}, DisplayMode{1920, 1080, 60}, 1.5f) ==
+          glm::uvec2(0u));
+    // Never a window too small to use.
+    CHECK(WindowControl::FitWindowedSize(Rect{0, 0, 40, 30}, DisplayMode{40, 30, 60}, 0.5f) ==
+          glm::uvec2(GameManifest::kMinimumExtent, GameManifest::kMinimumExtent));
+}
+
+static void testACentredWindowKeepsItsTitleBarOnScreen() {
+    using Rect = WindowControl::ScreenRect;
+    const WindowControl::FrameInsets frame{8, 31, 8, 8};
+    // 1566x979 on the 1920x1152 work area: the whole window, frame included,
+    // centred - the client area 31 pixels below the window's top.
+    CHECK(WindowControl::CentredWindowPosition(Rect{0, 0, 1920, 1152}, glm::uvec2(1566u, 979u), frame) ==
+          glm::ivec2(177, 98));
+    // On a monitor left of the primary, and on one below a top taskbar.
+    CHECK(WindowControl::CentredWindowPosition(Rect{-1920, 0, 1920, 1032}, glm::uvec2(1280u, 720u), frame) ==
+          glm::ivec2(-1600, 167));
+    CHECK(WindowControl::CentredWindowPosition(Rect{0, 40, 1920, 1040}, glm::uvec2(1280u, 720u), {}) ==
+          glm::ivec2(320, 200));
+    // Taller and wider than the work area: the title bar and the left edge
+    // stay on it, the rest hangs off the bottom and the right.
+    CHECK(WindowControl::CentredWindowPosition(Rect{0, 0, 1920, 1152}, glm::uvec2(1920u, 1200u), frame) ==
+          glm::ivec2(8, 31));
+}
+
+static void testAFitAndASizeAreOneRequestTheLaterWins() {
+    StandInWindow window;
+    CHECK(window.FitWindowToMonitor(0.85f));
+    WindowControl::Requests taken = window.TakeRequests();
+    CHECK(taken.Any());
+    CHECK(taken.fitWindow);
+    CHECK(taken.fitFraction == 0.85f);
+    CHECK(!taken.setWindowedSize);
+    CHECK_MSG(!taken.setFullscreen, "a fitted window is a size, not a fullscreen change");
+
+    CHECK(window.FitWindowToMonitor(0.85f));
+    CHECK(window.SetWindowedSize(1280, 720, true));
+    taken = window.TakeRequests();
+    CHECK(!taken.fitWindow);
+    CHECK(taken.setWindowedSize && taken.windowedSize == glm::uvec2(1280u, 720u));
+    CHECK(taken.centreWindow);
+
+    CHECK(window.SetWindowedSize(1280, 720));
+    CHECK(window.FitWindowToMonitor(0.5f));
+    taken = window.TakeRequests();
+    CHECK(taken.fitWindow && !taken.setWindowedSize);
+    CHECK(taken.fitFraction == 0.5f);
+
+    // SetWindowedSize without `centre` is the request it always was.
+    CHECK(window.SetWindowedSize(1024, 768));
+    taken = window.TakeRequests();
+    CHECK(taken.setWindowedSize && !taken.centreWindow && !taken.fitWindow);
+
+    // A fraction that is not one is refused and latches nothing.
+    CHECK(!window.FitWindowToMonitor(0.0f));
+    CHECK(!window.FitWindowToMonitor(-0.5f));
+    CHECK(!window.FitWindowToMonitor(1.01f));
+    CHECK(!window.Pending().Any());
+
+    // Beside a way out of fullscreen, both are kept: ApplyPending sizes first.
+    CHECK(window.FitWindowToMonitor(0.85f));
+    window.SetFullscreen(false);
+    taken = window.TakeRequests();
+    CHECK(taken.fitWindow && taken.setFullscreen && !taken.fullscreen);
+}
+
+static void testAPreferredRateIsItsOwnRequest() {
+    StandInWindow window;
+    window.SetPreferredRefreshRate(WindowControl::kHighestRefreshRate);
+    CHECK(window.Pending().Any());
+    WindowControl::Requests taken = window.TakeRequests();
+    CHECK(taken.setRefreshRate);
+    CHECK_EQ(taken.refreshRate, WindowControl::kHighestRefreshRate);
+    CHECK_MSG(!taken.setFullscreen && !taken.setWindowedSize && !taken.fitWindow,
+              "a preferred rate changes nothing about the window's size or mode");
+
+    window.SetPreferredRefreshRate(60);
+    window.SetPreferredRefreshRate(WindowControl::kDesktopRefreshRate);
+    taken = window.TakeRequests();
+    CHECK_MSG(taken.refreshRate == WindowControl::kDesktopRefreshRate, "the last one, withdrawn");
+    CHECK(!window.Pending().Any());
+}
+
+static void testAManifestFitsItsWindowOnlyWhenItAsks() {
+    // Zero, the default, and nothing the packager writes or reads mentions it.
+    const GameManifest plain;
+    CHECK(plain.fitWindowToMonitor == 0.0f);
+    GameManifest fitted;
+    fitted.isGame = true;
+    fitted.fitWindowToMonitor = 0.85f;
+    const GameManifest back = GameRuntime::Parse(GameRuntime::Serialize(fitted));
+    CHECK_MSG(back.fitWindowToMonitor == 0.0f, "a game's main sets it; the manifest's text never carries it");
+    GameManifest unfitted = fitted;
+    unfitted.fitWindowToMonitor = 0.0f;
+    CHECK(GameRuntime::Serialize(fitted) == GameRuntime::Serialize(unfitted));
+}
+
 static void testHidingTheCursorIsTheSameRequestInputArbitrates() {
     // Through Input and nowhere else, so the editor's hold on the pointer and
     // a window without focus still veto it. And a locked pointer is left
@@ -714,6 +950,15 @@ static void runTests() {
     testTheLastFullscreenRequestWinsWithOrWithoutAMode();
     testAModeTheMonitorDoesNotOfferIsRefusedAndLatchesNothing();
     testAFullscreenModeRunsAtTheDesktopsRateWhenItCan();
+    testTheHighestRateIsChosenFromTheListAndTheDesktopAlike();
+    testANamedRateIsThatRateOrNothing();
+    testAFullscreenRequestCarriesItsRate();
+    testTheRatesOfASizeAreListedOnceLowestFirst();
+    testAFittedWindowIsTheMonitorsShapeInsideItsWorkArea();
+    testACentredWindowKeepsItsTitleBarOnScreen();
+    testAFitAndASizeAreOneRequestTheLaterWins();
+    testAPreferredRateIsItsOwnRequest();
+    testAManifestFitsItsWindowOnlyWhenItAsks();
     testHidingTheCursorIsTheSameRequestInputArbitrates();
     testTheModesAMenuListsAreTheTrueColourOnesOnceEach();
     testAWindowGoesFullscreenOnTheMonitorHoldingMostOfIt();

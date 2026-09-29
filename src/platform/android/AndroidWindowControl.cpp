@@ -9,6 +9,7 @@
 
 #include "core/Log.hpp"
 #include "platform/Window.hpp"
+#include "platform/android/AndroidApp.hpp"
 
 namespace Supersonic {
 
@@ -36,6 +37,8 @@ bool NativeWindowControl::ApplyPending() {
     if (requests.setFullscreen && !requests.fullscreen) {
         SUPERSONIC_LOG_INFO("WindowControl") << "A windowed mode was asked for; an Android app is its screen.";
     }
+    // The one request a phone's screen can take: the display's refresh rate.
+    if (requests.setRefreshRate) Android::RequestRefreshRate(requests.refreshRate);
     return false;
 }
 

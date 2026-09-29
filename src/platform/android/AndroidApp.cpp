@@ -8,6 +8,7 @@
 #include <android/native_window.h>
 #include <android/window.h>
 #include <android_native_app_glue.h>
+#include <dlfcn.h>
 #include <jni.h>
 #include <unistd.h>
 
@@ -27,6 +28,7 @@
 #include "imgui.h"
 
 #include "core/Log.hpp"
+#include "core/WindowControl.hpp"
 #include "platform/SafeArea.hpp"
 
 namespace Supersonic::Android {
@@ -98,6 +100,13 @@ struct State {
 
     std::array<PadSlot, Gamepads::kMaxGamepads> pads{};
     int padCount{0};
+
+    // RequestRefreshRate: whether a game asked, and the rate every window it
+    // draws on is told (ANativeWindow_setFrameRate is per surface, and the
+    // surface is a new one after each return from the background). 0 is no
+    // preference.
+    bool frameRateAsked{false};
+    float frameRate{0.0f};
 };
 
 State g;
@@ -524,6 +533,81 @@ const char* commandName(int32_t cmd) {
     }
 }
 
+// ---- The refresh rate ---------------------------------------------------------
+
+// ANativeWindow_setFrameRate is API 30's; the library is built for API 26, so
+// it is looked up rather than linked, and a null answer is an older system.
+using SetFrameRateFunction = int32_t (*)(ANativeWindow*, float, int8_t);
+
+SetFrameRateFunction setFrameRateFunction() {
+    static const SetFrameRateFunction function = []() -> SetFrameRateFunction {
+        void* library = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
+        if (!library) return nullptr;
+        return reinterpret_cast<SetFrameRateFunction>(dlsym(library, "ANativeWindow_setFrameRate"));
+    }();
+    return function;
+}
+
+// The rate RequestRefreshRate settled on, told to the window there is now.
+void applyFrameRate() {
+    if (!g.window || !g.frameRateAsked) return;
+    const SetFrameRateFunction function = setFrameRateFunction();
+    if (!function) {
+        SUPERSONIC_LOG_INFO("Android") << "Frame rate: ANativeWindow_setFrameRate needs API 30; only the display "
+                                          "mode was asked for.";
+        return;
+    }
+    // ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT: a game's own frames,
+    // not a video's fixed rate the display would have to match exactly.
+    constexpr int8_t kCompatibilityDefault = 0;
+    const int32_t result = function(g.window, g.frameRate, kCompatibilityDefault);
+    SUPERSONIC_LOG_INFO("Android") << "Frame rate: " << g.frameRate << " Hz set on the window "
+                                   << (g.frameRate > 0.0f ? "" : "(no preference) ")
+                                   << "(ANativeWindow_setFrameRate returned " << result << ").";
+}
+
+// SupersonicActivity.requestRefreshRate(hz) through JNI, from the game's
+// thread: the rate of the display mode it made the window's preferred one,
+// 0 when it chose none. The activity by the object the glue holds, not by
+// FindClass, which on a native thread sees only the system's classes.
+float askActivityForRefreshRate(float hz) {
+    if (!g.app || !g.app->activity || !g.app->activity->vm || !g.app->activity->clazz) return 0.0f;
+    JavaVM* vm = g.app->activity->vm;
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    const jint state = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+    if (state == JNI_EDETACHED) {
+        if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return 0.0f;
+        attached = true;
+    } else if (state != JNI_OK) {
+        return 0.0f;
+    }
+
+    float chosen = 0.0f;
+    jobject activity = g.app->activity->clazz;
+    jclass type = env->GetObjectClass(activity);
+    jmethodID method = type ? env->GetMethodID(type, "requestRefreshRate", "(F)F") : nullptr;
+    if (!method) {
+        // A plain NativeActivity: no such method, and a pending exception
+        // that must not reach the next JNI call.
+        env->ExceptionClear();
+        SUPERSONIC_LOG_INFO("Android") << "Refresh rate: the activity is not SupersonicActivity; the display mode "
+                                          "is left to the system.";
+    } else {
+        chosen = env->CallFloatMethod(activity, method, static_cast<jfloat>(hz));
+        if (env->ExceptionCheck()) {
+            env->ExceptionDescribe();
+            env->ExceptionClear();
+            chosen = 0.0f;
+            SUPERSONIC_LOG_WARN("Android") << "Refresh rate: the activity threw; the display mode is left to the "
+                                              "system.";
+        }
+    }
+    if (type) env->DeleteLocalRef(type);
+    if (attached) vm->DetachCurrentThread();
+    return chosen;
+}
+
 void onAppCmd(android_app* app, int32_t cmd) {
     if (const char* name = commandName(cmd)) {
         SUPERSONIC_LOG_INFO("Android") << "Lifecycle: " << name << ".";
@@ -534,6 +618,8 @@ void onAppCmd(android_app* app, int32_t cmd) {
         g.width = 0;
         g.height = 0;
         refreshWindowSize();
+        // A new surface knows nothing of the rate the last one was told.
+        applyFrameRate();
         break;
     case APP_CMD_TERM_WINDOW:
         // Before the glue lets the window go: everything made from it goes
@@ -723,6 +809,28 @@ void FillRawInput(RawInputState& state) {
         for (int button = 0; button < Pad::ButtonCount; ++button) state.padButtons[button] = first.buttons[button];
         for (int a = 0; a < Pad::AxisCount; ++a) state.padAxes[a] = first.axes[a];
     }
+}
+
+void RequestRefreshRate(uint32_t refreshRate) {
+    // The activity's terms: below 0 no preference, 0 the highest, else Hz.
+    float ask = -1.0f;
+    if (refreshRate == WindowControl::kHighestRefreshRate) {
+        ask = 0.0f;
+    } else if (refreshRate != WindowControl::kDesktopRefreshRate) {
+        ask = static_cast<float>(refreshRate);
+    }
+    const float chosen = askActivityForRefreshRate(ask);
+
+    // The surface is told the mode's own rate, which is what the display will
+    // run at; the number asked for when the activity could not say.
+    g.frameRateAsked = true;
+    g.frameRate = ask < 0.0f ? 0.0f : chosen > 0.0f ? chosen : ask;
+    SUPERSONIC_LOG_INFO("Android") << "Refresh rate: asked for "
+                                   << (ask < 0.0f ? std::string("no preference")
+                                       : ask == 0.0f ? std::string("the highest")
+                                                     : std::to_string(refreshRate) + " Hz")
+                                   << "; the display mode chosen runs at " << chosen << " Hz.";
+    applyFrameRate();
 }
 
 int GamepadCount() { return g.padCount; }

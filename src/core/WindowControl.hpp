@@ -84,6 +84,20 @@ public:
     // desktop's - rather than the switched one, which is WindowSize().
     virtual DisplayMode DesktopMode() const = 0;
 
+    // ---- Refresh rates ----------------------------------------------------
+
+    // How a rate is named where it is not a number of Hz: SetFullscreenMode's
+    // and ChooseFullscreenMode's `refreshRate`, and SetPreferredRefreshRate's.
+    //
+    // kDesktopRefreshRate, zero, is what a request that names no rate has
+    // always meant, so a Requests left zeroed means it too: for a fullscreen
+    // mode, the desktop's rate where the monitor offers the size at it, else
+    // the highest; for a preferred rate, no preference - the platform's own.
+    // kHighestRefreshRate is the highest the monitor offers. Any other value
+    // is that rate exactly, as DisplayModes lists it.
+    static constexpr uint32_t kDesktopRefreshRate = 0;
+    static constexpr uint32_t kHighestRefreshRate = 0xFFFFFFFFu;
+
     // ---- What a game asks for ---------------------------------------------
 
     // Cover the monitor the window is mostly on, at that monitor's current
@@ -116,7 +130,15 @@ public:
     //
     // Applied at the top of the next frame. The last request before then wins.
     // Ignored where the window is the screen (Android, iOS).
-    bool SetFullscreenMode(uint32_t width, uint32_t height);
+    //
+    // `refreshRate` (opt-in; the default is the rule above): kHighestRefreshRate
+    // runs the size at the highest rate the monitor offers it at, and a number
+    // at exactly that rate - refused, as an unlisted size is, when the monitor
+    // does not offer the size at it (the desktop's own mode always counts as
+    // offered). A game offering "the best refresh rate" asks for the highest;
+    // one remembering the player's pick asks for that number and falls back
+    // to the highest when a monitor lacks it.
+    bool SetFullscreenMode(uint32_t width, uint32_t height, uint32_t refreshRate = kDesktopRefreshRate);
 
     // The windowed size, applied at the top of the next frame. While
     // fullscreen it is the size the window comes back at.
@@ -125,7 +147,43 @@ public:
     // `--window` is held to (GameManifest::kMinimumExtent..kMaximumExtent): a
     // settings file with a typo in it should leave the window alone rather
     // than open one nobody can see.
-    bool SetWindowedSize(uint32_t width, uint32_t height);
+    //
+    // `centre` (opt-in; false keeps the top-left where it is, as it always
+    // did): the window is also centred on its monitor's work area - the
+    // screen less the taskbar and docks - title bar included, and never put
+    // above or left of the work area, so a window taller than the work area
+    // keeps its title bar where it can be grabbed. While fullscreen, the
+    // centred rectangle is the one the window comes back at.
+    //
+    // This and FitWindowToMonitor are one request: the last of them wins.
+    bool SetWindowedSize(uint32_t width, uint32_t height, bool centre = false);
+
+    // The window sized to its monitor and centred on it, at the top of the
+    // next frame: the largest size of the monitor's own shape (its desktop
+    // mode's) within `fraction` of its work area each way, in whole pixels
+    // (FitWindowedSize), placed as SetWindowedSize(..., true) places a size.
+    // For a game's "automatic" window, which should be as large as it can be
+    // while the taskbar and the title bar stay in view, on any monitor,
+    // without the game knowing what the monitor is. Measured when applied, so
+    // it follows the monitor the window is on then. While fullscreen, it is
+    // the rectangle the window comes back at.
+    //
+    // Refused - false, nothing latched - for a fraction outside (0, 1].
+    // Ignored where the window is the screen (Android, iOS).
+    bool FitWindowToMonitor(float fraction);
+
+    // The refresh rate the game would like the display to run at while it is
+    // shown, where the platform chooses that for the app rather than through
+    // a fullscreen mode: kHighestRefreshRate, a number of Hz, or
+    // kDesktopRefreshRate to withdraw the preference. Android asks the
+    // activity for the display mode of that rate at the current resolution
+    // (WindowManager.LayoutParams.preferredDisplayModeId, API 23) and, from API
+    // 30, sets the surface's frame rate (ANativeWindow_setFrameRate), again for
+    // every new surface; the display may still decide otherwise (a battery
+    // saver, a thermal limit). Logged there. The desktop takes it and does
+    // nothing: a window runs at the compositor's rate, and fullscreen at its
+    // mode's (SetFullscreenMode). Applied at the top of the next frame.
+    void SetPreferredRefreshRate(uint32_t refreshRate);
 
     // Show or hide the pointer over the window.
     //
@@ -147,11 +205,24 @@ public:
         // With fullscreen: the size SetFullscreenMode asked for. Zeroes for
         // SetFullscreen(true), the monitor's current mode.
         glm::uvec2 fullscreenMode{0u, 0u};
+        // With a fullscreenMode: the rate it asked for, kDesktopRefreshRate
+        // when it named none.
+        uint32_t fullscreenRate{kDesktopRefreshRate};
 
         bool setWindowedSize{false};
         glm::uvec2 windowedSize{0u, 0u};
+        // With setWindowedSize: SetWindowedSize's `centre`.
+        bool centreWindow{false};
 
-        bool Any() const { return setFullscreen || setWindowedSize; }
+        // FitWindowToMonitor, and its fraction of the work area.
+        bool fitWindow{false};
+        float fitFraction{0.0f};
+
+        // SetPreferredRefreshRate.
+        bool setRefreshRate{false};
+        uint32_t refreshRate{kDesktopRefreshRate};
+
+        bool Any() const { return setFullscreen || setWindowedSize || fitWindow || setRefreshRate; }
     };
 
     const Requests& Pending() const { return m_pending; }
@@ -204,9 +275,52 @@ public:
     // neither listed nor the desktop's. The same answer refuses a request when
     // it is made and chooses the mode when it is applied, so the two cannot
     // disagree.
+    //
+    // `refreshRate` as SetFullscreenMode takes it. kHighestRefreshRate: the
+    // highest rate among the size's listed modes and, for the desktop's size,
+    // the desktop's own mode - which a platform can leave out of its list, and
+    // which is the answer when nothing listed beats it. A number: the mode of
+    // exactly that rate, the desktop's own for the desktop's size and rate,
+    // else zeroes. The default is the rule above, unchanged.
     static DisplayMode ChooseFullscreenMode(const std::vector<DisplayMode>& modes,
                                             const DisplayMode& desktop, uint32_t width,
-                                            uint32_t height);
+                                            uint32_t height,
+                                            uint32_t refreshRate = kDesktopRefreshRate);
+
+    // Every rate a size can be driven at, lowest first, each once: the
+    // listed modes' of that size, and the desktop's rate at the desktop's
+    // size. A rate the platform reports as 0 - it does not know, as a virtual
+    // X server's modes say - is left out: it cannot be asked for by number.
+    // What a menu offers as "refresh rate" for the size it would go
+    // fullscreen at.
+    static std::vector<uint32_t> RefreshRatesAt(const std::vector<DisplayMode>& modes,
+                                                const DisplayMode& desktop, uint32_t width,
+                                                uint32_t height);
+
+    // FitWindowToMonitor's size: the largest of the desktop mode's shape
+    // within `fraction` of the work area's width and of its height, each
+    // extent floored to a whole pixel. The work area is the desktop's size
+    // when the platform gives none; the shape is the work area's own when
+    // there is no desktop mode. Never below GameManifest::kMinimumExtent.
+    // Zeroes when there is neither, or the fraction is not in (0, 1].
+    static glm::uvec2 FitWindowedSize(const ScreenRect& workArea, const DisplayMode& desktop,
+                                      float fraction);
+
+    // The width of a window's frame on each side of its client area - the
+    // title bar is `top` - in screen coordinates.
+    struct FrameInsets {
+        int left{0};
+        int top{0};
+        int right{0};
+        int bottom{0};
+    };
+
+    // Where a client area of `clientSize` goes for its window, frame included,
+    // to be centred on the work area: the client area's top-left. Never above
+    // or left of the work area, so a window larger than it keeps its title bar
+    // and its left edge on screen and hangs off the bottom and the right.
+    static glm::ivec2 CentredWindowPosition(const ScreenRect& workArea, glm::uvec2 clientSize,
+                                            const FrameInsets& frame);
 
 protected:
     WindowControl() = default;

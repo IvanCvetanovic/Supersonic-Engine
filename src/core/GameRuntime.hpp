@@ -52,6 +52,17 @@ struct GameManifest {
     // by having no such key.
     bool fullscreen{false};
 
+    // Opt-in, for a game whose window should match whatever monitor it opens
+    // on: a fraction in (0, 1] opens a windowed start fitted to the monitor
+    // (WindowControl::FitWindowToMonitor, that fraction of its work area, the
+    // monitor's shape, centred) instead of at width x height at the place the
+    // system picks - fitted before the first swapchain, so the window does not
+    // appear at one size and jump to another. `--window` wins over it, as it
+    // wins over width and height, and a fullscreen start ignores it. Zero, the
+    // default, is the window as it always opened. Set by a game's main; not
+    // read from or written to game.manifest's text.
+    float fitWindowToMonitor{0.0f};
+
     // What the engine opens at when nothing asks for anything, which is the
     // literal that used to be the only answer.
     static constexpr uint32_t kDefaultWidth = 1280;

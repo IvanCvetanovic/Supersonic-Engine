@@ -13,6 +13,7 @@
 // InputPolling, NativeWindowControl and Gamepads implementations beside it are
 // thin readers of that state, so the classes above them are the desktop's.
 
+#include <cstdint>
 #include <functional>
 #include <string>
 
@@ -76,6 +77,15 @@ void SetSurfaceLostCallback(std::function<void()> callback);
 // Called with true when the activity pauses and false when it resumes, so a
 // sound stream stops with the game instead of playing on in the background.
 void SetAudioSuspendHandler(std::function<void(bool suspended)> handler);
+
+// WindowControl::SetPreferredRefreshRate on Android: kHighestRefreshRate, a
+// number of Hz, or kDesktopRefreshRate for no preference. The activity
+// (SupersonicActivity.requestRefreshRate, through JNI) picks the display mode
+// of that rate at the current resolution and makes it the window's preferred
+// mode; from API 30 the surface is told the mode's rate as well
+// (ANativeWindow_setFrameRate, looked up at run time so the minSdk 26 library
+// still links), and every later surface again. Logged. On the game's thread.
+void RequestRefreshRate(uint32_t refreshRate);
 
 // This frame's devices: keys, the touch contacts, the mouse they stand in for
 // and the first gamepad. Everything that went down since the last call is in

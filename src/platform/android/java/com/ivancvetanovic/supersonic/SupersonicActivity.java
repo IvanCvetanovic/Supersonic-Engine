@@ -6,6 +6,8 @@ import android.content.pm.PackageManager;
 import android.graphics.Insets;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
+import android.view.Display;
 import android.view.DisplayCutout;
 import android.view.View;
 import android.view.Window;
@@ -26,6 +28,10 @@ import android.view.WindowManager;
  * insets that still cover it - a bar that is showing, a cutout the system laid
  * it into anyway - are handed to the engine in window pixels
  * (platform/SafeArea.hpp).</li>
+ * <li>THE REFRESH RATE a game prefers (WindowControl::SetPreferredRefreshRate):
+ * the display mode of that rate at the current resolution, made the window's
+ * preferred one. Asked by the engine through JNI, not by a native callback:
+ * requestRefreshRate below.</li>
  * </ul>
  *
  * A game names this class in its manifest instead of android.app.NativeActivity,
@@ -87,6 +93,67 @@ public class SupersonicActivity extends NativeActivity {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) hideSystemBars();
+    }
+
+    /**
+     * The display mode for a refresh rate, asked by the engine from its own thread
+     * (src/platform/android/AndroidApp.cpp, RequestRefreshRate). Among the modes at
+     * the display's current resolution - a rate is not worth a resolution change -
+     * {@code hz} 0 picks the highest rate, a positive {@code hz} the nearest to it,
+     * and a negative one withdraws the preference (mode 0, the system's choice). The
+     * window's preferredDisplayModeId is set on the UI thread, where Android requires
+     * window attributes to change; the display may still decide otherwise (a battery
+     * saver, a thermal limit). Returns the chosen mode's rate, 0 when none was chosen.
+     */
+    public float requestRefreshRate(float hz) {
+        if (Build.VERSION.SDK_INT < 23) return 0f;
+        Display display = currentDisplay();
+        if (display == null) return 0f;
+        Display.Mode current = display.getMode();
+
+        Display.Mode chosen = null;
+        StringBuilder offered = new StringBuilder();
+        if (hz >= 0f) {
+            for (Display.Mode mode : display.getSupportedModes()) {
+                if (mode.getPhysicalWidth() != current.getPhysicalWidth()
+                        || mode.getPhysicalHeight() != current.getPhysicalHeight()) {
+                    continue;
+                }
+                if (offered.length() > 0) offered.append(", ");
+                offered.append(mode.getRefreshRate()).append(" Hz (mode ").append(mode.getModeId()).append(')');
+                if (chosen == null) {
+                    chosen = mode;
+                } else if (hz == 0f ? mode.getRefreshRate() > chosen.getRefreshRate()
+                        : Math.abs(mode.getRefreshRate() - hz) < Math.abs(chosen.getRefreshRate() - hz)) {
+                    chosen = mode;
+                }
+            }
+        }
+
+        final int modeId = chosen != null ? chosen.getModeId() : 0;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                Window window = getWindow();
+                WindowManager.LayoutParams attributes = window.getAttributes();
+                attributes.preferredDisplayModeId = modeId;
+                window.setAttributes(attributes);
+            }
+        });
+
+        String asked = hz < 0f ? "no preference" : hz == 0f ? "the highest" : hz + " Hz";
+        Log.i("Supersonic", "[Android] Display: refresh rate asked for " + asked + " at "
+                + current.getPhysicalWidth() + "x" + current.getPhysicalHeight() + " (now "
+                + current.getRefreshRate() + " Hz, mode " + current.getModeId() + "); offered "
+                + (offered.length() > 0 ? offered : "nothing asked") + "; preferred mode " + modeId
+                + (chosen != null ? " at " + chosen.getRefreshRate() + " Hz." : ", the system's choice."));
+        return chosen != null ? chosen.getRefreshRate() : 0f;
+    }
+
+    @SuppressWarnings("deprecation")
+    private Display currentDisplay() {
+        if (Build.VERSION.SDK_INT >= 30) return getDisplay();
+        return getWindowManager().getDefaultDisplay();
     }
 
     private void loadGameLibrary() {

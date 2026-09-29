@@ -49,11 +49,21 @@ private:
 
     void enterFullscreen();
     void leaveFullscreen();
-    void applyWindowedSize(glm::uvec2 size);
+    void applyWindowedSize(glm::uvec2 size, bool centre);
+    // FitWindowToMonitor's half: the size measured from the monitor the window
+    // is on, then placed as a centred SetWindowedSize.
+    void applyFitWindow(float fraction);
+    // A windowed size centred on `monitor`'s work area: the window moved and
+    // sized now, or, while fullscreen, the rectangle it comes back at.
+    void placeCentred(glm::uvec2 size, GLFWmonitor* monitor);
+    // The work area a window on `monitor` has - the desktop's while
+    // SetFullscreenMode has switched it - or the whole monitor when the
+    // platform gives none.
+    ScreenRect workAreaOf(GLFWmonitor* monitor) const;
 
-    // SetFullscreenMode's half: enters fullscreen at the mode for `size`, or
-    // changes mode while already there.
-    void enterFullscreenMode(glm::uvec2 size);
+    // SetFullscreenMode's half: enters fullscreen at the mode for `size` and
+    // `refreshRate`, or changes mode while already there.
+    void enterFullscreenMode(glm::uvec2 size, uint32_t refreshRate);
     // The rectangle SetFullscreen(false) returns to, taken on the way in.
     void rememberWindowedRect();
 
@@ -69,6 +79,10 @@ private:
     int m_windowedHeight{0};
     bool m_windowedMaximized{false};
     bool m_hasWindowedRect{false};
+    // The window's frame, measured while it had one: a fullscreen window has
+    // none, and a rectangle centred for it to come back at must still leave
+    // room for its title bar.
+    FrameInsets m_frame;
 
     // The monitor SetFullscreenMode has switched away from its desktop mode,
     // and that mode. glfwGetVideoMode answers with the switched mode until
@@ -77,6 +91,10 @@ private:
     // Null while nothing is switched.
     GLFWmonitor* m_switchedMonitor{nullptr};
     DisplayMode m_desktopMode;
+    // And its work area then, which glfwGetMonitorWorkarea no longer gives
+    // either: an automatic window asked for on the way out of a switched mode
+    // is fitted to the desktop it returns to.
+    ScreenRect m_desktopWorkArea;
 };
 
 } // namespace Supersonic

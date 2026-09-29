@@ -237,6 +237,12 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
         m_windowControl->SetFullscreen(true);
         m_windowControl->ApplyPending();
         m_window->ResetResizedFlag();
+    } else if (m_manifest.fitWindowToMonitor > 0.0f && m_options.windowWidth == 0 &&
+               m_windowControl->FitWindowToMonitor(m_manifest.fitWindowToMonitor)) {
+        // Opt-in (GameManifest::fitWindowToMonitor), by the same call a game
+        // makes at run time, for the same reason fullscreen is entered here.
+        m_windowControl->ApplyPending();
+        m_window->ResetResizedFlag();
     }
 
     auto requiredExtensions = m_window->GetRequiredExtensions();
