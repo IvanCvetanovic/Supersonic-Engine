@@ -51,6 +51,12 @@ private:
     void leaveFullscreen();
     void applyWindowedSize(glm::uvec2 size);
 
+    // SetFullscreenMode's half: enters fullscreen at the mode for `size`, or
+    // changes mode while already there.
+    void enterFullscreenMode(glm::uvec2 size);
+    // The rectangle SetFullscreen(false) returns to, taken on the way in.
+    void rememberWindowedRect();
+
     Window& m_window;
 
     // Where the window was before it covered a monitor, which is where
@@ -63,6 +69,14 @@ private:
     int m_windowedHeight{0};
     bool m_windowedMaximized{false};
     bool m_hasWindowedRect{false};
+
+    // The monitor SetFullscreenMode has switched away from its desktop mode,
+    // and that mode. glfwGetVideoMode answers with the switched mode until
+    // GLFW puts the desktop's back on the way out, so the desktop's is kept
+    // here for DesktopMode() and for the next choice of mode to measure from.
+    // Null while nothing is switched.
+    GLFWmonitor* m_switchedMonitor{nullptr};
+    DisplayMode m_desktopMode;
 };
 
 } // namespace Supersonic

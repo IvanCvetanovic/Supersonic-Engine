@@ -52,6 +52,13 @@ std::vector<DisplayMode> NativeWindowControl::DisplayModes() const {
 
 DisplayMode NativeWindowControl::DesktopMode() const {
     GLFWmonitor* monitor = currentMonitor();
+    // Only while the window still covers the monitor it switched: when a
+    // monitor goes away GLFW drops the window to windowed without coming
+    // through leaveFullscreen, and one plugged in later may reuse the pointer.
+    GLFWwindow* native = m_window.GetNativeWindow();
+    if (monitor && monitor == m_switchedMonitor && native && glfwGetWindowMonitor(native) == monitor) {
+        return m_desktopMode;
+    }
     const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
     if (!mode) return {};
     return DisplayMode{static_cast<uint32_t>(mode->width), static_cast<uint32_t>(mode->height),
@@ -106,7 +113,10 @@ bool NativeWindowControl::ApplyPending() {
 
     if (requests.setFullscreen) {
         const bool fullscreen = IsFullscreen();
-        if (requests.fullscreen && !fullscreen) {
+        if (requests.fullscreen && requests.fullscreenMode.x > 0 && requests.fullscreenMode.y > 0) {
+            // Whether windowed or already fullscreen: a mode is asked of both.
+            enterFullscreenMode(requests.fullscreenMode);
+        } else if (requests.fullscreen && !fullscreen) {
             enterFullscreen();
         } else if (!requests.fullscreen && fullscreen) {
             leaveFullscreen();
@@ -149,11 +159,7 @@ void NativeWindowControl::enterFullscreen() {
         return;
     }
 
-    m_windowedMaximized = glfwGetWindowAttrib(native, GLFW_MAXIMIZED) == GLFW_TRUE;
-    if (m_windowedMaximized) glfwRestoreWindow(native);
-    glfwGetWindowPos(native, &m_windowedX, &m_windowedY);
-    glfwGetWindowSize(native, &m_windowedWidth, &m_windowedHeight);
-    m_hasWindowedRect = true;
+    rememberWindowedRect();
 
     // At the mode the monitor is ALREADY in, which GLFW recognises and does
     // not switch: no black screen while the display resynchronises, no desktop
@@ -171,8 +177,100 @@ void NativeWindowControl::enterFullscreen() {
                                   << mode->refreshRate << " Hz." << std::endl;
 }
 
+void NativeWindowControl::rememberWindowedRect() {
+    GLFWwindow* native = m_window.GetNativeWindow();
+    m_windowedMaximized = glfwGetWindowAttrib(native, GLFW_MAXIMIZED) == GLFW_TRUE;
+    if (m_windowedMaximized) glfwRestoreWindow(native);
+    glfwGetWindowPos(native, &m_windowedX, &m_windowedY);
+    glfwGetWindowSize(native, &m_windowedWidth, &m_windowedHeight);
+    m_hasWindowedRect = true;
+}
+
+void NativeWindowControl::enterFullscreenMode(glm::uvec2 size) {
+    GLFWwindow* native = m_window.GetNativeWindow();
+
+    GLFWmonitor* monitor = currentMonitor();
+    const GLFWvidmode* current = monitor ? glfwGetVideoMode(monitor) : nullptr;
+    if (!current) {
+        SUPERSONIC_LOG_ERROR("Window") << "A fullscreen mode was asked for, but no monitor "
+                                          "reports a video mode; the window is left as it is."
+                                       << std::endl;
+        return;
+    }
+
+    // Chosen again here rather than trusted from the request: the window may
+    // have moved to another monitor since, or the monitor lost the mode.
+    const DisplayMode desktop = DesktopMode();
+    const DisplayMode mode = ChooseFullscreenMode(DisplayModes(), desktop, size.x, size.y);
+    if (mode.width == 0) {
+        SUPERSONIC_LOG_WARN("Window") << "A fullscreen mode of " << size.x << "x" << size.y
+                                      << " was asked for, which " << monitorName(monitor)
+                                      << " does not offer; the window is left as it is."
+                                      << std::endl;
+        return;
+    }
+
+    const bool fullscreen = IsFullscreen();
+    const bool atMode = static_cast<uint32_t>(current->width) == mode.width &&
+                        static_cast<uint32_t>(current->height) == mode.height &&
+                        static_cast<uint32_t>(current->refreshRate) == mode.refreshRate;
+    if (fullscreen && atMode) {
+        SUPERSONIC_LOG_INFO("Window") << "Fullscreen on " << monitorName(monitor) << " already at "
+                                      << mode.width << "x" << mode.height << " @ "
+                                      << mode.refreshRate << " Hz." << std::endl;
+        return;
+    }
+
+    // Only on the way in: while fullscreen the window's rectangle is the
+    // monitor's, and the one to return to was taken when it entered.
+    if (!fullscreen) rememberWindowedRect();
+
+    // Already on this monitor, GLFW sets the mode and fits the window to the
+    // monitor's new size in place; the framebuffer callback carries the new
+    // size to the swapchain as it does for any resize. GLFW restores the
+    // desktop's mode itself when the window leaves the monitor or is iconified.
+    const int refreshRate = mode.refreshRate > 0 ? static_cast<int>(mode.refreshRate) : GLFW_DONT_CARE;
+    glfwSetWindowMonitor(native, monitor, 0, 0, static_cast<int>(mode.width),
+                         static_cast<int>(mode.height), refreshRate);
+
+    // What the monitor runs at now, not what was asked: a driver can refuse a
+    // mode it listed (GLFW reports that through the error callback and leaves
+    // the mode as it was), and a compositor can decline to switch at all. The
+    // log then says so rather than claiming a switch that did not happen.
+    DisplayMode reached = mode;
+    if (const GLFWvidmode* now = glfwGetVideoMode(monitor)) {
+        reached = DisplayMode{static_cast<uint32_t>(now->width), static_cast<uint32_t>(now->height),
+                              static_cast<uint32_t>(now->refreshRate > 0 ? now->refreshRate : 0)};
+    }
+    const bool switched = reached != desktop;
+    m_switchedMonitor = switched ? monitor : nullptr;
+    m_desktopMode = desktop;
+
+    if (reached.width != mode.width || reached.height != mode.height) {
+        SUPERSONIC_LOG_WARN("Window")
+            << "Fullscreen on " << monitorName(monitor) << " at " << mode.width << "x"
+            << mode.height << " @ " << mode.refreshRate << " Hz was asked for; the display runs at "
+            << reached.width << "x" << reached.height << " @ " << reached.refreshRate << " Hz."
+            << std::endl;
+    } else if (switched) {
+        SUPERSONIC_LOG_INFO("Window")
+            << "Fullscreen on " << monitorName(monitor) << " at " << reached.width << "x"
+            << reached.height << " @ " << reached.refreshRate << " Hz, switched from the desktop's "
+            << desktop.width << "x" << desktop.height << " @ " << desktop.refreshRate << " Hz."
+            << std::endl;
+    } else {
+        SUPERSONIC_LOG_INFO("Window") << "Fullscreen on " << monitorName(monitor) << " at "
+                                      << mode.width << "x" << mode.height << " @ "
+                                      << mode.refreshRate << " Hz, the desktop's mode."
+                                      << std::endl;
+    }
+}
+
 void NativeWindowControl::leaveFullscreen() {
     GLFWwindow* native = m_window.GetNativeWindow();
+
+    // GLFW puts the desktop's mode back as the window leaves the monitor.
+    m_switchedMonitor = nullptr;
 
     if (!m_hasWindowedRect) {
         // Fullscreen by some route that did not come through here, so there is

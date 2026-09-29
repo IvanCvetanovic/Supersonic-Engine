@@ -79,7 +79,9 @@ public:
     virtual std::vector<DisplayMode> DisplayModes() const = 0;
 
     // The mode that monitor is running at now, which is the size fullscreen
-    // opens at. Zeroes when there is no monitor to ask.
+    // opens at. Zeroes when there is no monitor to ask. While SetFullscreenMode
+    // has switched the monitor to another mode, the mode it goes back to - the
+    // desktop's - rather than the switched one, which is WindowSize().
     virtual DisplayMode DesktopMode() const = 0;
 
     // ---- What a game asks for ---------------------------------------------
@@ -89,8 +91,32 @@ public:
     // on the way in or out. false returns to the size and position the window
     // had before, maximised again if it was.
     //
-    // Applied at the top of the next frame. The last request before then wins.
+    // Applied at the top of the next frame. The last request before then wins,
+    // a SetFullscreenMode included: true after one covers the monitor at its
+    // current mode instead.
     void SetFullscreen(bool fullscreen);
+
+    // Cover the monitor at a mode of this size, switching the display to it -
+    // the exclusive fullscreen of a 2000s game's resolution list, where the
+    // picture is rendered at that size and the monitor scales it. Opt-in:
+    // SetFullscreen(true) never switches.
+    //
+    // The rate is the desktop's when the monitor offers this size at it, else
+    // the highest it offers the size at; the desktop's own size is the
+    // desktop's mode, so asking for it switches nothing (and switches back
+    // from another mode). Already fullscreen, it changes mode in place and
+    // keeps the windowed rectangle SetFullscreen(false) returns to. Leaving
+    // fullscreen, or losing the focus (GLFW_AUTO_ICONIFY), puts the desktop's
+    // mode back.
+    //
+    // Refused - false, nothing latched - for a size the monitor does not list
+    // (DisplayModes) and is not the desktop's: a settings file saved on another
+    // monitor asks for modes this one may not have, and the caller falls back
+    // to SetFullscreen(true) rather than to a mode the platform would round to.
+    //
+    // Applied at the top of the next frame. The last request before then wins.
+    // Ignored where the window is the screen (Android, iOS).
+    bool SetFullscreenMode(uint32_t width, uint32_t height);
 
     // The windowed size, applied at the top of the next frame. While
     // fullscreen it is the size the window comes back at.
@@ -118,6 +144,9 @@ public:
     struct Requests {
         bool setFullscreen{false};
         bool fullscreen{false};
+        // With fullscreen: the size SetFullscreenMode asked for. Zeroes for
+        // SetFullscreen(true), the monitor's current mode.
+        glm::uvec2 fullscreenMode{0u, 0u};
 
         bool setWindowedSize{false};
         glm::uvec2 windowedSize{0u, 0u};
@@ -166,6 +195,18 @@ public:
 
     // Whether a size is one a window may be asked for. The manifest's range.
     static bool IsUsableWindowSize(uint32_t width, uint32_t height);
+
+    // The mode SetFullscreenMode covers a monitor at for a size, from that
+    // monitor's modes (DisplayModes) and its desktop mode: the desktop's own
+    // mode for the desktop's size; else that size at the desktop's rate when
+    // it is offered there - the rate the monitor and its cable are known to
+    // run - else at the highest rate it is offered at. Zeroes when the size is
+    // neither listed nor the desktop's. The same answer refuses a request when
+    // it is made and chooses the mode when it is applied, so the two cannot
+    // disagree.
+    static DisplayMode ChooseFullscreenMode(const std::vector<DisplayMode>& modes,
+                                            const DisplayMode& desktop, uint32_t width,
+                                            uint32_t height);
 
 protected:
     WindowControl() = default;

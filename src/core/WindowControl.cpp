@@ -12,6 +12,25 @@ namespace Supersonic {
 void WindowControl::SetFullscreen(bool fullscreen) {
     m_pending.setFullscreen = true;
     m_pending.fullscreen = fullscreen;
+    m_pending.fullscreenMode = glm::uvec2(0u);
+}
+
+bool WindowControl::SetFullscreenMode(uint32_t width, uint32_t height) {
+    const DisplayMode desktop = DesktopMode();
+    if (ChooseFullscreenMode(DisplayModes(), desktop, width, height).width == 0) {
+        // A warning, not an error: a monitor that lacks a saved mode is the
+        // expected case this refusal exists for, and the caller has the
+        // desktop's mode to fall back to.
+        SUPERSONIC_LOG_WARN("Window")
+            << "A fullscreen mode of " << width << "x" << height << " was asked for, which the "
+            << "monitor does not offer (its desktop mode is " << desktop.width << "x"
+            << desktop.height << "); the window is left as it is." << std::endl;
+        return false;
+    }
+    m_pending.setFullscreen = true;
+    m_pending.fullscreen = true;
+    m_pending.fullscreenMode = glm::uvec2(width, height);
+    return true;
 }
 
 bool WindowControl::SetWindowedSize(uint32_t width, uint32_t height) {
@@ -98,6 +117,25 @@ int WindowControl::MonitorUnder(const ScreenRect& window, const std::vector<Scre
 bool WindowControl::IsUsableWindowSize(uint32_t width, uint32_t height) {
     return width >= GameManifest::kMinimumExtent && height >= GameManifest::kMinimumExtent &&
            width <= GameManifest::kMaximumExtent && height <= GameManifest::kMaximumExtent;
+}
+
+DisplayMode WindowControl::ChooseFullscreenMode(const std::vector<DisplayMode>& modes,
+                                                const DisplayMode& desktop, uint32_t width,
+                                                uint32_t height) {
+    if (width == 0 || height == 0) return {};
+
+    // The desktop's size even when the list lacks it - a platform can leave the
+    // mode it is running at out of its own list - since covering the monitor
+    // at the mode it is already in is always possible.
+    if (width == desktop.width && height == desktop.height) return desktop;
+
+    DisplayMode chosen;
+    for (const DisplayMode& mode : modes) {
+        if (mode.width != width || mode.height != height) continue;
+        if (mode.refreshRate == desktop.refreshRate) return mode;
+        if (chosen.width == 0 || mode.refreshRate > chosen.refreshRate) chosen = mode;
+    }
+    return chosen;
 }
 
 } // namespace Supersonic

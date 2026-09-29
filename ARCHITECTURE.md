@@ -2383,8 +2383,9 @@ shape:
 | | |
 |---|---|
 | `IsFullscreen()`, `WindowSize()` | what the window is now — the size in screen coordinates, which in game mode is the render resolution |
-| `DisplayModes()`, `DesktopMode()` | the 8-bit-per-channel modes of the monitor the window is mostly on, smallest first, each once; and the mode it runs at now, which is what fullscreen opens at. Read live, so call them when a menu opens |
+| `DisplayModes()`, `DesktopMode()` | the 8-bit-per-channel modes of the monitor the window is mostly on, smallest first, each once; and the mode it runs at now, which is what fullscreen opens at (while `SetFullscreenMode` has switched it, the desktop's mode it goes back to). Read live, so call them when a menu opens |
 | `SetFullscreen(bool)` | cover that monitor at its current mode, or go back to the windowed size and position (maximised again if it was) |
+| `SetFullscreenMode(w, h)` | opt-in: cover it at a mode of that size, switching the display - at the desktop's rate where the monitor offers the size there, else the highest; the desktop's own size is its own mode, no switch. Changes mode in place when already fullscreen. Refused for a size the monitor neither lists nor runs at |
 | `SetWindowedSize(w, h)` | the windowed size; while fullscreen, the size it comes back at. Refused outside the manifest's 64..16384 |
 | `SetCursorVisible(bool)` | the same request as `Input::SetCursorMode(CursorMode::Hidden)`, made through it — see §6b |
 
@@ -2415,8 +2416,15 @@ built so it starts at the monitor's size.
 Two things it does not do. A toggle moves the window's origin, so the frame
 after one reports a pointer delta of however far the pointer moved relative to
 the window — `Input` rebases the delta only when the cursor mode changes. And
-there is no exclusive mode at another resolution: a list of modes is for a
-windowed size, or for a game's own scaling.
+`SetFullscreen(true)` never runs at another resolution: a list of modes is for
+a windowed size, for a game's own scaling, or for `SetFullscreenMode`, the
+opt-in exclusive mode of a game whose original switched the display. That one
+does switch, with the resynchronising black screen that comes with it; GLFW
+puts the desktop's mode back when the window leaves the monitor or is
+iconified on losing focus, and the platform keeps the desktop's mode while the
+monitor reports the switched one, so `DesktopMode()` still names the way back.
+`ChooseFullscreenMode`, pure, both refuses a request when it is made and picks
+the mode when it is applied, so the two cannot disagree.
 
 Still fused: the scene target lives in `EditorLayer`, and the scene pipeline is
 built against its render pass. A game needs that target too — it is the HDR and

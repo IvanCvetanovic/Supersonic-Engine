@@ -301,12 +301,24 @@ class StandInWindow final : public WindowControl {
 public:
     bool IsFullscreen() const override { return fullscreen; }
     glm::uvec2 WindowSize() const override { return size; }
-    std::vector<DisplayMode> DisplayModes() const override { return {}; }
-    DisplayMode DesktopMode() const override { return {}; }
+    std::vector<DisplayMode> DisplayModes() const override { return modes; }
+    DisplayMode DesktopMode() const override { return desktop; }
 
     bool fullscreen{false};
     glm::uvec2 size{1280u, 720u};
+    // No monitor unless a check gives it one.
+    std::vector<DisplayMode> modes;
+    DisplayMode desktop;
 };
+
+// A 1080p monitor at 144 Hz on the desktop, which offers 800x600 only at 60
+// and 75 Hz, and 1280x720 at 60 and 144 Hz. Filled in rather than returned: a
+// WindowControl cannot be copied.
+void PutOnADesktopMonitor(StandInWindow& window) {
+    window.modes = {{800, 600, 60},    {800, 600, 75},     {1280, 720, 60},
+                    {1280, 720, 144},  {1920, 1080, 60},   {1920, 1080, 144}};
+    window.desktop = {1920, 1080, 144};
+}
 
 } // namespace
 
@@ -365,6 +377,119 @@ static void testAnUnusableWindowedSizeIsRefusedAndLatchesNothing() {
     CHECK(taken.setWindowedSize);
     CHECK_EQ(taken.windowedSize.x, 1280u);
     CHECK_EQ(taken.windowedSize.y, 720u);
+}
+
+static void testAFullscreenModeIsAFullscreenRequestThatCarriesItsSize() {
+    StandInWindow window;
+    PutOnADesktopMonitor(window);
+    CHECK(window.SetFullscreenMode(1280, 720));
+    CHECK(window.Pending().Any());
+    CHECK_MSG(!window.IsFullscreen(), "asking changes nothing until it is applied");
+
+    WindowControl::Requests taken = window.TakeRequests();
+    CHECK(taken.setFullscreen && taken.fullscreen);
+    CHECK_EQ(taken.fullscreenMode.x, 1280u);
+    CHECK_EQ(taken.fullscreenMode.y, 720u);
+    CHECK_MSG(!taken.setWindowedSize, "a mode is not a windowed size");
+    CHECK_MSG(!window.Pending().Any(), "taking the requests forgets the mode too");
+
+    // SetFullscreen(true) is the monitor's current mode, as it always was:
+    // no size rides along with it.
+    window.SetFullscreen(true);
+    taken = window.TakeRequests();
+    CHECK(taken.setFullscreen && taken.fullscreen);
+    CHECK_EQ(taken.fullscreenMode.x, 0u);
+    CHECK_EQ(taken.fullscreenMode.y, 0u);
+}
+
+static void testTheLastFullscreenRequestWinsWithOrWithoutAMode() {
+    StandInWindow window;
+    PutOnADesktopMonitor(window);
+
+    // A mode, then plain fullscreen: the plain one, which switches nothing.
+    CHECK(window.SetFullscreenMode(800, 600));
+    window.SetFullscreen(true);
+    WindowControl::Requests taken = window.TakeRequests();
+    CHECK(taken.fullscreen);
+    CHECK_MSG(taken.fullscreenMode == glm::uvec2(0u), "the later request drops the mode");
+
+    // A mode, then windowed: windowed.
+    CHECK(window.SetFullscreenMode(800, 600));
+    window.SetFullscreen(false);
+    taken = window.TakeRequests();
+    CHECK(taken.setFullscreen);
+    CHECK(!taken.fullscreen);
+    CHECK(taken.fullscreenMode == glm::uvec2(0u));
+
+    // Windowed, then a mode: fullscreen at it.
+    window.SetFullscreen(false);
+    CHECK(window.SetFullscreenMode(1280, 720));
+    taken = window.TakeRequests();
+    CHECK(taken.fullscreen);
+    CHECK(taken.fullscreenMode == glm::uvec2(1280u, 720u));
+
+    // A windowed size beside a mode is kept: it is the size to come back at.
+    CHECK(window.SetWindowedSize(1024, 768));
+    CHECK(window.SetFullscreenMode(1280, 720));
+    taken = window.TakeRequests();
+    CHECK(taken.setWindowedSize && taken.windowedSize == glm::uvec2(1024u, 768u));
+    CHECK(taken.fullscreenMode == glm::uvec2(1280u, 720u));
+}
+
+static void testAModeTheMonitorDoesNotOfferIsRefusedAndLatchesNothing() {
+    StandInWindow window;
+    PutOnADesktopMonitor(window);
+    CHECK_MSG(!window.SetFullscreenMode(1024, 768), "not in the monitor's list");
+    CHECK_MSG(!window.SetFullscreenMode(0, 600), "half a size");
+    CHECK_MSG(!window.SetFullscreenMode(0, 0), "no size");
+    CHECK_MSG(!window.Pending().Any(), "and a refusal asks for nothing");
+
+    // A refused mode does not cancel one already accepted.
+    CHECK(window.SetFullscreenMode(800, 600));
+    CHECK(!window.SetFullscreenMode(1600, 900));
+    const WindowControl::Requests taken = window.TakeRequests();
+    CHECK(taken.fullscreenMode == glm::uvec2(800u, 600u));
+
+    // With no monitor to ask there is no mode to have.
+    StandInWindow nowhere;
+    CHECK(!nowhere.SetFullscreenMode(1280, 720));
+    CHECK(!nowhere.Pending().Any());
+
+    // The desktop's own size is always possible, listed or not: covering the
+    // monitor at the mode it is already in needs no list.
+    StandInWindow unlisted;
+    PutOnADesktopMonitor(unlisted);
+    unlisted.modes = {{800, 600, 60}};
+    CHECK(unlisted.SetFullscreenMode(1920, 1080));
+    CHECK(unlisted.TakeRequests().fullscreenMode == glm::uvec2(1920u, 1080u));
+}
+
+static void testAFullscreenModeRunsAtTheDesktopsRateWhenItCan() {
+    StandInWindow window;
+    PutOnADesktopMonitor(window);
+    const std::vector<DisplayMode>& modes = window.modes;
+    const DisplayMode& desktop = window.desktop;
+
+    // Offered at the desktop's 144 Hz: that, not merely the highest.
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1280, 720) ==
+          (DisplayMode{1280, 720, 144}));
+    // Not offered at 144: the highest it is offered at.
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 800, 600) ==
+          (DisplayMode{800, 600, 75}));
+    // The desktop's size is the desktop's mode itself, so choosing it
+    // switches nothing.
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1920, 1080) == desktop);
+    CHECK(WindowControl::ChooseFullscreenMode({}, desktop, 1920, 1080) == desktop);
+
+    // A desktop at 60 Hz picks 60 where it is offered, not the higher rate.
+    const DisplayMode at60{1920, 1080, 60};
+    CHECK(WindowControl::ChooseFullscreenMode(modes, at60, 1280, 720) ==
+          (DisplayMode{1280, 720, 60}));
+
+    // Not offered at all: zeroes.
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 1024, 768) == DisplayMode{});
+    CHECK(WindowControl::ChooseFullscreenMode(modes, desktop, 0, 0) == DisplayMode{});
+    CHECK(WindowControl::ChooseFullscreenMode({}, DisplayMode{}, 1280, 720) == DisplayMode{});
 }
 
 static void testHidingTheCursorIsTheSameRequestInputArbitrates() {
@@ -585,6 +710,10 @@ static void runTests() {
     testARequestWaitsToBeTaken();
     testTheLastRequestBeforeTheFrameWins();
     testAnUnusableWindowedSizeIsRefusedAndLatchesNothing();
+    testAFullscreenModeIsAFullscreenRequestThatCarriesItsSize();
+    testTheLastFullscreenRequestWinsWithOrWithoutAMode();
+    testAModeTheMonitorDoesNotOfferIsRefusedAndLatchesNothing();
+    testAFullscreenModeRunsAtTheDesktopsRateWhenItCan();
     testHidingTheCursorIsTheSameRequestInputArbitrates();
     testTheModesAMenuListsAreTheTrueColourOnesOnceEach();
     testAWindowGoesFullscreenOnTheMonitorHoldingMostOfIt();
