@@ -676,6 +676,109 @@ static void testAnEmptyStackIsEmptyRatherThanAPoint() {
     CHECK_EQ(rects.size(), size_t{0});
 }
 
+// --- A stack at a scale other than 1 -------------------------------------
+//
+// LayoutStack handed Place() the block in authored units and the offset
+// unscaled, and Place works in pixels. At a 1080-pixel-tall window the two are
+// the same number, and every test above runs there or anchors TopLeft with no
+// offset, where the block's size never enters the arithmetic. So the stack was
+// placed correctly at exactly the one height anybody checked. The scales below
+// are 2 and 0.5 so every expected pixel is exact in a float.
+
+static bool sameRect(const UIRect& a, const UIRect& b) {
+    return test::nearly(a.min.x, b.min.x) && test::nearly(a.min.y, b.min.y) &&
+           test::nearly(a.max.x, b.max.x) && test::nearly(a.max.y, b.max.y);
+}
+
+static std::string describe(const UIRect& r) {
+    return std::to_string(r.min.x) + "," + std::to_string(r.min.y) + " .. " +
+           std::to_string(r.max.x) + "," + std::to_string(r.max.y);
+}
+
+static void testAOneChildStackLandsWhereOneElementWouldAtEveryAnchorAndScale() {
+    // The contract the stack's own comment claims: a block sits where a single
+    // element of its size would. Checked for all nine anchors, against both the
+    // screen overload (scale 2, derived from 2160 tall) and the area overload
+    // (an inset rect at an explicit 0.5), since each has its own way of getting
+    // the scale wrong.
+    const glm::vec2 size(100.0f, 40.0f);
+    const glm::vec2 offset(24.0f, 16.0f);
+    const UIRect uhd{glm::vec2(0.0f), glm::vec2(3840.0f, 2160.0f)};
+
+    for (uint8_t i = 0; i <= static_cast<uint8_t>(UIAnchor::BottomRight); ++i) {
+        const auto anchor = static_cast<UIAnchor>(i);
+        const std::string which = "anchor " + std::to_string(i);
+
+        const std::vector<UIRect> onScreen =
+            UICanvas::LayoutStack({size}, false, 10.0f, anchor, offset, uhd);
+        const UIRect single = UICanvas::Place(anchor, offset * 2.0f, size * 2.0f, uhd);
+        CHECK_EQ(onScreen.size(), size_t{1});
+        if (onScreen.size() == 1) {
+            CHECK_MSG(sameRect(onScreen[0], single),
+                      which + " at 4K: stack " + describe(onScreen[0]) + ", element " +
+                          describe(single));
+        }
+
+        const std::vector<UIRect> inArea =
+            UICanvas::LayoutStack({size}, true, 10.0f, anchor, offset, panel(), 0.5f);
+        const UIRect inset = UICanvas::Place(anchor, offset * 0.5f, size * 0.5f, panel());
+        CHECK_EQ(inArea.size(), size_t{1});
+        if (inArea.size() == 1) {
+            CHECK_MSG(sameRect(inArea[0], inset),
+                      which + " in an area at 0.5: stack " + describe(inArea[0]) +
+                          ", element " + describe(inset));
+        }
+    }
+}
+
+static void testABottomBarSitsOnTheBottomEdgeAt4K() {
+    // Wolf Brigade's bottom bar: three 230x96 buttons 16 apart, bottom-centred,
+    // 18 up from the edge. At 3840x2160 the block is 1444x192 pixels, centred
+    // on 1920 and ending 36 above 2160. Before the fix it started 361 pixels
+    // right of that and hung 78 pixels off the bottom of the screen.
+    const std::vector<glm::vec2> sizes{{230.0f, 96.0f}, {230.0f, 96.0f}, {230.0f, 96.0f}};
+    const std::vector<UIRect> rects =
+        UICanvas::LayoutStack(sizes, true, 16.0f, UIAnchor::BottomCenter,
+                              glm::vec2(0.0f, 18.0f),
+                              UIRect{glm::vec2(0.0f), glm::vec2(3840.0f, 2160.0f)});
+    CHECK_EQ(rects.size(), size_t{3});
+    if (rects.size() != 3) return;
+
+    CHECK_NEAR(rects[0].min.x, 1198.0f);
+    CHECK_NEAR(rects[0].max.x, 1658.0f);
+    CHECK_NEAR(rects[1].min.x, 1690.0f);      // 1658 + 16 * 2
+    CHECK_NEAR(rects[2].min.x, 2182.0f);
+    CHECK_NEAR(rects[2].max.x, 2642.0f);
+    for (const UIRect& r : rects) {
+        CHECK_NEAR(r.min.y, 1932.0f);
+        CHECK_NEAR(r.max.y, 2124.0f);         // 2160 - 18 * 2
+    }
+}
+
+static void testACentredColumnTakesItsOffsetInPixelsAtHalfScale() {
+    // Centred on both axes, so the offset is added as it stands on both - and
+    // at 960x540 it is half of what was authored. A 200-wide and a 120-wide
+    // row 20 apart make a 200x100 block, 100x50 on this screen, centred on
+    // (480, 270) and then moved by (20, 15).
+    const std::vector<glm::vec2> sizes{{200.0f, 40.0f}, {120.0f, 40.0f}};
+    const std::vector<UIRect> rects =
+        UICanvas::LayoutStack(sizes, false, 20.0f, UIAnchor::Center, glm::vec2(40.0f, 30.0f),
+                              UIRect{glm::vec2(0.0f), glm::vec2(960.0f, 540.0f)});
+    CHECK_EQ(rects.size(), size_t{2});
+    if (rects.size() != 2) return;
+
+    CHECK_NEAR(rects[0].min.x, 450.0f);
+    CHECK_NEAR(rects[0].min.y, 260.0f);
+    CHECK_NEAR(rects[0].max.x, 550.0f);
+    CHECK_NEAR(rects[0].max.y, 280.0f);
+
+    // The narrower row centred under the wider one, a scaled gap below it.
+    CHECK_NEAR(rects[1].min.x, 470.0f);
+    CHECK_NEAR(rects[1].min.y, 290.0f);
+    CHECK_NEAR(rects[1].max.x, 530.0f);
+    CHECK_NEAR(rects[1].max.y, 310.0f);
+}
+
 // --- Nested stacks -------------------------------------------------------
 //
 // A stack inside a stack used to be skipped entirely: the measurement chain
@@ -1357,6 +1460,9 @@ static void runTests() {
     testTheCrossAxisIsCentredSoARowOfMixedHeightsLinesUp();
     testTheStackScalesWithTheScreenLikeEverythingElse();
     testAnEmptyStackIsEmptyRatherThanAPoint();
+    testAOneChildStackLandsWhereOneElementWouldAtEveryAnchorAndScale();
+    testABottomBarSitsOnTheBottomEdgeAt4K();
+    testACentredColumnTakesItsOffsetInPixelsAtHalfScale();
 
     testAFrameCutsIntoNinePatchesThatTileTheBox();
     testTheCornersKeepTheirSizeAndTheMiddleTakesTheRest();

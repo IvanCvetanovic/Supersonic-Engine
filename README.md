@@ -469,7 +469,7 @@ verified by a screenshot of geometry it never touched.
 | `test_blending` | Cross-fade between clips, blend weights, clip switching |
 | `test_spotlight` | Cone angles, the straight-down lookAt collapse, shadow frustum fit |
 | `test_pointshadow` | Cube-face view matrices, slot assignment, per-light indices |
-| `test_uicanvas` | Canvas layout, anchoring, rect resolution |
+| `test_uicanvas` | Canvas layout, anchoring, rect resolution, and a stack landing where one element of its size would at scales other than 1 |
 | `test_uiinput` | UI hit testing, press and release routing |
 | `test_screenoverlay` | The screen overlay drawn after the tone map: where a quad lands in clip space and texture space, that order is draw order, the blend it is drawn with, and that the shader carries the same vertex table. And the composite under it: the four numbers each scene encoding sends, and that the shader's branches are numbered as the enum is |
 | `test_mixer` | Voice mixing: volume, summing, clamping rather than wrapping, looping, pitch and sample-rate conversion, panning, mono and 8-bit clips. There is no bus gain to test — the only volume is per voice |

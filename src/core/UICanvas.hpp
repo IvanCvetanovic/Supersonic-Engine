@@ -139,11 +139,12 @@ struct StackedLayout {
 // nesting rules. Those can be added when something needs them, and a general
 // layout engine nobody needed is a large thing to maintain for one menu.
 //
-// `sizes` are in authored units and the returned rects are in `screen` pixels,
-// so the caller measures once and places once. The block is sized to its
-// contents and then placed by the anchor as a unit - which is what makes
-// "centred" mean the GROUP is centred rather than each child being centred
-// independently and landing on top of the others.
+// `sizes`, `spacing` and `offset` are in authored units and the returned rects
+// are in `screen` pixels, so the caller measures once and places once. The
+// block is sized to its contents and then placed by the anchor as a unit -
+// which is what makes "centred" mean the GROUP is centred rather than each
+// child being centred independently and landing on top of the others. It lands
+// on exactly the rect Place() gives one element of its size, at every scale.
 //
 // Pure: no registry, no ImGui, no device. It is the arithmetic, and it is the
 // part that is wrong in ways a screenshot does not show.
@@ -190,7 +191,11 @@ glm::vec2 MeasureStack(const std::vector<glm::vec2>& sizes, bool horizontal, flo
 bool ProjectToScreen(const glm::mat4& viewProj, const glm::vec3& world, const UIRect& screen,
                      glm::vec3& outScreen);
 
-// Places an element of `size` authored units at `offset` from its anchor.
+// Places an element of `size` at `offset` from its anchor, both in PIXELS.
+//
+// Every caller scales authored units first. This line once said authored
+// units, and LayoutStack took it at its word: its stacks sat right only at a
+// window 1080 pixels tall.
 //
 // The offset always runs *inward* from the anchored edge, so the same offset of
 // (16, 16) means "16 in from the corner" whichever corner is chosen, rather

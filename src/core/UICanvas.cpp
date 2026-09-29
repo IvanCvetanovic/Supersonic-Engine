@@ -79,10 +79,13 @@ std::vector<UIRect> LayoutStack(const std::vector<glm::vec2>& sizes, bool horizo
         }
     }
 
-    // Placed through the same Place() every other element uses, in AUTHORED
-    // units, so a stack sits where a single element of the same size would and
-    // the two cannot drift apart.
-    const UIRect placed = Place(anchor, offset, block / scale, screen);
+    // Placed through the same Place() every other element uses, with what one
+    // element of the block's size would hand it - offset and size both scaled
+    // to pixels - so a stack sits where that element would and the two cannot
+    // drift apart. This passed the block in authored units and the offset
+    // unscaled, which is the same thing only at a scale of 1: at 1280x720
+    // Wolf Brigade's bottom bar landed 120 pixels left of centre and 38 high.
+    const UIRect placed = Place(anchor, offset * scale, block, screen);
 
     float cursor = horizontal ? placed.min.x : placed.min.y;
     rects.reserve(sizes.size());
