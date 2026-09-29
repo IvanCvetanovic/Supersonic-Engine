@@ -169,7 +169,7 @@ const TextureRegistry::Texture* TextureRegistry::get(uint32_t id) const {
 
 uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixels,
                                      uint32_t width, uint32_t height, bool srgb,
-                                     vk::Filter filter) {
+                                     vk::Filter filter, vk::SamplerAddressMode addressMode) {
     if (auto it = m_lookup.find(key); it != m_lookup.end()) {
         return it->second;
     }
@@ -208,8 +208,9 @@ uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixe
     // After the image, because the sampler's maxLod comes from its level count.
     //
     // The filter arrives from the caller, which is the only one that knows the
-    // PATH - see the header.
-    texture.image->CreateSampler(filter);
+    // PATH - see the header. So does the wrap: only the caller knows whether the
+    // image tiles or is drawn once, edge to edge.
+    texture.image->CreateSampler(filter, addressMode);
 
     VulkanImage::TransitionLayout(m_deviceRef, m_commandPool, texture.image->GetImage(),
                                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);

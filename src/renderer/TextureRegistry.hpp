@@ -59,9 +59,19 @@ public:
     //
     // Linear by default, which is right for every generated texture: they have
     // no asset on disk to carry an import setting.
+    //
+    // `addressMode` is the sampler's wrap, repeat by default as it always was.
+    // Clamp-to-edge is for an image drawn as one sprite, whose edge texels
+    // would otherwise blend with the OPPOSITE edge wherever a pixel centre
+    // falls between texels - a magnified or sub-pixel sprite - drawing a thin
+    // line of the far side along each border (a 2D game's tile whose top rows
+    // are transparent and bottom rows opaque shows it as a line floating above
+    // the tile). ReplaceRGBA rebuilds a texture with the defaults, filter and
+    // wrap alike.
     uint32_t UploadRGBA(const std::string& key, const uint8_t* pixels,
                         uint32_t width, uint32_t height, bool srgb = true,
-                        vk::Filter filter = vk::Filter::eLinear);
+                        vk::Filter filter = vk::Filter::eLinear,
+                        vk::SamplerAddressMode addressMode = vk::SamplerAddressMode::eRepeat);
 
     // Descriptor set binding every map of one material, cached per five ids
     // so a scene sharing materials does not allocate a set per entity.
