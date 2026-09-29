@@ -310,4 +310,4 @@ static void runTests() {
     testAnythingButAnObjectHasNoKeys();
 }
 
-TEST_MAIN("test_json", 30)
+TEST_MAIN("test_json", 70)

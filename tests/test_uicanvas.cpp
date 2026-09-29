@@ -779,6 +779,129 @@ static void testACentredColumnTakesItsOffsetInPixelsAtHalfScale() {
     CHECK_NEAR(rects[1].max.y, 310.0f);
 }
 
+// The same bar through the layout pass, which is the only caller the engine
+// has. The cases above pin LayoutStack by itself, and every layout-pass case
+// in this suite and in test_uiinput runs at 1920x1080 and a scale of 1. So a
+// pass that scaled the offset again on its way in (`stack.offset * scale` at
+// the call), or placed a nested stack in its parent's slot with the old
+// arithmetic, passed everything. Its middle slot is a stack of its own: two
+// 230x40 panels 16 apart, the size of the buttons beside it, anchored Center
+// and moved (10, 4), so the bar's block is unchanged and the nested offset has
+// to arrive in pixels.
+struct UIExpected {
+    entt::entity entity;
+    UIRect rect;
+};
+
+static void addBottomBar(entt::registry& registry, entt::entity& nested,
+                         entt::entity (&buttons)[2], entt::entity (&panels)[2]) {
+    const entt::entity bar = registry.create();
+    auto& stack = registry.emplace<UIStackComponent>(bar);
+    stack.horizontal = true;
+    stack.spacing = 16.0f;
+    stack.anchor = UIAnchor::BottomCenter;
+    stack.offset = glm::vec2(0.0f, 18.0f);
+
+    for (int i = 0; i < 2; ++i) {
+        buttons[i] = registry.create();
+        registry.emplace<UIButtonComponent>(buttons[i]).size = glm::vec2(230.0f, 96.0f);
+        registry.emplace<HierarchyComponent>(buttons[i]).parent = bar;
+        registry.emplace<UIOrderComponent>(buttons[i]).order = i * 2;   // 0 and 2
+    }
+
+    nested = registry.create();
+    auto& column = registry.emplace<UIStackComponent>(nested);
+    column.horizontal = false;
+    column.spacing = 16.0f;
+    column.anchor = UIAnchor::Center;
+    column.offset = glm::vec2(10.0f, 4.0f);
+    registry.emplace<HierarchyComponent>(nested).parent = bar;
+    registry.emplace<UIOrderComponent>(nested).order = 1;
+
+    for (int i = 0; i < 2; ++i) {
+        panels[i] = registry.create();
+        registry.emplace<UIPanelComponent>(panels[i]).size = glm::vec2(230.0f, 40.0f);
+        registry.emplace<HierarchyComponent>(panels[i]).parent = nested;
+        registry.emplace<UIOrderComponent>(panels[i]).order = i;
+    }
+}
+
+static void testTheLayoutPassPlacesTheBarAndItsNestedStackInPixelsAt4K() {
+    entt::registry registry;
+    entt::entity nested = entt::null;
+    entt::entity buttons[2]{};
+    entt::entity panels[2]{};
+    addBottomBar(registry, nested, buttons, panels);
+
+    const UIRect uhd{glm::vec2(0.0f), glm::vec2(3840.0f, 2160.0f)};
+    const UICanvas::StackedLayout layout =
+        UISystem::LayoutStacks(registry, uhd, nullptr, UICanvas::ScaleFor(uhd.size()));
+
+    const entt::entity placed[] = { buttons[0], nested, buttons[1], panels[0], panels[1] };
+    for (const entt::entity entity : placed) {
+        CHECK_MSG(layout.rects.count(entity) == 1, "every child of the bar, and of its "
+                                                   "nested column, was placed");
+        if (layout.rects.count(entity) == 0) return;
+    }
+
+    // The bar: 1444x192 pixels, centred on 1920, its bottom 36 above 2160 -
+    // the numbers LayoutStack gives on its own, so the pass adds nothing.
+    const UIExpected bar[] = {
+        { buttons[0], { {1198.0f, 1932.0f}, {1658.0f, 2124.0f} } },
+        { nested,     { {1690.0f, 1932.0f}, {2150.0f, 2124.0f} } },
+        { buttons[1], { {2182.0f, 1932.0f}, {2642.0f, 2124.0f} } },
+    };
+    for (const UIExpected& expected : bar) {
+        CHECK_MSG(sameRect(layout.rects.at(expected.entity), expected.rect),
+                  "bar slot: got " + describe(layout.rects.at(expected.entity)) +
+                      ", expected " + describe(expected.rect));
+    }
+
+    // The nested column fills its 460x192 slot exactly, so Center puts it on
+    // the slot and the offset moves it (20, 8) pixels: two 460x80 rows with a
+    // 32-pixel gap. Scaled twice it would move (40, 16); placed the old way,
+    // with its block halved and its offset unscaled, it would start at
+    // (1815, 1984).
+    const UIExpected rows[] = {
+        { panels[0], { {1710.0f, 1940.0f}, {2170.0f, 2020.0f} } },
+        { panels[1], { {1710.0f, 2052.0f}, {2170.0f, 2132.0f} } },
+    };
+    for (const UIExpected& expected : rows) {
+        CHECK_MSG(sameRect(layout.rects.at(expected.entity), expected.rect),
+                  "nested row: got " + describe(layout.rects.at(expected.entity)) +
+                      ", expected " + describe(expected.rect));
+    }
+}
+
+static void testTheLayoutPassCentresTheBarAt720p() {
+    // The height the port's windowed build most often runs at, at the scale
+    // Render derives for it (2/3, so the numbers are thirds and are compared
+    // to a hundredth of a pixel). Before the fix the bar was drawn and
+    // clickable at x 279..760, y 606..670: 120 left of centre and 38 high.
+    entt::registry registry;
+    entt::entity nested = entt::null;
+    entt::entity buttons[2]{};
+    entt::entity panels[2]{};
+    addBottomBar(registry, nested, buttons, panels);
+
+    const UIRect hd{glm::vec2(0.0f), glm::vec2(1280.0f, 720.0f)};
+    const UICanvas::StackedLayout layout =
+        UISystem::LayoutStacks(registry, hd, nullptr, UICanvas::ScaleFor(hd.size()));
+
+    CHECK_MSG(layout.rects.count(buttons[0]) == 1 && layout.rects.count(buttons[1]) == 1,
+              "both end buttons were placed");
+    if (layout.rects.count(buttons[0]) == 0 || layout.rects.count(buttons[1]) == 0) return;
+
+    const UIRect first = layout.rects.at(buttons[0]);
+    const UIRect last = layout.rects.at(buttons[1]);
+    const float tolerance = 0.01f;
+    CHECK_MSG(test::nearly(first.min.x, 399.3333f, tolerance), "left edge " + describe(first));
+    CHECK_MSG(test::nearly(last.max.x, 880.6667f, tolerance), "right edge " + describe(last));
+    CHECK_MSG(test::nearly(first.min.y, 644.0f, tolerance), "top " + describe(first));
+    CHECK_MSG(test::nearly(first.max.y, 708.0f, tolerance),
+              "bottom, 12 pixels (18 authored) above the edge: " + describe(first));
+}
+
 // --- Nested stacks -------------------------------------------------------
 //
 // A stack inside a stack used to be skipped entirely: the measurement chain
@@ -1463,6 +1586,8 @@ static void runTests() {
     testAOneChildStackLandsWhereOneElementWouldAtEveryAnchorAndScale();
     testABottomBarSitsOnTheBottomEdgeAt4K();
     testACentredColumnTakesItsOffsetInPixelsAtHalfScale();
+    testTheLayoutPassPlacesTheBarAndItsNestedStackInPixelsAt4K();
+    testTheLayoutPassCentresTheBarAt720p();
 
     testAFrameCutsIntoNinePatchesThatTileTheBox();
     testTheCornersKeepTheirSizeAndTheMiddleTakesTheRest();
@@ -1474,4 +1599,4 @@ static void runTests() {
     testAnEdgeOnlyFrameSkipsThePatchesWithNoArea();
 }
 
-TEST_MAIN("test_uicanvas", 240)
+TEST_MAIN("test_uicanvas", 300)
