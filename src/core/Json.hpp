@@ -8,6 +8,7 @@
 // reporting success. No JSON library is vendored, and pulling one in for this
 // format would be heavier than the ~200 lines below.
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <map>
@@ -65,6 +66,44 @@ public:
         return m_type == Type::Object ? m_object : kEmpty;
     }
 
+    // The object's keys in the order the document wrote them.
+    //
+    // Object is a std::map, so AsObject() enumerates alphabetically, and a game
+    // that shows its data in file order - a build list, a cost that reads "75
+    // wood, 20 food" - showed "20 food, 75 wood" instead. The map stays: every
+    // lookup, the serialisers and the codec read it, and nothing that iterates
+    // AsObject() moves. The parser records the order beside it, a copy carries
+    // it along, and a caller that wants it asks by name.
+    //
+    // A key the document repeats keeps its FIRST place and its last value,
+    // which is what Godot's Dictionary, JavaScript and Python do. Keys the
+    // parser never saw - added by Set, or in an object built in code - follow
+    // the recorded ones in map order, and a recorded key that is gone is left
+    // out, so the answer is always exactly the object's keys. Empty for
+    // anything that is not an object.
+    std::vector<std::string> OrderedKeys() const {
+        std::vector<std::string> keys;
+        if (m_type != Type::Object) return keys;
+
+        keys.reserve(m_object.size());
+        for (const std::string& key : m_keyOrder) {
+            if (m_object.count(key) != 0) keys.push_back(key);
+        }
+
+        // The recorded list holds no repeats, so a full count is every key -
+        // which is the case for anything straight from the parser.
+        if (keys.size() == m_object.size()) return keys;
+
+        std::vector<std::string> recorded(m_keyOrder);
+        std::sort(recorded.begin(), recorded.end());
+        for (const auto& entry : m_object) {
+            if (!std::binary_search(recorded.begin(), recorded.end(), entry.first)) {
+                keys.push_back(entry.first);
+            }
+        }
+        return keys;
+    }
+
     double AsNumber(double fallback = 0.0) const {
         return m_type == Type::Number ? m_number : fallback;
     }
@@ -94,17 +133,24 @@ public:
         if (m_type != Type::Object) {
             m_type = Type::Object;
             m_object.clear();
+            m_keyOrder.clear();
         }
         m_object.insert_or_assign(key, std::move(value));
     }
 
 private:
+    friend class Parser;
+
     Type m_type{Type::Null};
     bool m_bool{false};
     double m_number{0.0};
     std::string m_string;
     Array m_array;
     Object m_object;
+
+    // Document order for OrderedKeys, written only by the parser, each key
+    // once however often the document repeated it.
+    std::vector<std::string> m_keyOrder;
 };
 
 // Escapes a string for embedding in JSON. Entity tags are free-form user text;
@@ -224,6 +270,7 @@ private:
     bool parseObject(Value& out) {
         ++m_pos; // '{'
         Object obj;
+        std::vector<std::string> order;
         skipWhitespace();
         if (m_pos < m_text.size() && m_text[m_pos] == '}') { ++m_pos; out = Value(std::move(obj)); return true; }
 
@@ -241,7 +288,11 @@ private:
             // FIRST value for a duplicate key and silently drops the second,
             // so a hand-edited scene with a repeated key loaded as whichever
             // copy happened to come first.
-            obj.insert_or_assign(std::move(key), std::move(value));
+            //
+            // The ORDER is the first copy's, though: a repeat replaces the
+            // value where it already stands rather than moving it to the end.
+            const auto [slot, inserted] = obj.insert_or_assign(std::move(key), std::move(value));
+            if (inserted) order.push_back(slot->first);
 
             skipWhitespace();
             if (m_pos >= m_text.size()) return fail("unterminated object");
@@ -251,6 +302,7 @@ private:
         }
 
         out = Value(std::move(obj));
+        out.m_keyOrder = std::move(order);
         return true;
     }
 

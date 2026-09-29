@@ -475,7 +475,7 @@ verified by a screenshot of geometry it never touched.
 | `test_mixer` | Voice mixing: volume, summing, clamping rather than wrapping, looping, pitch and sample-rate conversion, panning, mono and 8-bit clips. There is no bus gain to test — the only volume is per voice |
 | `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths, and where a game's files resolve from: its own folder, the working directory, or the engine root the build named. And the window: the `Fullscreen` key and which of it and the two flags wins, a windowed game's manifest unchanged byte for byte, and `WindowControl`'s latch against a stand-in window — nothing applies until taken, the last request wins, a refused size latches nothing, hiding the cursor leaves a lock alone, a fullscreen mode rides on the fullscreen request and one the monitor does not offer is refused — with the modes a menu lists, the rate a fullscreen mode runs at, and the monitor a window goes fullscreen on |
 | `test_launchoptions` | Argument parsing, missing values, malformed counts, and `--fullscreen` refused beside `--windowed` |
-| `test_json` | Depth limit, trailing content, duplicate keys, malformed input |
+| `test_json` | Depth limit, trailing content, duplicate keys, malformed input, and an object's keys in the order the document wrote them, through repeats, later additions, copies and moves, with the map underneath unchanged |
 | `test_scenemanager` | Deferred loads, Save As, failed-save and failed-load behaviour |
 | `test_assetwatcher` | Change detection, deleted and restored files, duplicate watches, and a write the engine made itself |
 | `test_contacts` | Enter/stay/exit diffing, pair ordering, normal direction, triggers |
