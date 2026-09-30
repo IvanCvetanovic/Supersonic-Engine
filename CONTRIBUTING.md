@@ -73,5 +73,5 @@ green.
 
 ## Licence
 
-Contributions are accepted under the [MIT licence](LICENSE) that covers the rest
-of the project.
+Contributions are accepted under the [MIT No Attribution licence](LICENSE)
+(MIT-0) that covers the rest of the project.

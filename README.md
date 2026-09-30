@@ -11,7 +11,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
 [![Tests](https://img.shields.io/badge/tests-57%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
-[![License: MIT](https://img.shields.io/badge/license-MIT-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
+[![License: MIT-0](https://img.shields.io/badge/license-MIT--0-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 
 </div>
 
@@ -1207,16 +1207,22 @@ Built on the work of others, all vendored in `third_party/`:
 
 ## License
 
-[MIT](LICENSE). Use it, change it, ship it, sell it — commercially or otherwise,
-with or without credit. The only condition is that the copyright notice travels
-with copies of the engine's own source.
+[MIT No Attribution](LICENSE) (MIT-0). Use it, change it, ship it, sell it —
+commercially or otherwise, with or without credit. There are no conditions: not
+even the copyright notice has to travel with copies of the engine's own source.
 
-It comes with **no warranty of any kind, and no liability**. If you build
+It comes with **no warranty of any kind, and no liability**: Ivan Cvetanović is
+not responsible for anything that happens through its use. If you build
 something with it and that something breaks, that is yours to own, not the
 author's.
 
+The licence covers the engine's own source, shaders, branding and
+documentation.
+
 Every vendored dependency under `third_party/` is permissive too — MIT, zlib or
-Apache-2.0 — and none of them puts a condition on what you may build.
+Apache-2.0 — and none of them puts a condition on what you may build. Unlike
+the engine's own licence, theirs ask for their notices to travel with copies of
+them.
 Attributions and full licence texts are in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
