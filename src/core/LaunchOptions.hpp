@@ -79,6 +79,19 @@ struct LaunchOptions {
     bool fullscreen = false;
     bool windowed = false;
 
+    // --hidden: the window is created invisible and is never shown, so it
+    // never takes focus either. Everything else runs as it would in a window:
+    // the swapchain presents, --frames counts, --screenshot writes.
+    //
+    // It exists for the run nobody watches on a desk somebody is using. A
+    // capture that opens a window steals the keyboard from whatever that
+    // person was doing, and a game that ships fullscreen also switches the
+    // monitor under them. Refused beside --fullscreen, since the two ask for
+    // opposite things; the manifest's Fullscreen key and every request a game
+    // makes of WindowControl are ignored, and the window keeps the size it was
+    // created at, so the capture's size depends on the command line alone.
+    bool hidden = false;
+
     // Write every tick's input to this file, and a state hash every so often.
     //
     // Empty means record nothing, which is every ordinary run. A recording is

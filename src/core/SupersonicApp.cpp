@@ -208,9 +208,17 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     GameRuntime::ResolveWindowSize(m_manifest, m_options.windowWidth,
                                    m_options.windowHeight, windowWidth, windowHeight);
 
+    const std::string windowTitle = m_manifest.isGame ? m_manifest.title : "Supersonic Engine";
+#if SUPERSONIC_WINDOW_GLFW
     m_window = std::make_unique<Window>(static_cast<int>(windowWidth),
-                                        static_cast<int>(windowHeight),
-                                        m_manifest.isGame ? m_manifest.title : "Supersonic Engine");
+                                        static_cast<int>(windowHeight), windowTitle,
+                                        /*visible*/ !m_options.hidden);
+#else
+    // A phone's window is its screen and belongs to the platform; there is
+    // nothing to hide, so --hidden means nothing there.
+    m_window = std::make_unique<Window>(static_cast<int>(windowWidth),
+                                        static_cast<int>(windowHeight), windowTitle);
+#endif
 
     // Before the renderer, because the renderer initialises ImGui's GLFW
     // backend and that backend chains to whatever it finds already installed.
@@ -232,12 +240,20 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     // The resized flag the switch raised is cleared, because nothing has been
     // sized yet for it to be news to - left up, it would make the first
     // DrawFrame rebuild the swapchain it had just been handed and skip drawing.
+    //
+    // Neither for a hidden window. --hidden counts as --windowed (Parse refuses
+    // it beside --fullscreen), because fullscreen switches the monitor the
+    // window is not shown on. And no fit either: a hidden run is a capture,
+    // and its size must come from the command line, not from whichever monitor
+    // the machine it ran on has.
     m_windowControl = std::make_unique<NativeWindowControl>(*m_window);
-    if (GameRuntime::ResolveFullscreen(m_manifest, m_options.fullscreen, m_options.windowed)) {
+    if (GameRuntime::ResolveFullscreen(m_manifest, m_options.fullscreen,
+                                       m_options.windowed || m_options.hidden)) {
         m_windowControl->SetFullscreen(true);
         m_windowControl->ApplyPending();
         m_window->ResetResizedFlag();
-    } else if (m_manifest.fitWindowToMonitor > 0.0f && m_options.windowWidth == 0 &&
+    } else if (!m_options.hidden && m_manifest.fitWindowToMonitor > 0.0f &&
+               m_options.windowWidth == 0 &&
                m_windowControl->FitWindowToMonitor(m_manifest.fitWindowToMonitor)) {
         // Opt-in (GameManifest::fitWindowToMonitor), by the same call a game
         // makes at run time, for the same reason fullscreen is entered here.
@@ -1251,7 +1267,26 @@ void SupersonicApp::Run() {
         // hand-dragged edge takes: the resized flag DrawFrame checks before it
         // acquires, and ImGui's display size, which the game view hands the
         // offscreen target to rebuild at the top of the next frame.
-        m_windowControl->ApplyPending();
+        //
+        // A hidden window takes none of it: going fullscreen switches a monitor
+        // somebody is using, and a restore or a maximise SHOWS the window
+        // (GLFW's Win32 restore is ShowWindow(SW_RESTORE)). A size is refused
+        // too, so the capture stays at the size the command line gave it. The
+        // requests are taken rather than left, so a game polling Pending() sees
+        // them go, as Android's do.
+        if (m_options.hidden) {
+            if (m_windowControl->Pending().Any()) {
+                m_windowControl->TakeRequests();
+                if (!m_droppedHiddenWindowRequest) {
+                    m_droppedHiddenWindowRequest = true;
+                    SUPERSONIC_LOG_INFO("SupersonicApp")
+                        << "--hidden: the game asked for a window change, which a hidden "
+                           "window does not make; this and any later ones are dropped.";
+                }
+            }
+        } else {
+            m_windowControl->ApplyPending();
+        }
 
         m_window->PollEvents();
 

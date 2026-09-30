@@ -2416,6 +2416,17 @@ also *start* fullscreen: the manifest's `Fullscreen` key or `--fullscreen`,
 overridden for one run by `--windowed`, applied before the swapchain is first
 built so it starts at the monitor's size.
 
+Under `--hidden` none of it applies. The window is created with `GLFW_VISIBLE`
+off and nothing shows it: `SupersonicApp` takes a game's requests every frame
+and drops them instead of calling `ApplyPending`, because GLFW's Win32 restore
+is `ShowWindow(SW_RESTORE)`, a maximise of a visible window is another
+`ShowWindow`, and `glfwSetWindowMonitor` switches a display nobody asked to
+switch. The startup fullscreen and fitted window are skipped for the same
+reason. Cursor modes are inert on it: GLFW captures the cursor only for a
+focused window, and a window never shown is never focused. The ImGui backend's
+`glfwShowWindow` and `glfwFocusWindow` are for secondary viewports, which the
+engine never enables.
+
 Two things it does not do. A toggle moves the window's origin, so the frame
 after one reports a pointer delta of however far the pointer moved relative to
 the window — `Input` rebases the delta only when the cursor mode changes. And

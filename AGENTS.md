@@ -180,6 +180,19 @@ it runs on, and render at the monitor's resolution rather than the one asked
 for. A game changes the mode itself, while it runs, through `WindowControl`
 (`ARCHITECTURE.md` §8b).
 
+```bash
+# The same run with no window on screen at all: created hidden, never shown,
+# never focused. The PNG is written as before.
+./build/Debug/SupersonicEngine.exe --hidden --frames 300 --fixed-step     --window 1920x1080 --screenshot shot.png
+```
+
+`--hidden` is for a capture on a desk somebody is using. Nothing in it shows,
+focuses or resizes the window: the manifest's `Fullscreen` key and its fitted
+window are skipped, every `WindowControl` request a game makes is dropped (a
+restore or a maximise would show it), and a fatal error goes to stderr and the
+log rather than to a message box. It is refused beside `--fullscreen`, and
+warns without `--frames`, since there is no window to close.
+
 ### Recording a run and playing it back
 
 ```bash

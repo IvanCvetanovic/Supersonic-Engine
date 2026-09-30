@@ -14,7 +14,10 @@ namespace Supersonic {
 
 class Window {
 public:
-    Window(int width, int height, const std::string& title);
+    // `visible` false creates the window hidden, and nothing here ever shows
+    // it (LaunchOptions::hidden). It still has a surface and a framebuffer of
+    // the size asked for, so the swapchain presents as it would on screen.
+    Window(int width, int height, const std::string& title, bool visible = true);
     ~Window();
 
     Window(const Window&) = delete;

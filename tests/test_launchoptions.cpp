@@ -460,6 +460,66 @@ static void testFullscreenAndWindowedTogetherAreRefused() {
     CHECK_MSG(both.error == reversed.error, "with the same message: " + both.error);
 }
 
+
+// --- --hidden: a run that never shows a window -------------------------------
+//
+// What lets a capture run on a desk somebody is using. The window it suppresses
+// needs a device to exist, so what is pinned here is the flag: read, off by
+// default, composing with the capture flags, and refused beside --fullscreen.
+
+static void testHiddenIsOffUnlessAskedFor() {
+    const auto plain = parse({"--frames", "60", "--windowed"});
+    CHECK(plain.ok);
+    CHECK_MSG(!plain.hidden, "every run shows its window unless told otherwise");
+
+    const auto hidden = parse({"--hidden", "--frames", "30"});
+    CHECK_MSG(hidden.ok, hidden.error);
+    CHECK(hidden.hidden);
+    CHECK_MSG(!hidden.fullscreen && !hidden.windowed,
+              "and it sets neither mode flag: the app treats it as windowed itself");
+}
+
+static void testHiddenComposesWithACaptureRun() {
+    // The command line stage 3's captures are taken with. --hidden takes no
+    // value, so the flag after it is still a flag.
+    const auto o = parse({"--hidden", "--fixed-step", "--window", "1920x1061", "--frames", "30",
+                          "--screenshot", "C:/shots/a.png"});
+    CHECK_MSG(o.ok, o.error);
+    CHECK(o.hidden);
+    CHECK_EQ(o.windowWidth, uint32_t{1920});
+    CHECK_EQ(o.windowHeight, uint32_t{1061});
+    CHECK_EQ(o.maxFrames, 30);
+    CHECK(o.screenshotPath == "C:/shots/a.png");
+    CHECK_MSG(o.warnings.empty(), "a framed, fixed-step hidden run has nothing to warn about");
+
+    // --windowed says the same thing twice, which is not a contradiction.
+    CHECK_MSG(parse({"--hidden", "--windowed", "--frames", "1"}).ok, "hidden beside windowed");
+}
+
+static void testHiddenAndFullscreenTogetherAreRefused() {
+    // A hidden window that went fullscreen would still switch the monitor it
+    // is not shown on, which is the thing the flag exists to prevent.
+    const auto both = parse({"--hidden", "--fullscreen", "--frames", "1"});
+    CHECK_MSG(!both.ok, "both at once is refused");
+    CHECK_MSG(both.error.find("--hidden") != std::string::npos &&
+                  both.error.find("--fullscreen") != std::string::npos,
+              "naming both flags: " + both.error);
+
+    const auto reversed = parse({"--fullscreen", "--frames", "1", "--hidden"});
+    CHECK_MSG(!reversed.ok, "in either order");
+    CHECK_MSG(both.error == reversed.error, "with the same message: " + both.error);
+}
+
+static void testHiddenWithoutAFrameCountWarns() {
+    // Accepted - a script may mean to stop it - but a hidden process nobody
+    // meant to leave running has no window to close.
+    const auto o = parse({"--hidden"});
+    CHECK_MSG(o.ok, "a warning, not a refusal: " + o.error);
+    CHECK_EQ(o.warnings.size(), std::size_t{1});
+    CHECK_MSG(!o.warnings.empty() && o.warnings[0].find("--frames") != std::string::npos,
+              "naming the flag that would end it");
+}
+
 static void runTests() {
     testRecordAndReplayTakePaths();
     testRecordingAReplayIsRefused();
@@ -496,6 +556,11 @@ static void runTests() {
     testNeitherModeFlagLeavesItToTheManifest();
     testTheModeFlagsAreRead();
     testFullscreenAndWindowedTogetherAreRefused();
+
+    testHiddenIsOffUnlessAskedFor();
+    testHiddenComposesWithACaptureRun();
+    testHiddenAndFullscreenTogetherAreRefused();
+    testHiddenWithoutAFrameCountWarns();
 }
 
-TEST_MAIN("test_launchoptions", 138)
+TEST_MAIN("test_launchoptions", 158)

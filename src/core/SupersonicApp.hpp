@@ -173,6 +173,11 @@ private:
     // swallowed before anyone could move the mouse. Editor only.
     bool m_escapeReleasedCursor{false};
 
+    // Whether a --hidden run has said once that it dropped a game's window
+    // request. Once, because a game re-applying its settings every frame
+    // would otherwise write the same line sixty times a second.
+    bool m_droppedHiddenWindowRequest{false};
+
     // Physics runs on a fixed step fed by this accumulator, so a stalled frame
     // cannot integrate a two-second delta in one go.
     float m_physicsAccumulator{0.0f};

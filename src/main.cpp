@@ -36,12 +36,20 @@ std::string logFilePath() {
 // A fatal error during init happens before there is a window, and on Windows a
 // GUI build has no console for the message to land in. Printing it and exiting
 // looks, to the person running it, exactly like nothing happening at all.
-void reportFatal(const std::string& what) {
+//
+// Not under --hidden: a message box is a window, it takes focus, and it waits
+// for a click nobody is there to give. That run was launched by a script,
+// which reads the exit code and the log.
+void reportFatal(const std::string& what, bool dialog) {
     std::cerr << "[Engine Fatal Exception]: " << what << std::endl;
 #if defined(_WIN32)
-    const std::string body = what + "\n\nFull details are in:\n" + logFilePath();
-    MessageBoxA(nullptr, body.c_str(), "Supersonic Engine - fatal error",
-                MB_OK | MB_ICONERROR);
+    if (dialog) {
+        const std::string body = what + "\n\nFull details are in:\n" + logFilePath();
+        MessageBoxA(nullptr, body.c_str(), "Supersonic Engine - fatal error",
+                    MB_OK | MB_ICONERROR);
+    }
+#else
+    (void)dialog;
 #endif
 }
 
@@ -189,11 +197,11 @@ int main(int argc, char** argv) {
         app.Run();
         replayDiverged = app.ReplayDiverged();
     } catch (const std::exception& e) {
-        reportFatal(e.what());
+        reportFatal(e.what(), !options.hidden);
         Supersonic::Log::CloseFileSink();
         return EXIT_FAILURE;
     } catch (...) {
-        reportFatal("unknown exception");
+        reportFatal("unknown exception", !options.hidden);
         Supersonic::Log::CloseFileSink();
         return EXIT_FAILURE;
     }

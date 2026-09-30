@@ -6,7 +6,7 @@
 
 namespace Supersonic {
 
-Window::Window(int width, int height, const std::string& title)
+Window::Window(int width, int height, const std::string& title, bool visible)
     : m_width(width), m_height(height), m_title(title) {
 
     // Installed before glfwInit so initialisation failures explain themselves.
@@ -47,6 +47,16 @@ Window::Window(int width, int height, const std::string& title)
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
+    // Hidden: GLFW shows and focuses a window at creation only when these say
+    // so. FOCUSED and FOCUS_ON_SHOW are for a show nothing in the engine makes
+    // - there is no glfwShowWindow call - so that if one is ever added, it
+    // still does not take the keyboard from whoever is at the desk.
+    if (!visible) {
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
+        glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+    }
+
     m_window = glfwCreateWindow(m_width, m_height, m_title.c_str(), nullptr, nullptr);
     if (!m_window) {
         glfwTerminate();
@@ -56,7 +66,8 @@ Window::Window(int width, int height, const std::string& title)
     glfwSetWindowUserPointer(m_window, this);
     glfwSetFramebufferSizeCallback(m_window, framebufferResizeCallback);
 
-    SUPERSONIC_LOG_INFO("Window") << "GLFW Window created: " << m_width << "x" << m_height << " (\"" << m_title << "\")" << std::endl;
+    SUPERSONIC_LOG_INFO("Window") << "GLFW Window created: " << m_width << "x" << m_height << " (\"" << m_title << "\")"
+                                  << (visible ? "" : ", hidden") << std::endl;
 }
 
 Window::~Window() {

@@ -47,6 +47,8 @@ const char* LaunchOptions::Usage() {
            "                  for a game: the offscreen target follows the window\n"
            "  --fullscreen    open covering the monitor, at its current mode\n"
            "  --windowed      open in a window, even if the manifest says fullscreen\n"
+           "  --hidden        never show the window or take focus; everything else,\n"
+           "                  captures included, runs as usual. Pair it with --frames\n"
            "  --import-assets give every asset under assets/ a stable identity,\n"
            "                  writing a .meta beside each, then exit\n"
            "  --help          print this message\n";
@@ -134,6 +136,8 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
             options.fullscreen = true;
         } else if (arg == "--windowed") {
             options.windowed = true;
+        } else if (arg == "--hidden") {
+            options.hidden = true;
         } else if (arg == "--import-assets") {
             options.importAssets = true;
         } else if (arg == "--screenshot") {
@@ -211,6 +215,13 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
         return fail("--fullscreen and --windowed cannot both be given");
     }
 
+    // Refused rather than one winning, for the same reason. A hidden window
+    // that went fullscreen would still switch the monitor it is not shown on.
+    if (options.hidden && options.fullscreen) {
+        return fail("--hidden and --fullscreen cannot both be given: a hidden "
+                    "window never covers a monitor");
+    }
+
     // After the loop for the same reason: --screenshot may come after it.
     // Refused, not ignored, because the stamped names are derived from that
     // path and there is nothing sensible to invent in its place.
@@ -228,6 +239,15 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
             "--screenshot-every without --fixed-step: the simulation follows the real "
             "clock, so the frames are not a fixed game time apart and will not "
             "reproduce from one run to the next");
+    }
+
+    // A warning too: a run that ends only when the game quits is a fair thing
+    // for a script to launch, but a hidden one that nobody meant to leave
+    // running is a process nobody can see to close.
+    if (options.hidden && options.maxFrames == 0) {
+        options.warnings.push_back(
+            "--hidden without --frames: there is no window to close, so the run ends "
+            "only when the game quits or the process is stopped");
     }
 
     return options;
