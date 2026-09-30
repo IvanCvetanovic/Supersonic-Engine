@@ -85,8 +85,8 @@ const char* LaunchOptions::Usage() {
            "                  for a game: the offscreen target follows the window\n"
            "  --fullscreen    open covering the monitor, at its current mode\n"
            "  --windowed      open in a window, even if the manifest says fullscreen\n"
-           "  --hidden        never show the window or take focus; everything else,\n"
-           "                  captures included, runs as usual. Pair it with --frames\n"
+           "  --hidden        never show the window or take focus, and read no live\n"
+           "                  mouse or pad; captures run as usual. Pair it with --frames\n"
            "  --import-assets give every asset under assets/ a stable identity,\n"
            "                  writing a .meta beside each, then exit\n"
            "  --help          print this message\n";

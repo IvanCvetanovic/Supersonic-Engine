@@ -213,6 +213,11 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     m_window = std::make_unique<Window>(static_cast<int>(windowWidth),
                                         static_cast<int>(windowHeight), windowTitle,
                                         /*visible*/ !m_options.hidden);
+    // A window never shown gets no key, button, wheel or character, but the
+    // pointer position and the pad are read from the OS whoever is using them
+    // (Input::IgnoreLiveDevices), and a capture must not follow somebody else's
+    // mouse.
+    if (m_options.hidden) Input::IgnoreLiveDevices(true);
 #else
     // A phone's window is its screen and belongs to the platform; there is
     // nothing to hide, so --hidden means nothing there.

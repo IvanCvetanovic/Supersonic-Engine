@@ -17,12 +17,16 @@ int mappedIds(int (&ids)[kMaxGamepads]) {
 
 } // namespace
 
+// Under Input::IgnoreLiveDevices (--hidden) there is no pad: XInput answers
+// whoever holds one, focus or not, and that is not this run's player.
 int Count() {
+    if (Input::LiveDevicesIgnored()) return 0;
     int ids[kMaxGamepads]{};
     return mappedIds(ids);
 }
 
 bool Get(int index, GamepadState& out) {
+    if (Input::LiveDevicesIgnored()) return false;
     int ids[kMaxGamepads]{};
     const int count = mappedIds(ids);
     if (index < 0 || index >= count) return false;

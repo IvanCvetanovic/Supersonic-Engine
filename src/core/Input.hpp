@@ -246,7 +246,36 @@ public:
     // Advances one frame: the current state becomes the previous state and the
     // snapshot becomes current. Must be called exactly once per frame, before
     // anything queries, or edge detection reports the same press twice.
+    //
+    // While IgnoreLiveDevices is on, the snapshot it is handed is not used:
+    // see below.
     static void Update(const RawInputState& state);
+
+    // --- A run nobody is at ------------------------------------------------
+    //
+    // `--hidden` runs a capture on a desk somebody is using, and two devices
+    // answer a window that has no focus and is not shown: on Windows GLFW
+    // reads the cursor position from the OS pointer wherever it is, and XInput
+    // reads the first pad whoever is holding it. So a hidden run's pointer
+    // followed that person's mouse, and every pad-bound action and axis their
+    // controller - a capture that depended on what somebody else was doing.
+    //
+    // While this is on, Update takes a snapshot with nothing held, no pad, no
+    // contacts, no text or scroll, and the pointer at PointerAway(), whatever
+    // it is handed; Gamepads, which a game calls directly, lists no pad. A
+    // hidden run reads no live input at all. A --replay still drives its
+    // ticks: BeginReplayedTick is not a device. Off by default; SupersonicApp
+    // turns it on for --hidden, on the desktop, before the first frame.
+    //
+    // Here rather than in the polling layer so a suite can check it: the
+    // polling layer is GLFW's, and nothing a suite links reaches it.
+    static void IgnoreLiveDevices(bool ignore);
+    static bool LiveDevicesIgnored();
+
+    // Where the pointer is while live devices are ignored: (-1, -1), one pixel
+    // above and left of the window. Outside it, so nothing is hovered, and
+    // finite, so a game mapping the pointer into its world gets a number.
+    static glm::vec2 PointerAway();
 
     // --- Edges for the FIXED TICK, which is not the frame -----------------
     //

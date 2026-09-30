@@ -218,8 +218,12 @@ for. A game changes the mode itself, while it runs, through `WindowControl`
 focuses or resizes the window: the manifest's `Fullscreen` key and its fitted
 window are skipped, every `WindowControl` request a game makes is dropped (a
 restore or a maximise would show it), and a fatal error goes to stderr and the
-log rather than to a message box. It is refused beside `--fullscreen`, and
-warns without `--frames`, since there is no window to close.
+log rather than to a message box. It reads no live input either: the pointer
+position and the first pad are read from the OS whether or not the window has
+focus, so under `--hidden` the input snapshot has nothing held, no pad, and the
+pointer at (-1, -1), and `Gamepads` lists no pad; `--replay` still drives the
+ticks. It is refused beside `--fullscreen`, and warns without `--frames`, since
+there is no window to close.
 
 ### Recording a run and playing it back
 

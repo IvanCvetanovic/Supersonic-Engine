@@ -94,7 +94,10 @@ struct LaunchOptions {
     bool windowed = false;
 
     // --hidden: the window is created invisible and is never shown, so it
-    // never takes focus either. Everything else runs as it would in a window:
+    // never takes focus either. It reads no live input: the pointer position
+    // and the pad, which the OS hands to an unfocused window too, are ignored
+    // (Input::IgnoreLiveDevices), so a capture cannot follow the mouse of
+    // whoever is at the desk. Everything else runs as it would in a window:
     // the swapchain presents, --frames counts, --screenshot writes.
     //
     // It exists for the run nobody watches on a desk somebody is using. A

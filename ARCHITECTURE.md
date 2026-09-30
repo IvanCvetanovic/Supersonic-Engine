@@ -2434,7 +2434,13 @@ switch. The startup fullscreen and fitted window are skipped for the same
 reason, by `GameRuntime::ResolveStartWindow`: pure, so `test_gameruntime` holds
 the hidden cases, and the answer a game repeating the engine's decision should
 ask for (the three-flag `ResolveFullscreen` does not know `--hidden`). Cursor modes are inert on it: GLFW captures the cursor only for a
-focused window, and a window never shown is never focused. The ImGui backend's
+focused window, and a window never shown is never focused. Its input is not:
+GLFW's Win32 cursor position is `GetCursorPos` whatever has focus, and XInput
+reads a pad for anyone, so `SupersonicApp` turns on
+`Input::IgnoreLiveDevices`, under which `Input::Update` takes a snapshot with
+nothing held and the pointer away, whatever the polling layer hands it, and
+`Gamepads` lists no pad. Keys, buttons, the wheel and characters arrive as
+window messages, which a window never shown does not get. The ImGui backend's
 `glfwShowWindow` and `glfwFocusWindow` are for secondary viewports, which the
 engine never enables.
 

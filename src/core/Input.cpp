@@ -136,6 +136,18 @@ CursorMode g_requestedCursor = CursorMode::Normal;
 bool g_cursorSuppressed = false;
 bool g_windowFocused = true;
 
+// IgnoreLiveDevices, and the snapshot Update takes in the devices' place.
+bool g_liveDevicesIgnored = false;
+
+const RawInputState& awayFromTheDevices() {
+    static const RawInputState away = [] {
+        RawInputState state;
+        state.mousePosition = Input::PointerAway();
+        return state;
+    }();
+    return away;
+}
+
 // What the last Update ran under. Locking or releasing the pointer moves it -
 // GLFW switches between screen coordinates and unbounded virtual ones, and puts
 // it back where it was on the way out - so the first frame under a new mode has
@@ -356,7 +368,13 @@ void Input::LoadDefaultBindings() {
     BindActionPadButton("Pause", Pad::Start);
 }
 
-void Input::Update(const RawInputState& state) {
+void Input::IgnoreLiveDevices(bool ignore) { g_liveDevicesIgnored = ignore; }
+bool Input::LiveDevicesIgnored() { return g_liveDevicesIgnored; }
+glm::vec2 Input::PointerAway() { return glm::vec2(-1.0f, -1.0f); }
+
+void Input::Update(const RawInputState& devices) {
+    const RawInputState& state = g_liveDevicesIgnored ? awayFromTheDevices() : devices;
+
     g_previous = g_current;
     g_current = state;
 

@@ -455,7 +455,7 @@ verified by a screenshot of geometry it never touched.
 | `test_serialize` | JSON reader, scene and prefab round-trips, including the scene's encoding and quantisation as words written only when chosen, the clear each encoding gets, a 2D light under its own key with each missing field at its default, and a text label's alignment written as a word only when it is not Center |
 | `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
 | `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, not reading our own save back, the count of material descriptor sets a dropped texture gives back, and the fourth map: each slot's own neutral (black for the overlay), the 2D sprite record, the switches and light mask sharing the flags word with the shader's copy, the premultiplied blend's factors, and the overlay, the 2D block and the third blend word surviving a save. And the 2D light buffer the shader declares: its record, its header, its cap and the mask's width. And the fifth map, the gloss: its white neutral, its binding, the stand-up's base line and the highlight's strength and power in the record, and all of them surviving a save while a sprite that uses none saves as before. And what a texture's `.meta` makes of its upload: nearest, clamp, one level and the alpha border each on its own, and a nearest filter nearest between levels too |
-| `test_input` | Action mapping, press/release edges, stick deadzone, gamepad fallback |
+| `test_input` | Action mapping, press/release edges, stick deadzone, gamepad fallback, and a `--hidden` run reading no live pointer or pad |
 | `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
 | `test_heightfield` | Terrain collision: the grid against the mesh vertex for vertex, seams, ridge crests, grooves, buried recovery, and the cell march a ray does |
@@ -916,7 +916,8 @@ against, have moved to their own repositories —
 - [x] A run with no window on screen: `--hidden` creates it invisible and
       nothing ever shows or focuses it, so a capture can be taken on a desk
       somebody is using. The manifest's fullscreen, a fitted window and a
-      game's window requests are all skipped under it
+      game's window requests are all skipped under it, and it reads no live
+      pointer or pad, so the capture does not follow the desk's mouse
 - [x] A capture with the UI in it: `--screenshot-ui` reads the swapchain back
       after the ImGui pass, so HUD text, panels and buttons are in the PNG, and
       `--screenshot-every` stamps it as it stamps `--screenshot`

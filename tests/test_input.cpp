@@ -987,6 +987,69 @@ static void testAWheelTurnedWhileNothingTicksIsDropped() {
     CHECK_NEAR(Input::TickScroll(), -1.0f);
 }
 
+// --- A hidden run reads no live devices ------------------------------------
+//
+// GLFW answers the cursor position from the OS pointer and XInput answers the
+// pad whether or not the window is focused or shown, so a --hidden capture
+// followed the mouse and the controller of whoever was at the desk.
+
+static void testAHiddenRunIgnoresThePointerAndThePadItIsHanded() {
+    reset();
+    Input::LoadDefaultBindings();
+
+    // What the devices report on a desk somebody is using: the pointer over
+    // the window, a pad with A held and the left stick pushed, the left
+    // button down, a wheel notch and a typed letter.
+    RawInputState desk;
+    desk.mousePosition = glm::vec2(500.0f, 300.0f);
+    desk.mouseButtons[MouseButton::Left] = true;
+    desk.padConnected = true;
+    desk.padButtons[Pad::A] = true;
+    desk.padAxes[Pad::LeftX] = 1.0f;
+    desk.keys[Key::Space] = true;
+    desk.scroll = 1.0f;
+    desk.textCharacters[0] = 'w';
+    desk.textCharacterCount = 1;
+    Input::SynthesiseMouseContact(desk);
+
+    // The control: without the flag all of it arrives.
+    frame(desk);
+    CHECK(Input::IsGamepadConnected());
+    CHECK(Input::IsDown("Jump"));
+    CHECK_NEAR(Input::MousePosition().x, 500.0f);
+
+    Input::IgnoreLiveDevices(true);
+    CHECK(Input::LiveDevicesIgnored());
+    frame(desk);
+    CHECK_MSG(!Input::IsGamepadConnected(), "a hidden run has no pad");
+    CHECK_MSG(!Input::IsDown("Jump"), "nor anything held, by any binding");
+    CHECK_NEAR(Input::GetAxis("MoveX"), 0.0f);
+    CHECK_MSG(Input::MousePosition() == Input::PointerAway(), "the pointer is away");
+    CHECK_MSG(Input::PointerAway().x < 0.0f && Input::PointerAway().y < 0.0f,
+              "which is outside the window");
+    CHECK_NEAR(Input::Scroll(), 0.0f);
+    CHECK_EQ(Input::TypedCharacterCount(), 0);
+
+    // And stays there while the person's mouse moves: no delta follows it.
+    // The held button makes no contact either - the one the control frame
+    // began was reported Ended on the frame above, and is gone now.
+    RawInputState moved = desk;
+    moved.mousePosition = glm::vec2(900.0f, 40.0f);
+    frame(moved);
+    CHECK_NEAR(Input::MouseDelta().x, 0.0f);
+    CHECK_NEAR(Input::MouseDelta().y, 0.0f);
+    CHECK_MSG(Input::MousePosition() == Input::PointerAway(), "still away");
+    CHECK_EQ(Input::ContactCount(), 0);
+
+    // Off again, the devices are read as before.
+    Input::IgnoreLiveDevices(false);
+    frame(moved);
+    CHECK_NEAR(Input::MousePosition().x, 900.0f);
+    CHECK(Input::IsGamepadConnected());
+
+    reset();
+}
+
 static void runTests() {
     testTheWheelIsHandedToOneTickLikeAPress();
     testAWheelTurnedWhileNothingTicksIsDropped();
@@ -1035,6 +1098,8 @@ static void runTests() {
     testACountBeyondTheArrayIsClampedRatherThanReadPast();
     testTheMouseIsContactZeroForAsLongAsItIsHeld();
     testTheHostOwningThePointerMeansNoContacts();
+
+    testAHiddenRunIgnoresThePointerAndThePadItIsHanded();
 }
 
-TEST_MAIN("test_input", 139)
+TEST_MAIN("test_input", 156)
