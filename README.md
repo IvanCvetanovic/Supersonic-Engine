@@ -917,7 +917,10 @@ against, have moved to their own repositories —
       nothing ever shows or focuses it, so a capture can be taken on a desk
       somebody is using. The manifest's fullscreen, a fitted window and a
       game's window requests are all skipped under it, and it reads no live
-      pointer or pad, so the capture does not follow the desk's mouse
+      pointer or pad, so the capture does not follow the desk's mouse. The
+      console is the launcher's to give: start it from a terminal, with
+      `Start-Process -NoNewWindow`, or with `CREATE_NO_WINDOW`
+      ([AGENTS.md](AGENTS.md#running-without-a-person-watching))
 - [x] A capture with the UI in it: `--screenshot-ui` reads the swapchain back
       after the ImGui pass, so HUD text, panels and buttons are in the PNG, and
       `--screenshot-every` stamps it as it stamps `--screenshot`

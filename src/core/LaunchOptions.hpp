@@ -100,6 +100,11 @@ struct LaunchOptions {
     // whoever is at the desk. Everything else runs as it would in a window:
     // the swapchain presents, --frames counts, --screenshot writes.
     //
+    // It cannot hide a console window. The executable is a console program,
+    // and Windows opens one for it, shown and focused, before main runs when
+    // the launcher has none to share; a hidden run is started from a console
+    // or with CREATE_NO_WINDOW (AGENTS.md).
+    //
     // It exists for the run nobody watches on a desk somebody is using. A
     // capture that opens a window steals the keyboard from whatever that
     // person was doing, and a game that ships fullscreen also switches the

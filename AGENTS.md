@@ -225,6 +225,23 @@ pointer at (-1, -1), and `Gamepads` lists no pad; `--replay` still drives the
 ticks. It is refused beside `--fullscreen`, and warns without `--frames`, since
 there is no window to close.
 
+**One window `--hidden` cannot stop is the console.** `SupersonicEngine.exe` is
+a console program, so Windows gives it a console of its own - a new window,
+shown and focused - whenever whatever launched it has none to hand down: a
+double-click, a scheduled task, a GUI program, PowerShell's `Start-Process`
+without `-NoNewWindow`. That happens before `main` runs, so no flag can undo
+it. Start a hidden run so that it shares its launcher's console or gets none:
+
+- from a terminal or a script running in one, directly, or with PowerShell
+  `Start-Process -NoNewWindow` (how the measured hidden run was started);
+- from a program with no console, `CreateProcess` with `CREATE_NO_WINDOW`
+  (Python: `subprocess.run(..., creationflags=subprocess.CREATE_NO_WINDOW)`).
+
+`Start-Process -WindowStyle Hidden` hides a console window conhost makes;
+check it before relying on it where Windows Terminal is the default terminal.
+A game's own executable built as a console program - a port's - is launched
+the same way.
+
 ### Recording a run and playing it back
 
 ```bash
