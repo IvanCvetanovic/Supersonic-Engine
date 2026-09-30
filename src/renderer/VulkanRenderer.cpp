@@ -13,6 +13,7 @@
 #include "core/ScreenOverlay.hpp"
 #include "core/Components.hpp"
 #include "core/EcsUtils.hpp"
+#include "core/ImagePixels.hpp"
 
 
 #include "imgui.h"
@@ -26,6 +27,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 
 namespace Supersonic {
 
@@ -111,6 +113,7 @@ VulkanRenderer::~VulkanRenderer() {
     m_lightIndexBuffers.clear();
     m_light2DBuffers.clear();
     m_shadow2DBuffers.clear();
+    m_captureBuffer.reset();
     m_meshRegistry.reset();
     m_screenOverlayPipeline.reset();
     if (m_screenOverlayRenderPass) {
@@ -255,13 +258,28 @@ void VulkanRenderer::createRenderPass() {
     dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
 
+    // A readable swapchain's frame may be copied after the pass
+    // (recordSwapchainCapture). The implicit dependency out of a pass ends at
+    // BOTTOM_OF_PIPE, which nothing can chain from, so without this one the
+    // copy's barrier would not be ordered after the attachment writes and the
+    // transition to PresentSrc. Added only then, so any other swapchain's pass
+    // is exactly what it was.
+    vk::SubpassDependency toCopy{};
+    toCopy.srcSubpass = 0;
+    toCopy.dstSubpass = VK_SUBPASS_EXTERNAL;
+    toCopy.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    toCopy.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    toCopy.dstStageMask = vk::PipelineStageFlagBits::eTransfer;
+    toCopy.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+    const std::array<vk::SubpassDependency, 2> dependencies{dependency, toCopy};
+
     vk::RenderPassCreateInfo renderPassInfo{};
     renderPassInfo.attachmentCount = 1;
     renderPassInfo.pAttachments = &colorAttachment;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = 1;
-    renderPassInfo.pDependencies = &dependency;
+    renderPassInfo.dependencyCount = m_swapchainRef.IsReadable() ? 2u : 1u;
+    renderPassInfo.pDependencies = dependencies.data();
 
     m_renderPass = m_deviceRef.GetDevice().createRenderPass(renderPassInfo);
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "Swapchain RenderPass (ImGui UI Pass) created." << std::endl;
@@ -1328,6 +1346,11 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
                                const CameraComponent& camera) {
     vk::Device device = m_deviceRef.GetDevice();
 
+    // Taken here, before any early return: a request is for THIS frame, and a
+    // frame that is not drawn copies nothing rather than handing the request
+    // on to a later one.
+    const bool captureSwapchain = std::exchange(m_captureArmed, false);
+
     const glm::mat4 viewMatrix = camera.getViewMatrix();
     const glm::mat4 projMatrix = camera.getProjectionMatrix();
     const glm::vec3 cameraPosition = camera.position;
@@ -2122,6 +2145,11 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     }
 
     cmd.endRenderPass();
+
+    // After the ImGui pass, so every UI component is in it, and before the
+    // present, after which the image is not ours to read.
+    if (captureSwapchain) recordSwapchainCapture(cmd, imageIndex);
+
     cmd.end();
 
     const vk::Semaphore waitSemaphores[] = { m_imageAvailableSemaphores[m_currentFrame] };
@@ -2170,6 +2198,160 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     }
 
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+namespace {
+
+// The swapchain formats a capture can be packed from, and in which order.
+// False for anything else: a 10-bit or float swapchain is not four bytes a
+// pixel, and packing it as though it were would write a PNG of noise.
+bool captureOrderFor(vk::Format format, ImagePixels::ChannelOrder& order) {
+    switch (format) {
+    case vk::Format::eB8G8R8A8Unorm:
+    case vk::Format::eB8G8R8A8Srgb:
+        order = ImagePixels::ChannelOrder::Bgra;
+        return true;
+    case vk::Format::eR8G8B8A8Unorm:
+    case vk::Format::eR8G8B8A8Srgb:
+        order = ImagePixels::ChannelOrder::Rgba;
+        return true;
+    default:
+        return false;
+    }
+}
+
+} // namespace
+
+void VulkanRenderer::CaptureSwapchainThisFrame() {
+    m_captureArmed = true;
+    m_captureRecorded = false;
+    m_captureFailure.clear();
+}
+
+void VulkanRenderer::recordSwapchainCapture(vk::CommandBuffer cmd, uint32_t imageIndex) {
+    if (!m_swapchainRef.IsReadable()) {
+        m_captureFailure = "this surface does not offer swapchain images that can be copied from";
+        return;
+    }
+    const vk::Format format = m_swapchainRef.GetImageFormat();
+    ImagePixels::ChannelOrder order{};
+    if (!captureOrderFor(format, order)) {
+        m_captureFailure = "the swapchain is " + vk::to_string(format) +
+                           ", and only 8-bit RGBA or BGRA can be written as a PNG";
+        return;
+    }
+
+    const vk::Extent2D extent = m_swapchainRef.GetExtent();
+    const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(extent.width) * extent.height * 4;
+    if (!m_captureBuffer || m_captureBuffer->GetSize() < bytes) {
+        // A frame still in flight may be copying into the old one.
+        if (m_captureBuffer) {
+            m_deviceRef.DeferDestroy(
+                [old = std::shared_ptr<VulkanBuffer>(std::move(m_captureBuffer))]() mutable {
+                    old.reset();
+                });
+        }
+        m_captureBuffer = std::make_unique<VulkanBuffer>(
+            m_deviceRef.GetAllocator(), bytes, vk::BufferUsageFlagBits::eTransferDst,
+            VMA_MEMORY_USAGE_CPU_ONLY, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
+    }
+
+    const vk::Image image = m_swapchainRef.GetImages()[imageIndex];
+    const auto transition = [&](vk::ImageLayout from, vk::ImageLayout to,
+                                vk::PipelineStageFlags srcStage, vk::AccessFlags srcAccess,
+                                vk::PipelineStageFlags dstStage, vk::AccessFlags dstAccess) {
+        vk::ImageMemoryBarrier barrier{};
+        barrier.oldLayout = from;
+        barrier.newLayout = to;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+        barrier.srcAccessMask = srcAccess;
+        barrier.dstAccessMask = dstAccess;
+        cmd.pipelineBarrier(srcStage, dstStage, {}, 0, nullptr, 0, nullptr, 1, &barrier);
+    };
+
+    // The pass left the image in PresentSrc, and its dependency to EXTERNAL
+    // (createRenderPass) made the UI's writes visible to transfer reads; this
+    // chains from that at the transfer stage.
+    transition(vk::ImageLayout::ePresentSrcKHR, vk::ImageLayout::eTransferSrcOptimal,
+               vk::PipelineStageFlagBits::eTransfer, {},
+               vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
+
+    vk::BufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;  // tightly packed
+    region.bufferImageHeight = 0;
+    region.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+    region.imageOffset = vk::Offset3D{0, 0, 0};
+    region.imageExtent = vk::Extent3D{extent.width, extent.height, 1};
+    cmd.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal,
+                          m_captureBuffer->GetBuffer(), 1, &region);
+
+    // Back to PresentSrc for the present, which waits on the frame's semaphore.
+    transition(vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::ePresentSrcKHR,
+               vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead,
+               vk::PipelineStageFlagBits::eBottomOfPipe, {});
+
+    // And the copy visible to the host that maps the buffer once the frame's
+    // work is done (ReadSwapchainCapture).
+    vk::BufferMemoryBarrier toHost{};
+    toHost.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+    toHost.dstAccessMask = vk::AccessFlagBits::eHostRead;
+    toHost.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toHost.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toHost.buffer = m_captureBuffer->GetBuffer();
+    toHost.offset = 0;
+    toHost.size = VK_WHOLE_SIZE;
+    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eHost, {},
+                        0, nullptr, 1, &toHost, 0, nullptr);
+
+    m_captureRecorded = true;
+    m_captureExtent = extent;
+    m_captureFormat = format;
+}
+
+bool VulkanRenderer::ReadSwapchainCapture(std::vector<uint8_t>& outRgba, uint32_t& outWidth,
+                                          uint32_t& outHeight, std::string& outError) {
+    if (!m_captureRecorded || !m_captureBuffer) {
+        outError = !m_captureFailure.empty()
+                       ? m_captureFailure
+                       : "the frame asked for was not drawn - the swapchain was being rebuilt - "
+                         "so there is no copy of it";
+        return false;
+    }
+    ImagePixels::ChannelOrder order{};
+    if (!captureOrderFor(m_captureFormat, order)) {
+        outError = "the swapchain format changed under the copy";
+        return false;
+    }
+
+    // Everything submitted, the frame that copied included, has finished.
+    m_deviceRef.GetDevice().waitIdle();
+
+    void* mapped = nullptr;
+    m_captureBuffer->Map(&mapped);
+    if (!mapped) {
+        outError = "could not map the swapchain capture buffer";
+        return false;
+    }
+    // A no-op on coherent memory, which is what VMA usually picks here; on
+    // memory that is not, the mapping would otherwise show stale cache lines.
+    vmaInvalidateAllocation(m_deviceRef.GetAllocator(), m_captureBuffer->GetAllocation(), 0,
+                            VK_WHOLE_SIZE);
+    outRgba = ImagePixels::PackOpaqueRgba(static_cast<const uint8_t*>(mapped),
+                                          m_captureExtent.width, m_captureExtent.height,
+                                          static_cast<std::size_t>(m_captureExtent.width) * 4, order);
+    m_captureBuffer->Unmap();
+
+    outWidth = m_captureExtent.width;
+    outHeight = m_captureExtent.height;
+    if (outRgba.empty()) {
+        outError = "the swapchain capture was empty";
+        return false;
+    }
+    return true;
 }
 
 } // namespace Supersonic

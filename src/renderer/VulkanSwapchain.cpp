@@ -8,8 +8,8 @@
 
 namespace Supersonic {
 
-VulkanSwapchain::VulkanSwapchain(VulkanDevice& device, Window& window)
-    : m_deviceRef(device), m_device(device.GetDevice()) {
+VulkanSwapchain::VulkanSwapchain(VulkanDevice& device, Window& window, bool readable)
+    : m_deviceRef(device), m_device(device.GetDevice()), m_wantReadable(readable) {
     if (!m_device) {
         throw std::runtime_error("Cannot create VulkanSwapchain with null logical device!");
     }
@@ -137,6 +137,20 @@ void VulkanSwapchain::createSwapChain(Window& window) {
     createInfo.imageArrayLayers = 1;
     createInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
 
+    // Copyable only when asked for and offered. A usage the surface does not
+    // list is invalid, not merely ignored, and colour attachment is the only
+    // one Vulkan guarantees - so an unoffered readback fails the capture, never
+    // the swapchain.
+    m_readable = m_wantReadable && static_cast<bool>(swapChainSupport.capabilities.supportedUsageFlags &
+                                                     vk::ImageUsageFlagBits::eTransferSrc);
+    if (m_readable) {
+        createInfo.imageUsage |= vk::ImageUsageFlagBits::eTransferSrc;
+    } else if (m_wantReadable) {
+        SUPERSONIC_LOG_ERROR("VulkanSwapchain")
+            << "A readable swapchain was asked for, but this surface does not offer transfer-source "
+               "images; the frame cannot be read back." << std::endl;
+    }
+
     QueueFamilyIndices indices = m_deviceRef.GetQueueFamilyIndices();
     uint32_t queueFamilyIndices[] = {
         indices.graphicsFamily.value(),
@@ -181,7 +195,10 @@ void VulkanSwapchain::createSwapChain(Window& window) {
     }
 #endif
     createInfo.presentMode = presentMode;
-    createInfo.clipped = VK_TRUE;
+    // Clipped lets the driver skip pixels no one can see - under another
+    // window, or all of them when the window is hidden - and leaves them
+    // undefined to a reader. A swapchain that is read back owns every pixel.
+    createInfo.clipped = m_readable ? VK_FALSE : VK_TRUE;
     createInfo.oldSwapchain = nullptr;
 
     m_swapChain = m_device.createSwapchainKHR(createInfo);
@@ -192,7 +209,8 @@ void VulkanSwapchain::createSwapChain(Window& window) {
 
     SUPERSONIC_LOG_INFO("VulkanSwapchain") << "Swapchain created successfully with "
               << m_swapChainImages.size() << " images ("
-              << m_swapChainExtent.width << "x" << m_swapChainExtent.height << ")."
+              << m_swapChainExtent.width << "x" << m_swapChainExtent.height << ", "
+              << vk::to_string(m_swapChainImageFormat) << (m_readable ? ", readable" : "") << ")."
               << std::endl;
 }
 

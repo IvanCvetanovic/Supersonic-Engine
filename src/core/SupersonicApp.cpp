@@ -265,7 +265,14 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     m_vulkanContext = std::make_unique<VulkanContext>(requiredExtensions);
 
     m_vulkanDevice = std::make_unique<VulkanDevice>(m_vulkanContext->GetInstance(), *m_window);
-    m_swapchain = std::make_unique<VulkanSwapchain>(*m_vulkanDevice, *m_window);
+    // Readable only for --screenshot-ui, the one thing that copies out of it.
+    m_swapchain = std::make_unique<VulkanSwapchain>(*m_vulkanDevice, *m_window,
+                                                    !m_options.screenshotUiPath.empty());
+    if (!m_options.screenshotUiPath.empty() && !m_swapchain->IsReadable()) {
+        SUPERSONIC_LOG_ERROR("SupersonicApp")
+            << "--screenshot-ui: this surface cannot be read back, so no UI capture will be "
+               "written. The run goes on; --screenshot, if given, is unaffected.";
+    }
     // The editor's appearance, handed to the renderer rather than reached for
     // by it. This is the only line in the engine that decides what the UI looks
     // like, and it is in the application - which is where the editor is.
@@ -1076,6 +1083,11 @@ void SupersonicApp::Run() {
         if (m_options.CapturesFrame(frame)) {
             writeScreenshot(m_options.ScreenshotPathForFrame(frame));
         }
+        // The same frame as the window showed it, copied as it was drawn
+        // (ReadsBackSwapchain, below DrawFrame's call).
+        if (m_options.CapturesUiFrame(frame)) {
+            writeUiScreenshot(m_options.UiScreenshotPathForFrame(frame));
+        }
 
         if (m_options.maxFrames > 0 && frame >= m_options.maxFrames) {
             SUPERSONIC_LOG_INFO("SupersonicApp") << "Rendered " << frame
@@ -1086,6 +1098,9 @@ void SupersonicApp::Run() {
             // whatever survives shutdown.
             if (!m_options.screenshotPath.empty()) {
                 writeScreenshot(m_options.screenshotPath);
+            }
+            if (!m_options.screenshotUiPath.empty()) {
+                writeUiScreenshot(m_options.screenshotUiPath);
             }
 
             // Report where the frames went. Without this the profiler is
@@ -1893,6 +1908,13 @@ void SupersonicApp::Run() {
             }
         }
 
+        // --screenshot-ui reads the swapchain image, which is only readable
+        // until it is presented, so the copy is asked of this frame before it
+        // is drawn; the top of the next iteration writes it.
+        if (m_options.ReadsBackSwapchain(frame) && m_renderer->CanCaptureSwapchain()) {
+            m_renderer->CaptureSwapchainThisFrame();
+        }
+
         // Timed from inside, in four parts. One zone around this call said
         // 6.08 ms and could not say how much of it was work.
         m_renderer->DrawFrame(m_registry,
@@ -1923,6 +1945,26 @@ void SupersonicApp::writeScreenshot(const std::string& path) {
             << offscreen.GetWidth() << "x" << offscreen.GetHeight() << ").";
     } else {
         SUPERSONIC_LOG_ERROR("SupersonicApp") << "Screenshot " << path << " failed: " << error;
+    }
+}
+
+void SupersonicApp::writeUiScreenshot(const std::string& path) {
+    if (!m_renderer->CanCaptureSwapchain()) {
+        SUPERSONIC_LOG_ERROR("SupersonicApp")
+            << "UI screenshot " << path << " not written: the swapchain cannot be read back here.";
+        return;
+    }
+    std::vector<uint8_t> pixels;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    std::string error;
+    const bool ok = m_renderer->ReadSwapchainCapture(pixels, width, height, error) &&
+                    ScreenCapture::WriteRgbaPng(pixels.data(), width, height, path, error);
+    if (ok) {
+        SUPERSONIC_LOG_INFO("SupersonicApp")
+            << "Wrote " << path << " (" << width << "x" << height << ", the window with its UI).";
+    } else {
+        SUPERSONIC_LOG_ERROR("SupersonicApp") << "UI screenshot " << path << " failed: " << error;
     }
 }
 

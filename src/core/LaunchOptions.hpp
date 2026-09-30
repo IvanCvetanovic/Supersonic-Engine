@@ -31,8 +31,8 @@ struct LaunchOptions {
     std::string screenshotPath;
 
     // --screenshot-every N: also write every Nth rendered frame, beside
-    // screenshotPath and named by ScreenshotPathForFrame. Zero means the flag
-    // was not given.
+    // screenshotPath and named by ScreenshotPathForFrame, and beside
+    // screenshotUiPath when that is given. Zero means the flag was not given.
     //
     // It exists because a check of anything that MOVES - a walk cycle, a
     // flicker, a patrol - wants several frames of one run, and each extra
@@ -43,6 +43,20 @@ struct LaunchOptions {
     // the last frame is still written exactly where it always was: a script
     // that compares that file keeps working with the flag added.
     int screenshotEvery = 0;
+
+    // --screenshot-ui <path>: the frame as the window shows it, UI included.
+    //
+    // --screenshot reads the composited scene, before the ImGui pass draws
+    // every UI component over it, so no label, panel or button has ever been
+    // in one. This reads the SWAPCHAIN image back after that pass instead.
+    // Written at the same moments --screenshot is - after the last frame of a
+    // --frames run, and with --screenshot-every at every Nth frame, stamped
+    // the same way - and either flag may be given without the other.
+    //
+    // The readback is recorded into the frame's own commands, since a
+    // swapchain image cannot be read once it has been presented, so which
+    // frames it takes is decided before each is drawn (ReadsBackSwapchain).
+    std::string screenshotUiPath;
 
     // Feed the simulation a constant delta instead of the measured one.
     //
@@ -148,6 +162,22 @@ struct LaunchOptions {
     // is not zero-padded, matching the _f420 names captures are already
     // filed under.
     std::string ScreenshotPathForFrame(long long renderedFrames) const;
+
+    // The same two answers for --screenshot-ui: whether --screenshot-every
+    // asks for its capture after `renderedFrames` frames, and under which
+    // name, screenshotUiPath stamped as ScreenshotPathForFrame stamps its own.
+    bool CapturesUiFrame(long long renderedFrames) const;
+    std::string UiScreenshotPathForFrame(long long renderedFrames) const;
+
+    // Whether the frame about to be drawn as number `frame` (counting from 1)
+    // has to be read back from the swapchain: a stamped UI frame, or the last
+    // frame of a --frames run when --screenshot-ui is given. Asked BEFORE the
+    // frame is drawn, because the copy is recorded into its commands.
+    bool ReadsBackSwapchain(long long frame) const;
+
+    // `path` with "_f<frame>" before its extension. Both stamped names are
+    // this, so the two captures of one frame are named alike.
+    static std::string StampFrame(const std::string& path, long long frame);
 
     static LaunchOptions Parse(int argc, const char* const* argv);
     static const char* Usage();

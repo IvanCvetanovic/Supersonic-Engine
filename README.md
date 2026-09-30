@@ -424,7 +424,7 @@ translation units that exist only to compile VMA and tinygltf.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Fifty-seven suites, each a plain executable with no test framework behind it —
+Fifty-eight suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 There is also a scene that exists to be rendered rather than to be played:
@@ -474,7 +474,8 @@ verified by a screenshot of geometry it never touched.
 | `test_screenoverlay` | The screen overlay drawn after the tone map: where a quad lands in clip space and texture space, that order is draw order, the blend it is drawn with, and that the shader carries the same vertex table. And the composite under it: the four numbers each scene encoding sends, and that the shader's branches are numbered as the enum is |
 | `test_mixer` | Voice mixing: volume, summing, clamping rather than wrapping, looping, pitch and sample-rate conversion, panning, mono and 8-bit clips. There is no bus gain to test — the only volume is per voice |
 | `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths, and where a game's files resolve from: its own folder, the working directory, or the engine root the build named. And the window: the `Fullscreen` key and which of it and the two flags wins, a windowed game's manifest unchanged byte for byte, and `WindowControl`'s latch against a stand-in window — nothing applies until taken, the last request wins, a refused size latches nothing, hiding the cursor leaves a lock alone, a fullscreen mode rides on the fullscreen request and one the monitor does not offer is refused — with the modes a menu lists, the rate a fullscreen mode runs at, and the monitor a window goes fullscreen on |
-| `test_launchoptions` | Argument parsing, missing values, malformed counts, `--fullscreen` refused beside `--windowed`, and `--hidden` composing with a capture run, refused beside `--fullscreen` and warning without `--frames` |
+| `test_launchoptions` | Argument parsing, missing values, malformed counts, `--fullscreen` refused beside `--windowed`, and `--hidden` composing with a capture run, refused beside `--fullscreen` and warning without `--frames`. And `--screenshot-ui`: which frames are read back from the swapchain, decided before each is drawn, and their stamped names |
+| `test_imagepixels` | Pixels in memory: a swapchain readback packed for a PNG — BGRA swizzled channel by channel, RGBA untouched, every alpha 255, padded rows packed tight |
 | `test_json` | Depth limit, trailing content, duplicate keys, malformed input, and an object's keys in the order the document wrote them, through repeats, later additions, copies and moves, with the map underneath unchanged |
 | `test_scenemanager` | Deferred loads, Save As, failed-save and failed-load behaviour |
 | `test_assetwatcher` | Change detection, deleted and restored files, duplicate watches, and a write the engine made itself |
@@ -893,6 +894,9 @@ against, have moved to their own repositories —
       nothing ever shows or focuses it, so a capture can be taken on a desk
       somebody is using. The manifest's fullscreen, a fitted window and a
       game's window requests are all skipped under it
+- [x] A capture with the UI in it: `--screenshot-ui` reads the swapchain back
+      after the ImGui pass, so HUD text, panels and buttons are in the PNG, and
+      `--screenshot-every` stamps it as it stamps `--screenshot`
 - [x] Nearest-neighbour texture filtering, asked for by the asset's `.meta` and
       not by the material that uses it — so pixel art stays sharp, and two
       materials naming one file cannot disagree about it

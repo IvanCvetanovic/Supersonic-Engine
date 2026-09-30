@@ -1191,13 +1191,22 @@ before the letter and keeps it. That is the price of not carrying a merged,
 ordered event queue — the only thing such a queue would buy over polling is the
 OS repeat delay for Backspace, which ImGui already knows.
 
-**None of this can be seen in a headless screenshot, and that is not new.**
+**`--screenshot` cannot see any of this; `--screenshot-ui` can.**
 `--screenshot` captures the offscreen 3D target, while the whole HUD is drawn
 into an ImGui draw list that composites in the ImGui pass — so no button, label
-or panel has ever appeared in one either. What a screenshot cannot reach, the
-tests do: the rule in `test_uicanvas`, the arbitration in `test_uiinput`, the
-round trip in `test_serialize`. What neither reaches is the character callback
-itself and the caret blinking, and those want a person and a keyboard.
+or panel has ever appeared in one. `--screenshot-ui` reads the swapchain image
+back after that pass instead. The copy is recorded into the frame's own command
+buffer (`VulkanRenderer::recordSwapchainCapture`), since the image is not the
+application's once presented: the pass gains a dependency to EXTERNAL at the
+transfer stage, only on a swapchain built with `eTransferSrc`, and the image goes
+PresentSrc → TransferSrc → PresentSrc around a copy into a host buffer that the
+top of the next frame maps and packs (`ImagePixels::PackOpaqueRgba`, BGRA
+swizzled). That swapchain is also built with `clipped` off, which otherwise lets
+a driver skip pixels nobody can see — every pixel of a hidden window. What a
+picture cannot reach, the tests do: the rule in `test_uicanvas`, the arbitration
+in `test_uiinput`, the round trip in `test_serialize`. What neither reaches is
+the character callback itself and the caret blinking, and those want a person
+and a keyboard.
 
 ### 7. Physics
 

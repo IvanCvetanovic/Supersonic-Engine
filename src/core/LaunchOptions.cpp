@@ -16,11 +16,29 @@ bool LaunchOptions::CapturesFrame(long long renderedFrames) const {
 }
 
 std::string LaunchOptions::ScreenshotPathForFrame(long long renderedFrames) const {
+    return StampFrame(screenshotPath, renderedFrames);
+}
+
+bool LaunchOptions::CapturesUiFrame(long long renderedFrames) const {
+    return screenshotEvery > 0 && !screenshotUiPath.empty() && renderedFrames > 0 &&
+           renderedFrames % screenshotEvery == 0;
+}
+
+std::string LaunchOptions::UiScreenshotPathForFrame(long long renderedFrames) const {
+    return StampFrame(screenshotUiPath, renderedFrames);
+}
+
+bool LaunchOptions::ReadsBackSwapchain(long long frame) const {
+    if (screenshotUiPath.empty() || frame <= 0) return false;
+    return CapturesUiFrame(frame) || (maxFrames > 0 && frame == maxFrames);
+}
+
+std::string LaunchOptions::StampFrame(const std::string& pathText, long long frame) {
     // std::filesystem for the split rather than the last '.', which would take
     // "captures.v2/run" apart at the directory. replace_filename keeps the
     // separator the caller typed, so the log names the file as it was asked for.
-    std::filesystem::path path(screenshotPath);
-    const std::string stamped = path.stem().string() + "_f" + std::to_string(renderedFrames) +
+    std::filesystem::path path(pathText);
+    const std::string stamped = path.stem().string() + "_f" + std::to_string(frame) +
                                 path.extension().string();
     path.replace_filename(stamped);
     return path.string();
@@ -31,7 +49,9 @@ const char* LaunchOptions::Usage() {
            "  --frames <n>    render exactly n frames, then exit (0 = until closed)\n"
            "  --scene <path>  load this scene instead of the manifest's startup scene\n"
            "  --screenshot <path>  write a PNG of the last frame and exit\n"
-           "  --screenshot-every <n>  with --screenshot, also write every nth frame\n"
+           "  --screenshot-ui <path>  the same, of the window as shown: read back\n"
+           "                    after the UI is drawn, so HUD text and panels are in it\n"
+           "  --screenshot-every <n>  with either, also write every nth frame\n"
            "                    as <path-stem>_f<frame><ext>; pair it with\n"
            "                    --fixed-step, or the frames are wall-clock apart\n"
            "  --fixed-step [s]  simulate at a constant delta (default 1/60) so a\n"
@@ -143,6 +163,9 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
         } else if (arg == "--screenshot") {
             if (!value(options.screenshotPath)) return fail("--screenshot needs a path");
             if (options.screenshotPath.empty()) return fail("--screenshot needs a path");
+        } else if (arg == "--screenshot-ui") {
+            if (!value(options.screenshotUiPath)) return fail("--screenshot-ui needs a path");
+            if (options.screenshotUiPath.empty()) return fail("--screenshot-ui needs a path");
         } else if (arg == "--screenshot-every") {
             std::string raw;
             if (!value(raw)) return fail("--screenshot-every needs a frame count");
@@ -225,9 +248,17 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
     // After the loop for the same reason: --screenshot may come after it.
     // Refused, not ignored, because the stamped names are derived from that
     // path and there is nothing sensible to invent in its place.
-    if (options.screenshotEvery > 0 && options.screenshotPath.empty()) {
-        return fail("--screenshot-every needs --screenshot <path>: the frames it "
-                    "writes are named after that path");
+    if (options.screenshotEvery > 0 && options.screenshotPath.empty() &&
+        options.screenshotUiPath.empty()) {
+        return fail("--screenshot-every needs --screenshot <path> or --screenshot-ui "
+                    "<path>: the frames it writes are named after that path");
+    }
+
+    // Two captures of every chosen frame into one file would leave whichever
+    // was written second, and say nothing about the other.
+    if (!options.screenshotPath.empty() && options.screenshotPath == options.screenshotUiPath) {
+        return fail("--screenshot and --screenshot-ui name the same file, '" +
+                    options.screenshotPath + "': each writes its own");
     }
 
     // A warning rather than a refusal: frames N apart on the real clock are

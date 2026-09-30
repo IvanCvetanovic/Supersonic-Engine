@@ -36,5 +36,11 @@ bool WritePng(VulkanDevice& device, vk::CommandPool commandPool, vk::Image image
               uint32_t width, uint32_t height, const std::string& path,
               std::string& outError);
 
+// Writes pixels already read back - tightly packed RGBA, `width` x `height` -
+// to `path` as a PNG. WritePng's last step, for a capture read some other way:
+// the swapchain readback (VulkanRenderer::ReadSwapchainCapture).
+bool WriteRgbaPng(const uint8_t* rgba, uint32_t width, uint32_t height,
+                  const std::string& path, std::string& outError);
+
 } // namespace ScreenCapture
 } // namespace Supersonic

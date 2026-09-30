@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
@@ -124,6 +126,32 @@ public:
     // The renderer's transfer/graphics command pool, for one-off work like a
     // screenshot readback.
     vk::CommandPool GetCommandPool() const { return m_commandPool; }
+
+    // ---- Reading back the frame as the window shows it --------------------
+    //
+    // The offscreen image --screenshot reads holds the scene and nothing the
+    // ImGui pass draws over it, which is every UI component. The swapchain
+    // image holds both, but only until it is presented, so the copy is
+    // recorded into the frame itself: after the ImGui pass, into a host buffer
+    // the renderer keeps, the image going PresentSrc -> TransferSrc -> PresentSrc.
+
+    // Whether the swapchain was built readable (VulkanSwapchain::IsReadable).
+    bool CanCaptureSwapchain() const { return m_swapchainRef.IsReadable(); }
+
+    // Copy the image the NEXT DrawFrame presents. Consumed by that call: if it
+    // returns before recording - a resize, an out-of-date swapchain - nothing
+    // was copied, and ReadSwapchainCapture says so rather than handing back an
+    // older frame.
+    void CaptureSwapchainThisFrame();
+
+    // The last copied frame as tightly packed, opaque RGBA, swizzled from BGRA
+    // where the swapchain is. Waits for the device, so the copy has landed.
+    // Not consuming: asked twice, it answers twice with the same bytes, which
+    // is what lets the last stamped frame and the final capture of a run be
+    // identical. False, with a reason, when the last request was not copied or
+    // the swapchain's format is not 8-bit RGBA or BGRA.
+    bool ReadSwapchainCapture(std::vector<uint8_t>& outRgba, uint32_t& outWidth,
+                              uint32_t& outHeight, std::string& outError);
 
     // Pixels a game owns, as something the UI can draw. Owned here because
     // it holds device resources and needs the renderer's command pool.
@@ -409,6 +437,17 @@ private:
     vk::DescriptorPool m_imguiPool{nullptr};
 
     uint32_t m_currentFrame{0};
+
+    // The swapchain readback (CaptureSwapchainThisFrame). Armed by the caller,
+    // taken by the next DrawFrame; `recorded` is true once a copy has been
+    // submitted, with the size and format it was taken at.
+    void recordSwapchainCapture(vk::CommandBuffer cmd, uint32_t imageIndex);
+    bool m_captureArmed{false};
+    bool m_captureRecorded{false};
+    std::string m_captureFailure;
+    vk::Extent2D m_captureExtent{0, 0};
+    vk::Format m_captureFormat{vk::Format::eUndefined};
+    std::unique_ptr<VulkanBuffer> m_captureBuffer;
 };
 
 } // namespace Supersonic

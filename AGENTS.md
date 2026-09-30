@@ -71,7 +71,7 @@ subproject build would define twice.
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Fifty-seven suites. Rather than repeat the list here - the copy that used to
+Fifty-eight suites. Rather than repeat the list here - the copy that used to
 live in this file had fallen thirteen entries behind - see the table in
 [README.md](README.md#testing), or read it from the build, which is where CI
 gets it:
@@ -152,6 +152,29 @@ last launch had already drawn; one run now writes them all.
   fixed game time, and the frames will not reproduce.
 - Every capture stalls the queue, so the profiler's worst frames and the wall
   time of such a run are the readback's, not the scene's.
+
+```bash
+# The window as it is shown, UI included: HUD text, panels, buttons - and in
+# the editor, the editor. Beside --screenshot or on its own.
+./build/Debug/SupersonicEngine.exe --frames 120 --screenshot shot.png     --screenshot-ui shot_ui.png
+```
+
+`--screenshot` reads the composited scene, which the ImGui pass then draws
+every UI component over, so no label or panel has ever been in one.
+`--screenshot-ui <path>` reads the swapchain image back after that pass
+instead, at the window's size.
+
+- It is written when `--screenshot` is: after the last frame of a `--frames`
+  run, and with `--screenshot-every N` at every Nth frame as
+  `<stem>_f<frame><ext>`. Either path is enough for `--screenshot-every`; the
+  two may not name the same file.
+- The copy is recorded into the frame itself, because a swapchain image cannot
+  be read once presented; a frame that is not drawn (a swapchain rebuilt
+  mid-run) logs an error rather than writing an older one.
+- It needs a surface that offers transfer-source swapchain images. One that
+  does not logs an error and writes no UI file; the run and `--screenshot`
+  go on.
+- BGRA swapchains are swizzled, and the alpha is written as 255.
 
 ```bash
 # Open at a chosen size. In game mode this is the render resolution too.

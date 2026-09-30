@@ -11,7 +11,12 @@ namespace Supersonic {
 
 class VulkanSwapchain {
 public:
-    VulkanSwapchain(VulkanDevice& device, Window& window);
+    // `readable` asks for images that can be copied from, so the finished
+    // frame - UI included - can be read back (--screenshot-ui). Granted only
+    // where the surface lists eTransferSrc among its supported usages;
+    // IsReadable() says whether it was. Off, the swapchain is exactly what it
+    // always was.
+    VulkanSwapchain(VulkanDevice& device, Window& window, bool readable = false);
     ~VulkanSwapchain();
 
     VulkanSwapchain(const VulkanSwapchain&) = delete;
@@ -22,6 +27,10 @@ public:
     vk::Extent2D GetExtent() const { return m_swapChainExtent; }
     const std::vector<vk::Image>& GetImages() const { return m_swapChainImages; }
     const std::vector<vk::ImageView>& GetImageViews() const { return m_swapChainImageViews; }
+
+    // Whether the images carry eTransferSrc, so a frame can be copied out of
+    // one before it is presented. Decided each time the swapchain is built.
+    bool IsReadable() const { return m_readable; }
 
     void Recreate(Window& window);
     void Cleanup();
@@ -43,6 +52,9 @@ private:
 
     std::vector<vk::Image> m_swapChainImages;
     std::vector<vk::ImageView> m_swapChainImageViews;
+
+    bool m_wantReadable{false};
+    bool m_readable{false};
 };
 
 } // namespace Supersonic

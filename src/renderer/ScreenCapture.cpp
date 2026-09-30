@@ -117,8 +117,17 @@ bool WritePng(VulkanDevice& device, vk::CommandPool commandPool, vk::Image image
     // produce a PNG that looks empty in some viewers and fine in others.
     for (size_t i = 3; i < pixels.size(); i += 4) pixels[i] = 255;
 
+    return WriteRgbaPng(pixels.data(), width, height, path, outError);
+}
+
+bool WriteRgbaPng(const uint8_t* rgba, uint32_t width, uint32_t height,
+                  const std::string& path, std::string& outError) {
+    if (!rgba || width == 0 || height == 0) {
+        outError = "no pixels to write";
+        return false;
+    }
     const int written = stbi_write_png(path.c_str(), static_cast<int>(width),
-                                       static_cast<int>(height), 4, pixels.data(),
+                                       static_cast<int>(height), 4, rgba,
                                        static_cast<int>(width) * 4);
     if (!written) {
         outError = "stbi_write_png failed for " + path;

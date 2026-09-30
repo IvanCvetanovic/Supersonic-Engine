@@ -74,6 +74,8 @@ add_engine_test(test_uiinput)
 add_engine_test(test_uicanvas)
 add_engine_test(test_worldshapes)
 add_engine_test(test_screenoverlay)
+# Pixels in memory: a swapchain readback packed into the PNG's byte order.
+add_engine_test(test_imagepixels)
 add_engine_test(test_gameruntime)
 add_engine_test(test_packaging)
 add_engine_test(test_userdata)

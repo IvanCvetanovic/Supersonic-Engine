@@ -98,6 +98,11 @@ private:
     // so the two files cannot differ by a byte.
     void writeScreenshot(const std::string& path);
 
+    // The same for --screenshot-ui, from the swapchain copy the renderer made
+    // of that frame (VulkanRenderer::ReadSwapchainCapture). Not consuming, so
+    // the last stamped frame and the final file are one copy, twice.
+    void writeUiScreenshot(const std::string& path);
+
 public:
     // Whether a --replay run disagreed with the hashes it was checked against.
     //

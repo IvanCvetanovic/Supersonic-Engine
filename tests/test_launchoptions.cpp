@@ -461,6 +461,91 @@ static void testFullscreenAndWindowedTogetherAreRefused() {
 }
 
 
+// --- --screenshot-ui: the frame as the window shows it -----------------------
+//
+// The readback itself needs a swapchain. What is pinned here is when it is
+// asked for - which has to be known BEFORE a frame is drawn, since the copy is
+// recorded into that frame - and under which names.
+
+static void testScreenshotUiPathIsRead() {
+    const auto o = parse({"--frames", "30", "--screenshot-ui", "shots/ui.png"});
+    CHECK_MSG(o.ok, o.error);
+    CHECK(o.screenshotUiPath == "shots/ui.png");
+    CHECK_MSG(o.screenshotPath.empty(), "and it does not stand in for --screenshot");
+
+    CHECK_MSG(!parse({"--screenshot-ui"}).ok, "a bare flag is refused rather than read past argv");
+    CHECK_MSG(!parse({"--screenshot-ui", ""}).ok, "and so is an empty path");
+
+    // Both at once, each to its own file: one run, the scene and the window.
+    const auto both = parse({"--frames", "30", "--screenshot", "scene.png",
+                             "--screenshot-ui", "window.png"});
+    CHECK_MSG(both.ok, both.error);
+    CHECK(both.screenshotPath == "scene.png" && both.screenshotUiPath == "window.png");
+
+    // One file for both would keep whichever was written second.
+    const auto same = parse({"--screenshot", "x.png", "--screenshot-ui", "x.png"});
+    CHECK_MSG(!same.ok, "the same path for both is refused");
+    CHECK_MSG(same.error.find("x.png") != std::string::npos, "naming it: " + same.error);
+}
+
+static void testScreenshotEveryStampsTheUiCaptureToo() {
+    // Either path is enough for --screenshot-every; with only the UI one, the
+    // scene capture is not written at all.
+    const auto o = parse({"--frames", "90", "--fixed-step", "--screenshot-ui", "shots/ui.png",
+                          "--screenshot-every", "30"});
+    CHECK_MSG(o.ok, o.error);
+    CHECK(o.CapturesUiFrame(30) && o.CapturesUiFrame(60) && o.CapturesUiFrame(90));
+    CHECK_MSG(!o.CapturesUiFrame(0) && !o.CapturesUiFrame(45), "only the multiples, never frame 0");
+    CHECK_MSG(!o.CapturesFrame(30), "no --screenshot, no scene capture");
+    CHECK_MSG(o.UiScreenshotPathForFrame(30) == "shots/ui_f30.png",
+              "stamped as the scene capture is: " + o.UiScreenshotPathForFrame(30));
+
+    // With both, one frame gives two files named alike.
+    const auto both = parse({"--fixed-step", "--screenshot", "run.png", "--screenshot-ui",
+                             "run_ui.png", "--screenshot-every", "10"});
+    CHECK_MSG(both.ok, both.error);
+    CHECK(both.CapturesFrame(10) && both.CapturesUiFrame(10));
+    CHECK(both.ScreenshotPathForFrame(10) == "run_f10.png");
+    CHECK(both.UiScreenshotPathForFrame(10) == "run_ui_f10.png");
+    CHECK(LaunchOptions::StampFrame("a/b.png", 7) == "a/b_f7.png");
+}
+
+static void testTheFramesTheSwapchainIsReadBackFor() {
+    const auto countOver = [](const LaunchOptions& o, long long frames) {
+        std::vector<long long> read;
+        for (long long frame = 0; frame <= frames; ++frame) {
+            if (o.ReadsBackSwapchain(frame)) read.push_back(frame);
+        }
+        return read;
+    };
+
+    // Every stamped frame, and the last is one of them: 14 copies in 420.
+    const auto stamped = parse({"--frames", "420", "--fixed-step", "--screenshot-ui", "u.png",
+                                "--screenshot-every", "30"});
+    const auto a = countOver(stamped, 420);
+    CHECK_EQ(a.size(), std::size_t{14});
+    CHECK_MSG(!a.empty() && a.front() == 30 && a.back() == 420, "30 to 420");
+
+    // A last frame that is not a multiple is read back as well, for the final
+    // file: 30, 60, 90 and 100.
+    const auto ragged = parse({"--frames", "100", "--fixed-step", "--screenshot-ui", "u.png",
+                               "--screenshot-every", "30"});
+    const auto b = countOver(ragged, 100);
+    CHECK_EQ(b.size(), std::size_t{4});
+    CHECK_MSG(!b.empty() && b.back() == 100, "the last frame, for <path> itself");
+
+    // Without --screenshot-every, only the last frame.
+    const auto last = countOver(parse({"--frames", "30", "--screenshot-ui", "u.png"}), 30);
+    CHECK_EQ(last.size(), std::size_t{1});
+    CHECK_MSG(!last.empty() && last.front() == 30, "frame 30 of 30");
+
+    // And none at all for a run that did not ask, or has no last frame.
+    CHECK_MSG(countOver(parse({"--frames", "30", "--screenshot", "s.png"}), 30).empty(),
+              "--screenshot alone reads nothing back from the swapchain");
+    CHECK_MSG(countOver(parse({"--screenshot-ui", "u.png"}), 500).empty(),
+              "no --frames and no --screenshot-every, nothing to copy");
+}
+
 // --- --hidden: a run that never shows a window -------------------------------
 //
 // What lets a capture run on a desk somebody is using. The window it suppresses
@@ -561,6 +646,10 @@ static void runTests() {
     testHiddenComposesWithACaptureRun();
     testHiddenAndFullscreenTogetherAreRefused();
     testHiddenWithoutAFrameCountWarns();
+
+    testScreenshotUiPathIsRead();
+    testScreenshotEveryStampsTheUiCaptureToo();
+    testTheFramesTheSwapchainIsReadBackFor();
 }
 
-TEST_MAIN("test_launchoptions", 158)
+TEST_MAIN("test_launchoptions", 185)
