@@ -289,6 +289,62 @@ static void testTheWindowedFlagBeatsTheFullscreenFlagWhichBeatsTheManifest() {
               "--windowed must beat a fullscreen manifest");
 }
 
+// --hidden, as the window starts. SupersonicApp made this decision inline, so
+// the two terms that keep a hidden run from switching a monitor or sizing
+// itself to one had never been checked by anything.
+static void testAHiddenRunStartsWindowedAndUnfitted() {
+    GameManifest fullscreen;
+    fullscreen.isGame = true;
+    fullscreen.fullscreen = true;
+    GameManifest fitted;
+    fitted.isGame = true;
+    fitted.fitWindowToMonitor = 0.85f;
+
+    LaunchOptions plain;
+    LaunchOptions hidden;
+    hidden.hidden = true;
+
+    // The controls: without --hidden the manifest answers, so the flag is the
+    // only thing the hidden cases below change.
+    CHECK(GameRuntime::ResolveStartWindow(fullscreen, plain).fullscreen);
+    CHECK_EQ(GameRuntime::ResolveStartWindow(fitted, plain).fitFraction, 0.85f);
+    CHECK(!GameRuntime::ResolveStartWindow(fitted, plain).fullscreen);
+
+    // A game that ships fullscreen starts in a window when hidden.
+    const GameRuntime::StartWindow hiddenFullscreen =
+        GameRuntime::ResolveStartWindow(fullscreen, hidden);
+    CHECK_MSG(!hiddenFullscreen.fullscreen, "--hidden never covers a monitor");
+    CHECK_EQ(hiddenFullscreen.fitFraction, 0.0f);
+
+    // And a fitted one keeps the size it was created at.
+    CHECK_MSG(GameRuntime::ResolveStartWindow(fitted, hidden).fitFraction == 0.0f,
+              "--hidden fits nothing: the capture's size is the command line's");
+
+    // Both at once: still a plain window.
+    GameManifest both = fitted;
+    both.fullscreen = true;
+    const GameRuntime::StartWindow hiddenBoth = GameRuntime::ResolveStartWindow(both, hidden);
+    CHECK(!hiddenBoth.fullscreen && hiddenBoth.fitFraction == 0.0f);
+
+    // The rules that were there before --hidden, unchanged: --window names the
+    // size and fits nothing, a fullscreen start fits nothing, and --windowed
+    // over a fitted fullscreen manifest fits it.
+    LaunchOptions sized;
+    sized.windowWidth = 1920;
+    sized.windowHeight = 1061;
+    CHECK_EQ(GameRuntime::ResolveStartWindow(fitted, sized).fitFraction, 0.0f);
+    CHECK_EQ(GameRuntime::ResolveStartWindow(both, plain).fitFraction, 0.0f);
+    CHECK(GameRuntime::ResolveStartWindow(both, plain).fullscreen);
+    LaunchOptions windowed;
+    windowed.windowed = true;
+    CHECK_EQ(GameRuntime::ResolveStartWindow(both, windowed).fitFraction, 0.85f);
+
+    // What the three-argument form answers is what ResolveStartWindow answers
+    // when --hidden is not given, so a caller of either agrees with the other.
+    CHECK(GameRuntime::ResolveFullscreen(fullscreen, false, false) ==
+          GameRuntime::ResolveStartWindow(fullscreen, plain).fullscreen);
+}
+
 
 // --- The window a game changes while it runs ---------------------------------
 //
@@ -942,6 +998,7 @@ static void runTests() {
     testFullscreenSurvivesTheRoundTripThePackagerUses();
     testAWindowedGameGetsTheManifestItAlwaysDid();
     testTheWindowedFlagBeatsTheFullscreenFlagWhichBeatsTheManifest();
+    testAHiddenRunStartsWindowedAndUnfitted();
 
     testARequestWaitsToBeTaken();
     testTheLastRequestBeforeTheFrameWins();
@@ -970,4 +1027,4 @@ static void runTests() {
     testTheEnginesOwnBuildNamesNoRoot();
 }
 
-TEST_MAIN("test_gameruntime", 50)
+TEST_MAIN("test_gameruntime", 62)

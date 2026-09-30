@@ -241,20 +241,19 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     // sized yet for it to be news to - left up, it would make the first
     // DrawFrame rebuild the swapchain it had just been handed and skip drawing.
     //
-    // Neither for a hidden window. --hidden counts as --windowed (Parse refuses
-    // it beside --fullscreen), because fullscreen switches the monitor the
-    // window is not shown on. And no fit either: a hidden run is a capture,
-    // and its size must come from the command line, not from whichever monitor
-    // the machine it ran on has.
+    // Neither for a hidden window, which ResolveStartWindow decides: --hidden
+    // counts as --windowed (Parse refuses it beside --fullscreen), because
+    // fullscreen switches the monitor the window is not shown on. And no fit
+    // either: a hidden run is a capture, and its size must come from the
+    // command line, not from whichever monitor the machine it ran on has.
     m_windowControl = std::make_unique<NativeWindowControl>(*m_window);
-    if (GameRuntime::ResolveFullscreen(m_manifest, m_options.fullscreen,
-                                       m_options.windowed || m_options.hidden)) {
+    const GameRuntime::StartWindow start = GameRuntime::ResolveStartWindow(m_manifest, m_options);
+    if (start.fullscreen) {
         m_windowControl->SetFullscreen(true);
         m_windowControl->ApplyPending();
         m_window->ResetResizedFlag();
-    } else if (!m_options.hidden && m_manifest.fitWindowToMonitor > 0.0f &&
-               m_options.windowWidth == 0 &&
-               m_windowControl->FitWindowToMonitor(m_manifest.fitWindowToMonitor)) {
+    } else if (start.fitFraction > 0.0f &&
+               m_windowControl->FitWindowToMonitor(start.fitFraction)) {
         // Opt-in (GameManifest::fitWindowToMonitor), by the same call a game
         // makes at run time, for the same reason fullscreen is entered here.
         m_windowControl->ApplyPending();

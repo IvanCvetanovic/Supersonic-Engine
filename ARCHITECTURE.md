@@ -2431,7 +2431,9 @@ and drops them instead of calling `ApplyPending`, because GLFW's Win32 restore
 is `ShowWindow(SW_RESTORE)`, a maximise of a visible window is another
 `ShowWindow`, and `glfwSetWindowMonitor` switches a display nobody asked to
 switch. The startup fullscreen and fitted window are skipped for the same
-reason. Cursor modes are inert on it: GLFW captures the cursor only for a
+reason, by `GameRuntime::ResolveStartWindow`: pure, so `test_gameruntime` holds
+the hidden cases, and the answer a game repeating the engine's decision should
+ask for (the three-flag `ResolveFullscreen` does not know `--hidden`). Cursor modes are inert on it: GLFW captures the cursor only for a
 focused window, and a window never shown is never focused. The ImGui backend's
 `glfwShowWindow` and `glfwFocusWindow` are for secondary viewports, which the
 engine never enables.
@@ -2719,7 +2721,7 @@ one.
 | `StartupScene` | `assets/scenes/MainScene.scene` | Scene loaded before the first frame. |
 | `Width` | `1280` | The window the game opens at, in pixels. In game mode the offscreen target follows the window every frame, so it is the render resolution too. |
 | `Height` | `720` | The other half. Half a size is not a size, so a manifest naming one without the other gets the default pair rather than that width against somebody else's height. A value outside 64..16384 is refused *and logged* — a size nobody can see is a mistake, and a window they did not ask for with nothing to explain it is worse. |
-| `Fullscreen` | `false` | Open covering the monitor, at its current mode, so the render resolution is the monitor's; `Width` and `Height` are then the size it returns to when the player asks for a window. Written only when true, so a windowed game's manifest is the one it always was. `--fullscreen` and `--windowed` override it for one run, and `GameRuntime::ResolveFullscreen` is that order. |
+| `Fullscreen` | `false` | Open covering the monitor, at its current mode, so the render resolution is the monitor's; `Width` and `Height` are then the size it returns to when the player asks for a window. Written only when true, so a windowed game's manifest is the one it always was. `--fullscreen` and `--windowed` override it for one run, and `GameRuntime::ResolveFullscreen` is that order. `GameRuntime::ResolveStartWindow` is the whole start, `--hidden` (windowed, and fitted to nothing) included. |
 
 The `Game` key, not the file's existence, is the switch, so a stray manifest in a
 build tree cannot turn the editor into a game. `Parse` returns immediately when

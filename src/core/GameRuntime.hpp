@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include "core/LaunchOptions.hpp"
+
 namespace Supersonic {
 
 // Tells the engine whether it was launched as the editor or as a shipped game.
@@ -123,7 +125,38 @@ void ResolveWindowSize(const GameManifest& manifest, uint32_t optionWidth,
 // ships fullscreen, which would otherwise cover the desk it is being run on.
 // The two flags together are refused by the parser, so their order here only
 // decides a case that cannot arrive.
+//
+// It does not know about `--hidden`, which is not one of its arguments. The
+// answer SupersonicApp reaches is ResolveStartWindow's, below: a caller that
+// needs to agree with the window the engine really opened asks that instead.
 bool ResolveFullscreen(const GameManifest& manifest, bool optionFullscreen, bool optionWindowed);
+
+// How the window starts, decided before the device and the first swapchain.
+struct StartWindow {
+    // Covering the monitor from the first frame.
+    bool fullscreen{false};
+
+    // Above zero: a windowed start fitted to its monitor at this fraction of
+    // the work area (WindowControl::FitWindowToMonitor). Zero: the window
+    // stays at the size ResolveWindowSize gave it.
+    float fitFraction{0.0f};
+};
+
+// The whole of that decision, as SupersonicApp makes it: ResolveFullscreen,
+// then the manifest's fitted window when the start is windowed and `--window`
+// named no size.
+//
+// `--hidden` counts as `--windowed` here, and it fits nothing either. A hidden
+// window that went fullscreen would switch a monitor somebody is using, and a
+// hidden run is a capture whose size must come from its command line rather
+// than from whatever monitor the machine it ran on has.
+//
+// Pure and split out for ResolveWindowSize's reason: this was written inline
+// in SupersonicApp, which no suite can construct, and the `--hidden` terms in
+// it had then been checked by nothing at all. A game that repeats the engine's
+// decision for its own bookkeeping (a menu that must start from the mode the
+// window really has) asks this, and gets the same answer under every flag.
+StartWindow ResolveStartWindow(const GameManifest& manifest, const LaunchOptions& options);
 
 } // namespace GameRuntime
 

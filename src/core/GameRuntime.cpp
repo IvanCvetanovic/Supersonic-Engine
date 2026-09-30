@@ -119,6 +119,17 @@ bool ResolveFullscreen(const GameManifest& manifest, bool optionFullscreen, bool
     return manifest.fullscreen;
 }
 
+StartWindow ResolveStartWindow(const GameManifest& manifest, const LaunchOptions& options) {
+    StartWindow start;
+    start.fullscreen =
+        ResolveFullscreen(manifest, options.fullscreen, options.windowed || options.hidden);
+    if (!start.fullscreen && !options.hidden && options.windowWidth == 0 &&
+        manifest.fitWindowToMonitor > 0.0f) {
+        start.fitFraction = manifest.fitWindowToMonitor;
+    }
+    return start;
+}
+
 GameManifest Load() {
     const std::filesystem::path directory = ExecutableDirectory();
     if (directory.empty()) return {};
