@@ -1939,6 +1939,7 @@ void SupersonicApp::writeScreenshot(const std::string& path) {
         offscreen.GetWidth(), offscreen.GetHeight(),
         path, error);
     if (ok) {
+        ++m_capturesWritten;
         SUPERSONIC_LOG_INFO("SupersonicApp")
             << "Wrote " << path << " ("
             << offscreen.GetWidth() << "x" << offscreen.GetHeight() << ").";
@@ -1960,6 +1961,7 @@ void SupersonicApp::writeUiScreenshot(const std::string& path) {
     const bool ok = m_renderer->ReadSwapchainCapture(pixels, width, height, error) &&
                     ScreenCapture::WriteRgbaPng(pixels.data(), width, height, path, error);
     if (ok) {
+        ++m_capturesWritten;
         SUPERSONIC_LOG_INFO("SupersonicApp")
             << "Wrote " << path << " (" << width << "x" << height << ", the window with its UI).";
     } else {
@@ -2048,5 +2050,7 @@ void SupersonicApp::finishRecording() {
 }
 
 bool SupersonicApp::ReplayDiverged() const { return m_replayDiverged; }
+
+long long SupersonicApp::CapturesWritten() const { return m_capturesWritten; }
 
 } // namespace Supersonic

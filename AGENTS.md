@@ -118,7 +118,11 @@ pressing F5 works without any extra setup.
 
 `--frames` is what makes any automated check of the engine possible: the run
 exits by itself, and an ERROR-severity validation message makes it exit
-non-zero.
+non-zero. So does a capture it was asked for and did not write: every stamped
+and final PNG of a `--frames` run is counted (`LaunchOptions::CapturesOwed`),
+and a run that wrote fewer fails rather than leave an older file at the path to
+pass for this run's. Without `--frames` nothing is owed, since whoever closes
+the window picks the last frame.
 
 Note that a plain `--frames` run sits in edit mode, so it exercises only the
 half of the engine that draws: no physics steps, no script runs, no particle
@@ -170,10 +174,11 @@ instead, at the window's size.
   two may not name the same file.
 - The copy is recorded into the frame itself, because a swapchain image cannot
   be read once presented; a frame that is not drawn (a swapchain rebuilt
-  mid-run) logs an error rather than writing an older one.
+  mid-run) logs an error rather than writing an older one, and the run then
+  exits non-zero.
 - It needs a surface that offers transfer-source swapchain images. One that
   does not logs an error and writes no UI file; the run and `--screenshot`
-  go on.
+  go on, and a `--frames` run exits non-zero at the end for the missing file.
 - BGRA swapchains are swizzled, and the alpha is written as 255.
 
 ```bash

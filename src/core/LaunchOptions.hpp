@@ -179,6 +179,22 @@ struct LaunchOptions {
     // this, so the two captures of one frame are named alike.
     static std::string StampFrame(const std::string& path, long long frame);
 
+    // How many PNGs a --frames run owes by its end: every stamped frame
+    // CapturesFrame and CapturesUiFrame pick from 1 to maxFrames, and one
+    // final file for each of screenshotPath and screenshotUiPath that is set.
+    // Zero without --frames: a run somebody closes by hand ends wherever they
+    // closed it, so it has not promised any frame.
+    long long CapturesOwed() const;
+
+    // Why a run that wrote `written` captures did not do what it was asked,
+    // or empty when it wrote all it owed. main() fails the run on anything
+    // else, because every way a capture can fail - a surface that cannot be
+    // read back, a frame the swapchain was rebuilt instead of drawn, a format
+    // it cannot pack, a disk that refused the file - only logs, and a script
+    // that finds last week's PNG at the path it named would otherwise take it
+    // for this run's.
+    std::string MissingCaptures(long long written) const;
+
     static LaunchOptions Parse(int argc, const char* const* argv);
     static const char* Usage();
 };

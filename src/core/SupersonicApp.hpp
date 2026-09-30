@@ -111,6 +111,12 @@ public:
     // being runnable without a person watching is the whole point of a replay.
     bool ReplayDiverged() const;
 
+    // How many PNGs --screenshot, --screenshot-ui and --screenshot-every
+    // actually wrote. Read by main() against LaunchOptions::CapturesOwed,
+    // counted on success rather than on failure so that no failure path,
+    // present or future, can be missed by the count.
+    long long CapturesWritten() const;
+
 private:
 
     ContactTracker m_contactTracker;
@@ -210,6 +216,9 @@ private:
     // that matters is the one where the two runs stopped being the same.
     bool m_replayDiverged{false};
     uint64_t m_replayDivergedAtTick{0};
+
+    // writeScreenshot and writeUiScreenshot, each file that reached the disk.
+    long long m_capturesWritten{0};
     uint64_t m_replayExpectedHash{0};
     uint64_t m_replayActualHash{0};
 

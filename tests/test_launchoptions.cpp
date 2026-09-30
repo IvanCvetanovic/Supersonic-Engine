@@ -546,6 +546,75 @@ static void testTheFramesTheSwapchainIsReadBackFor() {
               "no --frames and no --screenshot-every, nothing to copy");
 }
 
+// --- What a capture run owes ------------------------------------------------
+//
+// Every way a capture fails only logs, so main() compares the files a run wrote
+// with these. Without it a run whose PNG was never written exited 0, and a
+// script found last week's file at the path it named.
+
+static void testACaptureRunOwesEveryFileItNamed() {
+    // Counted from the same predicates the loop asks, so the count and the
+    // loop cannot drift apart: the stamped frames from 1 to maxFrames, then one
+    // final file per path.
+    const auto byTheLoop = [](const LaunchOptions& o) {
+        long long files = 0;
+        for (long long frame = 1; frame <= o.maxFrames; ++frame) {
+            if (o.CapturesFrame(frame)) ++files;
+            if (o.CapturesUiFrame(frame)) ++files;
+        }
+        if (o.maxFrames > 0 && !o.screenshotPath.empty()) ++files;
+        if (o.maxFrames > 0 && !o.screenshotUiPath.empty()) ++files;
+        return files;
+    };
+
+    const auto one = parse({"--frames", "30", "--screenshot", "a.png"});
+    CHECK_EQ(one.CapturesOwed(), 1LL);
+
+    const auto two = parse({"--frames", "30", "--screenshot", "a.png", "--screenshot-ui", "b.png"});
+    CHECK_EQ(two.CapturesOwed(), 2LL);
+
+    // 30 ... 420 is fourteen stamped files, and the final one besides.
+    const auto every = parse({"--frames", "420", "--fixed-step", "--screenshot", "x.png",
+                              "--screenshot-every", "30"});
+    CHECK_EQ(every.CapturesOwed(), 15LL);
+    CHECK_EQ(every.CapturesOwed(), byTheLoop(every));
+
+    // A ragged last frame: 30, 60, 90, and the final at 100, for each path.
+    const auto ragged = parse({"--frames", "100", "--fixed-step", "--screenshot", "x.png",
+                               "--screenshot-ui", "u.png", "--screenshot-every", "30"});
+    CHECK_EQ(ragged.CapturesOwed(), 8LL);
+    CHECK_EQ(ragged.CapturesOwed(), byTheLoop(ragged));
+
+    const auto uiOnly = parse({"--frames", "7", "--fixed-step", "--screenshot-ui", "u.png",
+                               "--screenshot-every", "1"});
+    CHECK_EQ(uiOnly.CapturesOwed(), 8LL);
+    CHECK_EQ(uiOnly.CapturesOwed(), byTheLoop(uiOnly));
+
+    // Nothing asked, nothing owed; and nothing without --frames, where the
+    // person closing the window decides the last frame.
+    CHECK_EQ(parse({"--frames", "30"}).CapturesOwed(), 0LL);
+    CHECK_EQ(parse({"--screenshot", "a.png"}).CapturesOwed(), 0LL);
+    CHECK_EQ(parse({"--fixed-step", "--screenshot", "a.png", "--screenshot-every", "10"})
+                 .CapturesOwed(),
+             0LL);
+}
+
+static void testARunThatWroteLessThanItOwedIsAFailure() {
+    const auto o = parse({"--frames", "100", "--fixed-step", "--screenshot", "x.png",
+                          "--screenshot-ui", "u.png", "--screenshot-every", "30"});
+    CHECK_MSG(o.MissingCaptures(8).empty(), "all eight written is a pass");
+
+    // One short - the UI capture of a frame the swapchain was rebuilt on, say.
+    const std::string missing = o.MissingCaptures(7);
+    CHECK_MSG(!missing.empty(), "one missing is a failure");
+    CHECK_MSG(missing.find("1 of the 8") != std::string::npos, "and says how many: " + missing);
+    CHECK_MSG(!o.MissingCaptures(0).empty(), "none written is a failure");
+
+    // A run that asked for nothing, or has no last frame, fails on nothing.
+    CHECK(parse({"--frames", "30"}).MissingCaptures(0).empty());
+    CHECK(parse({"--screenshot", "a.png"}).MissingCaptures(0).empty());
+}
+
 // --- --hidden: a run that never shows a window -------------------------------
 //
 // What lets a capture run on a desk somebody is using. The window it suppresses
@@ -650,6 +719,9 @@ static void runTests() {
     testScreenshotUiPathIsRead();
     testScreenshotEveryStampsTheUiCaptureToo();
     testTheFramesTheSwapchainIsReadBackFor();
+
+    testACaptureRunOwesEveryFileItNamed();
+    testARunThatWroteLessThanItOwedIsAFailure();
 }
 
-TEST_MAIN("test_launchoptions", 185)
+TEST_MAIN("test_launchoptions", 202)

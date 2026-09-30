@@ -33,6 +33,24 @@ bool LaunchOptions::ReadsBackSwapchain(long long frame) const {
     return CapturesUiFrame(frame) || (maxFrames > 0 && frame == maxFrames);
 }
 
+long long LaunchOptions::CapturesOwed() const {
+    if (maxFrames <= 0) return 0;
+    // Stamped frames are the multiples of N from N to maxFrames, which is
+    // CapturesFrame's rule; test_launchoptions counts it both ways.
+    const long long stamped = screenshotEvery > 0 ? maxFrames / screenshotEvery : 0;
+    long long owed = 0;
+    if (!screenshotPath.empty()) owed += stamped + 1;
+    if (!screenshotUiPath.empty()) owed += stamped + 1;
+    return owed;
+}
+
+std::string LaunchOptions::MissingCaptures(long long written) const {
+    const long long owed = CapturesOwed();
+    if (written >= owed) return {};
+    return std::to_string(owed - written) + " of the " + std::to_string(owed) +
+           " capture(s) this run was asked for were not written; the log says why";
+}
+
 std::string LaunchOptions::StampFrame(const std::string& pathText, long long frame) {
     // std::filesystem for the split rather than the last '.', which would take
     // "captures.v2/run" apart at the directory. replace_filename keeps the

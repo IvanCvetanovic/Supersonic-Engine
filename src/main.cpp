@@ -192,10 +192,15 @@ int main(int argc, char** argv) {
     // person watching is the whole point of one.
     bool replayDiverged = false;
 
+    // And whether it wrote every capture it was asked for, for the same
+    // reason: each way a capture fails only logs.
+    std::string missingCaptures;
+
     try {
         Supersonic::SupersonicApp app(options);
         app.Run();
         replayDiverged = app.ReplayDiverged();
+        missingCaptures = options.MissingCaptures(app.CapturesWritten());
     } catch (const std::exception& e) {
         reportFatal(e.what(), !options.hidden);
         Supersonic::Log::CloseFileSink();
@@ -226,6 +231,14 @@ int main(int argc, char** argv) {
     // by the time this is reached.
     if (replayDiverged) {
         std::cerr << "[Engine] The replay did not reproduce; failing the run." << std::endl;
+        Supersonic::Log::CloseFileSink();
+        return EXIT_FAILURE;
+    }
+
+    // A capture run whose PNG is missing fails, rather than leaving a script
+    // to find an older file at the same path and take it for this run's.
+    if (!missingCaptures.empty()) {
+        std::cerr << "[Engine] " << missingCaptures << "; failing the run." << std::endl;
         Supersonic::Log::CloseFileSink();
         return EXIT_FAILURE;
     }
