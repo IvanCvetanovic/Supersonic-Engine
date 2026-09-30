@@ -452,7 +452,7 @@ verified by a screenshot of geometry it never touched.
 | `test_raycast` | Viewport picking, slab intersection, depth ordering |
 | `test_meshgen` | Primitive generation, winding, tangents, OBJ parsing |
 | `test_gltf` | glTF import against real assets in the tree, including a `.glb` with embedded textures |
-| `test_serialize` | JSON reader, scene and prefab round-trips, including the scene's encoding and quantisation as words written only when chosen, the clear each encoding gets, and a 2D light under its own key with each missing field at its default |
+| `test_serialize` | JSON reader, scene and prefab round-trips, including the scene's encoding and quantisation as words written only when chosen, the clear each encoding gets, a 2D light under its own key with each missing field at its default, and a text label's alignment written as a word only when it is not Center |
 | `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
 | `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, not reading our own save back, the count of material descriptor sets a dropped texture gives back, and the fourth map: each slot's own neutral (black for the overlay), the 2D sprite record, the switches and light mask sharing the flags word with the shader's copy, the premultiplied blend's factors, and the overlay, the 2D block and the third blend word surviving a save. And the 2D light buffer the shader declares: its record, its header, its cap and the mask's width. And the fifth map, the gloss: its white neutral, its binding, the stand-up's base line and the highlight's strength and power in the record, and all of them surviving a save while a sprite that uses none saves as before |
 | `test_input` | Action mapping, press/release edges, stick deadzone, gamepad fallback |
@@ -1040,6 +1040,11 @@ against, have moved to their own repositories —
       mutation run is what found the last two: the first tests all hung off the
       top-left, where a width decides nothing, and all ran at exactly the
       reference height, where the scale factor is one
+- [x] A world-space label can hang from its point by an edge as well as be
+      centred on it: `UITextComponent::align`, Left, Center (the default and
+      what every label did) or Right, so a name reads along a building's left
+      side whatever its length. Vertical placement is unchanged, screen text
+      ignores it, and a scene saves it as a word only when it is not Center
 - [x] A UI image can be cut into nine, so a frame keeps its corners at any box
       size. A panel, a button, a well and a tooltip are one PNG each with a
       bevel drawn into them; stretched whole, a 16-pixel corner on a 400-pixel

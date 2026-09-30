@@ -515,6 +515,12 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"Color\": [" << text->color.x << ", " << text->color.y << ", "
              << text->color.z << ", " << text->color.w << "],\n";
         out << indent << "  \"WrapWidth\": " << text->wrapWidth << ",\n";
+        // Only when set, so a scene saved before alignment existed saves
+        // again byte for byte.
+        if (text->align != UITextComponent::Align::Center) {
+            out << indent << "  \"Align\": \""
+                << (text->align == UITextComponent::Align::Left ? "Left" : "Right") << "\",\n";
+        }
         out << indent << "  \"Shadow\": " << (text->shadow ? "true" : "false") << ",\n";
         out << indent << "  \"Visible\": " << (text->visible ? "true" : "false") << "\n";
         out << indent << "},\n";
@@ -1133,6 +1139,13 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // that means "do not wrap" - so every label in every saved scene keeps
         // running on one line exactly as it always has.
         text.wrapWidth = t["WrapWidth"].AsFloat(0.0f);
+
+        // Absent, or a word this build does not know, is Center: what every
+        // label was before alignment existed.
+        const std::string alignWord = t["Align"].AsString("Center");
+        text.align = alignWord == "Left"    ? UITextComponent::Align::Left
+                   : alignWord == "Right" ? UITextComponent::Align::Right
+                                          : UITextComponent::Align::Center;
         text.shadow = t["Shadow"].AsBool(true);
         text.visible = t["Visible"].AsBool(true);
     }

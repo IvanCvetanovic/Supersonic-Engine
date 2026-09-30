@@ -755,10 +755,16 @@ void Render(entt::registry& registry, const UIRect& gameRect,
             }
 
             // Centred horizontally on the point and offset from it, which is
-            // what a name plate over a unit means. The anchor is unused here -
-            // there is no screen edge to hang from.
-            rect.min = glm::vec2(screen.x - measured.x * 0.5f, screen.y - measured.y * 0.5f) +
-                       text.offset * scale;
+            // what a name plate over a unit means - or hung from it by an edge
+            // (UITextComponent::align). The anchor is unused here - there is no
+            // screen edge to hang from.
+            float left = screen.x - measured.x * 0.5f;
+            if (text.align == UITextComponent::Align::Left) {
+                left = screen.x;
+            } else if (text.align == UITextComponent::Align::Right) {
+                left = screen.x - measured.x;
+            }
+            rect.min = glm::vec2(left, screen.y - measured.y * 0.5f) + text.offset * scale;
             rect.max = rect.min + glm::vec2(measured.x, measured.y);
         } else {
             if (const auto it = stacked.rects.find(entity); it != stacked.rects.end()) {

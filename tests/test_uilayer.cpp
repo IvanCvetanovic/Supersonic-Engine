@@ -5,13 +5,13 @@
 // symptom: a pause menu placed exactly right is still broken if the health bar
 // it is covering draws on top of it.
 //
-// The engine has no way to screenshot this. The HUD goes into an ImGui draw
-// list which is composited into the swapchain, while --screenshot reads back
-// the offscreen colour target the 3D scene rendered into - so the picture CI
-// compares does not contain the HUD at all. What it does contain, exactly and
-// in order, is the vertex buffer ImGui produced. So that is what is measured
-// here: a headless context, one frame, and the order the coloured rectangles
-// appear in ImDrawData.
+// --screenshot cannot see this. The HUD goes into an ImGui draw list which is
+// composited into the swapchain, while --screenshot reads back the offscreen
+// colour target the 3D scene rendered into. --screenshot-ui reads the
+// swapchain and does see it, but only with a device and a window. What a suite
+// can read without either, exactly and in order, is the vertex buffer ImGui
+// produced. So that is what is measured here: a headless context, one frame,
+// and the order the coloured rectangles appear in ImDrawData.
 
 #include "TestHarness.hpp"
 
@@ -23,6 +23,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <string>
 
@@ -429,6 +430,163 @@ void testAWorldSpaceLabelIsDrawnWhereTheCameraPutsIt() {
               "and near the middle vertically - glyphs sit high in their line box");
 
     CHECK_MSG(expected.x < 800.0f, "and the fixture must be left of centre");
+}
+
+// The label the alignment tests draw. Any text would do: the checks below
+// compare the ink with the box it was measured into, never with a guess at
+// the font's side bearings.
+constexpr const char* kLabel = "Town Hall";
+constexpr float kLabelSize = 32.0f;  // UITextComponent's default, in pixels at 1080
+
+// A world label at `world`, in one colour and with no shadow, aligned `align`
+// and offset by `offset` authored units, drawn once; its glyphs' extent.
+Blob worldLabelBlob(const glm::vec3& world, UITextComponent::Align align,
+                    const glm::vec2& offset, const glm::mat4& viewProj) {
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity).position = world;
+    auto& text = registry.emplace<UITextComponent>(entity);
+    text.text = kLabel;
+    text.worldSpace = true;
+    text.offset = offset;
+    text.shadow = false;
+    text.color = toVec4(kMarker);
+    text.align = align;
+    return blobOf(registry, viewProj, kMarker);
+}
+
+// How far the label's ink starts inside its box: drawn in screen space with
+// its box at x = 40 exactly, a whole pixel, so nothing is truncated.
+float inkInset() {
+    entt::registry registry;
+    const auto entity = registry.create();
+    auto& text = registry.emplace<UITextComponent>(entity);
+    text.text = kLabel;
+    text.anchor = UIAnchor::TopLeft;
+    text.offset = glm::vec2(40.0f, 40.0f);
+    text.shadow = false;
+    text.color = toVec4(kMarker);
+    return blobOf(registry, glm::mat4(1.0f), kMarker).min.x - 40.0f;
+}
+
+// The width the label is measured at, asked of the font UISystem asks.
+float labelWidth() {
+    ImGui::NewFrame();
+    const float width = ImGui::GetFont()->CalcTextSizeA(kLabelSize, FLT_MAX, 0.0f, kLabel).x;
+    ImGui::EndFrame();
+    return width;
+}
+
+void testALeftAlignedWorldLabelStartsAtItsPoint() {
+    // What a building's name needs: its first letter on the building's left
+    // edge whatever the name's length. Centred, "Farm" and "Town Hall" start
+    // in different places and no one offset lines both up.
+    HeadlessImGui imgui;
+    const Supersonic::CameraComponent cam = lookingAtTheOrigin();
+    const glm::mat4 viewProj = cam.getProjectionMatrix() * cam.getViewMatrix();
+    const glm::vec3 world(-1.5f, 0.5f, 0.0f);
+    glm::vec3 expected(0.0f);
+    CHECK(UICanvas::ProjectToScreen(viewProj, world,
+                                    UIRect{glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f)},
+                                    expected));
+
+    const Blob left = worldLabelBlob(world, UITextComponent::Align::Left, glm::vec2(0.0f), viewProj);
+    CHECK_MSG(left.vertices > 0, "the label must reach the draw list");
+    if (left.vertices == 0) return;
+
+    // The box starts at the point, so the ink starts where it starts inside
+    // any box - to the pixel ImGui truncates a line's start to. Centred, it
+    // would be half the label's width away.
+    const float boxLeft = left.min.x - inkInset();
+    CHECK_MSG(boxLeft > expected.x - 1.0f && boxLeft <= expected.x + 0.001f,
+              "its box starts at the projected x: " + std::to_string(boxLeft) + " against " +
+                  std::to_string(expected.x));
+    CHECK_MSG(left.max.x > expected.x + 20.0f, "and the label lies to the right of it");
+
+    // The offset is measured from the point as before: ten authored units,
+    // which at 1080 is ten pixels.
+    const Blob moved = worldLabelBlob(world, UITextComponent::Align::Left, glm::vec2(10.0f, 0.0f),
+                                      viewProj);
+    CHECK_MSG(std::fabs((moved.min.x - left.min.x) - 10.0f) < 0.01f,
+              "and an offset moves it from there by exactly its amount");
+}
+
+void testARightAlignedWorldLabelEndsAtItsPoint() {
+    HeadlessImGui imgui;
+    const Supersonic::CameraComponent cam = lookingAtTheOrigin();
+    const glm::mat4 viewProj = cam.getProjectionMatrix() * cam.getViewMatrix();
+    const glm::vec3 world(1.5f, 0.75f, 0.0f);
+    glm::vec3 expected(0.0f);
+    CHECK(UICanvas::ProjectToScreen(viewProj, world,
+                                    UIRect{glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f)},
+                                    expected));
+
+    const Blob right = worldLabelBlob(world, UITextComponent::Align::Right, glm::vec2(0.0f), viewProj);
+    CHECK_MSG(right.vertices > 0, "the label must reach the draw list");
+    if (right.vertices == 0) return;
+
+    // The box ends at the point: it starts one measured width before it.
+    const float width = labelWidth();
+    CHECK_MSG(width > 40.0f, "the label has a width worth aligning");
+    const float boxRight = right.min.x - inkInset() + width;
+    CHECK_MSG(boxRight > expected.x - 1.0f && boxRight <= expected.x + 0.001f,
+              "its box ends at the projected x: " + std::to_string(boxRight) + " against " +
+                  std::to_string(expected.x));
+    CHECK_MSG(right.min.x < expected.x - 20.0f, "and the label lies to the left of it");
+}
+
+void testAlignmentMovesALabelSidewaysAndNothingElse() {
+    // Centre is exactly halfway between the two edges, and all three share
+    // one line: alignment is a horizontal choice, and the vertical centring
+    // every world label had is untouched.
+    HeadlessImGui imgui;
+    const Supersonic::CameraComponent cam = lookingAtTheOrigin();
+    const glm::mat4 viewProj = cam.getProjectionMatrix() * cam.getViewMatrix();
+    const glm::vec3 world(-0.5f, -0.25f, 0.0f);
+
+    const Blob left = worldLabelBlob(world, UITextComponent::Align::Left, glm::vec2(0.0f), viewProj);
+    const Blob centre = worldLabelBlob(world, UITextComponent::Align::Center, glm::vec2(0.0f), viewProj);
+    const Blob right = worldLabelBlob(world, UITextComponent::Align::Right, glm::vec2(0.0f), viewProj);
+    CHECK_MSG(left.vertices > 0 && left.vertices == centre.vertices &&
+                  centre.vertices == right.vertices,
+              "the same glyphs, three times");
+
+    const float toLeft = left.min.x - centre.min.x;
+    const float toRight = centre.min.x - right.min.x;
+    CHECK_MSG(toLeft > 20.0f, "left moves the label right, by half its width");
+    // To a pixel: ImGui truncates where a line of text starts, so the two
+    // half-widths can land either side of a pixel boundary.
+    CHECK_MSG(std::fabs(toLeft - toRight) <= 1.0f,
+              "and right moves it left by the same amount: " + std::to_string(toLeft) + " and " +
+                  std::to_string(toRight));
+    CHECK_MSG(left.min.y == centre.min.y && centre.min.y == right.min.y &&
+                  left.max.y == centre.max.y && centre.max.y == right.max.y,
+              "on exactly the same line");
+}
+
+void testScreenTextIgnoresTheAlignment() {
+    // A screen label's anchor places its box; the alignment is for a label
+    // hung from a point, and must not move one hung from an edge.
+    HeadlessImGui imgui;
+    const auto drawnAt = [](UITextComponent::Align align) {
+        entt::registry registry;
+        const auto entity = registry.create();
+        auto& text = registry.emplace<UITextComponent>(entity);
+        text.text = "Score: 10";
+        text.anchor = UIAnchor::TopLeft;
+        text.offset = glm::vec2(40.0f, 40.0f);
+        text.shadow = false;
+        text.color = toVec4(kMarker);
+        text.align = align;
+        return blobOf(registry, glm::mat4(1.0f), kMarker);
+    };
+    const Blob centre = drawnAt(UITextComponent::Align::Center);
+    const Blob left = drawnAt(UITextComponent::Align::Left);
+    const Blob right = drawnAt(UITextComponent::Align::Right);
+    CHECK_MSG(centre.vertices > 0, "the label is drawn");
+    CHECK_MSG(left.min == centre.min && left.max == centre.max && right.min == centre.min &&
+                  right.max == centre.max,
+              "and drawn in one place whatever its alignment says");
 }
 
 // The box every glyph of one colour lands in, which for a paragraph is the
@@ -897,6 +1055,10 @@ static void runTests() {
     testTheSameMarkerInScreenSpaceIgnoresTheCameraEntirely();
     testAMarkerBehindTheCameraIsNotDrawnAtAll();
     testAWorldSpaceLabelIsDrawnWhereTheCameraPutsIt();
+    testALeftAlignedWorldLabelStartsAtItsPoint();
+    testARightAlignedWorldLabelEndsAtItsPoint();
+    testAlignmentMovesALabelSidewaysAndNothingElse();
+    testScreenTextIgnoresTheAlignment();
 
     testAParagraphWithNoWrapWidthRunsOffTheScreen();
     testAWrapWidthBreaksTheParagraphIntoLines();
@@ -912,4 +1074,4 @@ static void runTests() {
     testAClipUnderAPlainContainerStillClips();
 }
 
-TEST_MAIN("test_uilayer", 45)
+TEST_MAIN("test_uilayer", 61)

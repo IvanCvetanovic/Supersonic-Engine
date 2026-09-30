@@ -2154,6 +2154,21 @@ struct UITextComponent {
     // second unit that is not there.
     bool worldSpace{false};
 
+    // Where a world-space label sits against its point, left to right.
+    //
+    // Center, the default, is what every world label did before this existed.
+    // Left hangs the text's left edge from the point and Right its right edge,
+    // which is what a label reading along a building's left side needs:
+    // centred, its start moves with the length of the name, and no single
+    // offset lines up "Farm" and "Town Hall". The vertical is unchanged -
+    // centred on the point, then `offset` - and it places the box, so the
+    // lines of a wrapped label still start at the box's left.
+    //
+    // Screen-space text ignores it: the anchor already decides which edge of
+    // the screen the box hangs from.
+    enum class Align { Left, Center, Right };
+    Align align{Align::Center};
+
     // In authored units at the reference height, like every other UI size, so
     // text keeps its proportion of the screen rather than shrinking to nothing
     // on a large display.

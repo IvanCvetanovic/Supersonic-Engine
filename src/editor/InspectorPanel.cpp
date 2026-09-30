@@ -1599,6 +1599,13 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                                       "label the height the wrap decides."
                                     : "Zero is one line, however long. Set a width for a "
                                       "briefing, a tooltip or anything with sentences in it.");
+            const char* alignNames[] = {"Left", "Center", "Right"};
+            int align = static_cast<int>(text.align);
+            if (ImGui::Combo("World Align", &align, alignNames, IM_ARRAYSIZE(alignNames))) {
+                text.align = static_cast<UITextComponent::Align>(align);
+            }
+            ImGui::TextDisabled("For a world-space label: which edge meets its point. "
+                                "Screen text is placed by its anchor.");
             ImGui::Checkbox("Drop Shadow", &text.shadow);
             ImGui::SameLine();
             ImGui::Checkbox("Visible##text", &text.visible);

@@ -21,6 +21,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace Supersonic;
@@ -409,6 +410,7 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     hud.offset = glm::vec2(48.0f, 32.0f);
     hud.fontSize = 44.0f;
     hud.shadow = false;
+    hud.align = UITextComponent::Align::Right;
 
     auto& bar = registry.emplace<UIPanelComponent>(entity);
     bar.anchor = UIAnchor::TopCenter;
@@ -942,6 +944,8 @@ static void testPrefabRoundTripsEveryField() {
                       "an anchor that resets to TopLeft moves the whole HUD");
             CHECK_NEAR(hud->fontSize, 44.0f);
             CHECK(!hud->shadow);
+            CHECK_MSG(hud->align == UITextComponent::Align::Right,
+                      "an alignment that resets to Center moves every world label");
         }
 
         const auto* bar = registry.try_get<UIPanelComponent>(clone);
@@ -1875,6 +1879,42 @@ static void testAShapeWithAKindFromTheFutureLoadsAsARing() {
     CHECK(loaded.get<UIShapeComponent>(marker).kind == UIShapeComponent::Kind::Ring);
 }
 
+static void testATextLabelsAlignmentIsWrittenOnlyWhenChosen() {
+    // A centred label - every label saved before alignment existed - writes
+    // no key, so an old scene saved again is the same file.
+    entt::registry registry;
+    const auto label = registry.create();
+    registry.emplace<UITextComponent>(label).text = "Town Hall";
+    CHECK_MSG(SceneSerializer::SerializeToString(registry).find("\"Align\"") == std::string::npos,
+              "a centred label says nothing about alignment");
+
+    // Left survives, as the word a person reads.
+    registry.get<UITextComponent>(label).align = UITextComponent::Align::Left;
+    const std::string saved = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(saved.find("\"Align\": \"Left\"") != std::string::npos, "written as a word: " + saved);
+    const auto alignAfterLoading = [](const std::string& text) {
+        entt::registry loaded;
+        const auto result = SceneSerializer::DeserializeFromString(loaded, text);
+        UITextComponent::Align align = UITextComponent::Align::Center;
+        bool found = false;
+        for (auto [entity, t] : loaded.view<UITextComponent>().each()) {
+            (void)entity;
+            align = t.align;
+            found = true;
+        }
+        return std::make_pair(result.ok && found, align);
+    };
+    const auto left = alignAfterLoading(saved);
+    CHECK_MSG(left.first && left.second == UITextComponent::Align::Left, "and read back as Left");
+
+    // A word this build does not know is the default, not an error.
+    std::string future = saved;
+    future.replace(future.find("\"Left\""), 6, "\"Justify\"");
+    const auto unknown = alignAfterLoading(future);
+    CHECK_MSG(unknown.first && unknown.second == UITextComponent::Align::Center,
+              "an unknown alignment loads as Center");
+}
+
 static void runTests() {
     testInstantiatingAPrefabTwiceParsesItOnce();
     testSavingAPrefabInvalidatesWhatWasParsedFromIt();
@@ -1891,6 +1931,7 @@ static void runTests() {
     testA2DLightSurvivesARoundTripUnderItsOwnKey();
     testTheClearFollowsTheEncoding();
     testAShapeWithAKindFromTheFutureLoadsAsARing();
+    testATextLabelsAlignmentIsWrittenOnlyWhenChosen();
     testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt();
     testUnversionedScenesStillLoad();
     testAFutureSceneIsRefusedAndChangesNothing();
@@ -1914,4 +1955,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 460)
+TEST_MAIN("test_serialize", 465)
