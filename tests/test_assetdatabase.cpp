@@ -638,6 +638,122 @@ static void testTheTwoSpellingsAgreeWithEachOther() {
     }
 }
 
+// --- The rest of the import settings: wrap, mip chain, alpha border ------
+//
+// Three more keys mirroring Godot's texture import, so an asset imported there
+// can be drawn the same way here. Every one defaults to what the engine did
+// before it existed, so the committed .meta files, which name none of them,
+// mean what they always meant - and the importer, which rewrites a .meta each
+// time its asset changes, has to carry them forward as it carries the filter.
+
+// A .meta whose body after the identity is `extra`, verbatim.
+std::string writeMetaWith(const fs::path& path, const std::string& guid, const std::string& extra) {
+    std::string text = "{\n  \"Guid\": \"" + guid + "\",\n  \"Hash\": \"0\"";
+    if (!extra.empty()) text += ",\n  " + extra;
+    text += "\n}\n";
+    return write(path, text);
+}
+
+static void testNoImportKeysMeansTodaysUpload() {
+    const fs::path root = freshRoot();
+    const AssetDatabase::TextureSettings defaults{};
+    CHECK_MSG(defaults.filter == AssetDatabase::TextureFilter::Linear &&
+                  defaults.wrap == AssetDatabase::TextureWrap::Repeat && defaults.mipmaps &&
+                  !defaults.fixAlphaBorder,
+              "linear, repeat, a mip chain and the pixels as decoded");
+
+    CHECK_MSG(AssetDatabase::TextureSettingsForAsset((root / "textures/absent.png").generic_string()) ==
+                  defaults,
+              "a texture with no .meta asks for nothing");
+
+    const std::string asset = write(root / "textures/plain.png", "pixels");
+    writeMetaWith(root / "textures/plain.png.meta", "53a8f0e2b9c14d7a8e6f1b2c3d4e5f60", "");
+    CHECK_MSG(AssetDatabase::TextureSettingsForAsset(asset) == defaults,
+              "and nor does a .meta that names only its identity");
+}
+
+static void testAMetaCanAskForEachImportSetting() {
+    const fs::path root = freshRoot();
+    const std::string asset = write(root / "textures/sprite.png", "pixels");
+    writeMetaWith(root / "textures/sprite.png.meta", "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+                  "\"Filter\": \"nearest\",\n  \"Wrap\": \"clamp\",\n  \"Mipmaps\": false,\n"
+                  "  \"FixAlphaBorder\": true");
+
+    const auto settings = AssetDatabase::TextureSettingsForAsset(asset);
+    CHECK(settings.filter == AssetDatabase::TextureFilter::Nearest);
+    CHECK(settings.wrap == AssetDatabase::TextureWrap::Clamp);
+    CHECK_MSG(!settings.mipmaps, "one level");
+    CHECK_MSG(settings.fixAlphaBorder, "the alpha border fixed");
+
+    // Each on its own, so one key cannot be read off another's line.
+    const std::string tiled = write(root / "textures/tiled.png", "pixels");
+    writeMetaWith(root / "textures/tiled.png.meta", "1a1b2c3d4e5f60718293a4b5c6d7e8f9",
+                  "\"Mipmaps\": false");
+    const auto onlyMips = AssetDatabase::TextureSettingsForAsset(tiled);
+    CHECK_MSG(!onlyMips.mipmaps && onlyMips.wrap == AssetDatabase::TextureWrap::Repeat &&
+                  !onlyMips.fixAlphaBorder && onlyMips.filter == AssetDatabase::TextureFilter::Linear,
+              "Mipmaps alone changes the mip chain alone");
+}
+
+static void testAReimportKeepsEveryImportSetting() {
+    // The filter's hazard again, three times over: Import rewrites the .meta
+    // whenever the asset's hash moves, and a key it did not carry forward
+    // would survive only until the next time the artist saved the file.
+    const fs::path root = freshRoot();
+    const std::string asset = write(root / "textures/worker.png", "version one");
+    writeMetaWith(root / "textures/worker.png.meta", "2a1b2c3d4e5f60718293a4b5c6d7e8f9",
+                  "\"Wrap\": \"clamp\",\n  \"Mipmaps\": false,\n  \"FixAlphaBorder\": true");
+
+    AssetDatabase database;
+    database.Import(root.generic_string());
+    write(root / "textures/worker.png", "version two, and longer than the first");
+    const auto again = database.Import(root.generic_string());
+    CHECK_MSG(again.refreshed >= 1, "the changed asset was re-imported, rewriting its .meta");
+
+    const auto settings = AssetDatabase::TextureSettingsForAsset(asset);
+    CHECK_MSG(settings.wrap == AssetDatabase::TextureWrap::Clamp, "the wrap survived the rewrite");
+    CHECK_MSG(!settings.mipmaps, "so did the single level");
+    CHECK_MSG(settings.fixAlphaBorder, "and the alpha border");
+    CHECK_MSG(database.GuidForPath(asset) == "2a1b2c3d4e5f60718293a4b5c6d7e8f9",
+              "along with the identity");
+}
+
+static void testImportingWritesNoImportKeysItWasNotGiven() {
+    const fs::path root = freshRoot();
+    write(root / "textures/ordinary.png", "pixels");
+    AssetDatabase database;
+    database.Import(root.generic_string());
+
+    const std::string text = readAll(root / "textures/ordinary.png.meta");
+    CHECK_MSG(!text.empty(), "the importer minted a .meta");
+    CHECK_MSG(text.find("Wrap") == std::string::npos && text.find("Mipmaps") == std::string::npos &&
+                  text.find("FixAlphaBorder") == std::string::npos,
+              "and said nothing its absence already says: " + text);
+}
+
+static void testAnImportSettingThisBuildCannotReadIsTheDefault() {
+    // A word from a later build, or a value of the wrong type. The identity in
+    // the same file must still be read - it is what a rename is recovered by.
+    const fs::path root = freshRoot();
+    const std::string asset = write(root / "textures/odd.png", "pixels");
+    writeMetaWith(root / "textures/odd.png.meta", "3a1b2c3d4e5f60718293a4b5c6d7e8f9",
+                  "\"Wrap\": \"mirror\",\n  \"Mipmaps\": \"no\",\n  \"FixAlphaBorder\": 1");
+    CHECK_MSG(AssetDatabase::TextureSettingsForAsset(asset) == AssetDatabase::TextureSettings{},
+              "each falls back to its default");
+
+    AssetDatabase database;
+    database.Scan(root.generic_string());
+    CHECK_MSG(database.GuidForPath(asset) == "3a1b2c3d4e5f60718293a4b5c6d7e8f9",
+              "and the identity is still read");
+
+    for (const auto wrap : {AssetDatabase::TextureWrap::Repeat, AssetDatabase::TextureWrap::Clamp}) {
+        CHECK_MSG(AssetDatabase::WrapFromName(AssetDatabase::NameOfWrap(wrap)) == wrap,
+                  std::string("the wrap round-trips through \"") + AssetDatabase::NameOfWrap(wrap) +
+                      "\"");
+    }
+}
+
+
 void runTests() {
     testWhatCountsAsAnAsset();
     testPathsHaveOneSpelling();
@@ -671,8 +787,14 @@ void runTests() {
     testImportingAPlainTextureWritesNoFilterKey();
     testAFilterFromTheFutureIsNotAnError();
     testTheTwoSpellingsAgreeWithEachOther();
+
+    testNoImportKeysMeansTodaysUpload();
+    testAMetaCanAskForEachImportSetting();
+    testAReimportKeepsEveryImportSetting();
+    testImportingWritesNoImportKeysItWasNotGiven();
+    testAnImportSettingThisBuildCannotReadIsTheDefault();
 }
 
 } // namespace
 
-TEST_MAIN("test_assetdatabase", 110)
+TEST_MAIN("test_assetdatabase", 129)

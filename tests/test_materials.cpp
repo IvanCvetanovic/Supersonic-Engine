@@ -1289,6 +1289,46 @@ static void testAMaterialReadsEachTexturesOwnWrapUnlessItClamps() {
     CHECK(!RenderSystem::TransparentDraw{}.clampToEdge);
 }
 
+// What a file's .meta settings make of its upload (TextureRegistry::
+// ChooseUpload) and how a nearest sampler moves between levels (VulkanImage::
+// MipmapModeFor) - the decisions, since no suite here has a device to upload
+// with. Wolf Brigade's port names all four keys on each of its 38 sprites to
+// draw them as Godot imported them: one level, clamped or tiled, the alpha
+// border fixed, and nearest for its pixel art.
+
+static void testAFilesMetaDecidesItsUpload() {
+    // Nothing asked: the upload every file had.
+    const auto plain = TextureRegistry::ChooseUpload(AssetDatabase::TextureSettings{});
+    CHECK_MSG(plain.filter == vk::Filter::eLinear &&
+                  plain.addressMode == vk::SamplerAddressMode::eRepeat && plain.mipmaps &&
+                  !plain.fixAlphaBorder,
+              "no settings: linear, repeat, a mip chain, the pixels as decoded");
+
+    AssetDatabase::TextureSettings asked;
+    asked.filter = AssetDatabase::TextureFilter::Nearest;
+    asked.wrap = AssetDatabase::TextureWrap::Clamp;
+    asked.mipmaps = false;
+    asked.fixAlphaBorder = true;
+    const auto all = TextureRegistry::ChooseUpload(asked);
+    CHECK(all.filter == vk::Filter::eNearest);
+    CHECK(all.addressMode == vk::SamplerAddressMode::eClampToEdge);
+    CHECK_MSG(!all.mipmaps, "one level");
+    CHECK_MSG(all.fixAlphaBorder, "the alpha border fixed before upload");
+
+    // One at a time, so no setting rides on another.
+    AssetDatabase::TextureSettings clampOnly;
+    clampOnly.wrap = AssetDatabase::TextureWrap::Clamp;
+    const auto clamp = TextureRegistry::ChooseUpload(clampOnly);
+    CHECK_MSG(clamp.addressMode == vk::SamplerAddressMode::eClampToEdge &&
+                  clamp.filter == vk::Filter::eLinear && clamp.mipmaps && !clamp.fixAlphaBorder,
+              "the wrap alone");
+
+    // Nearest means nearest between levels too, and linear stays linear -
+    // every sampler before this was linear between levels.
+    CHECK(VulkanImage::MipmapModeFor(vk::Filter::eNearest) == vk::SamplerMipmapMode::eNearest);
+    CHECK(VulkanImage::MipmapModeFor(vk::Filter::eLinear) == vk::SamplerMipmapMode::eLinear);
+}
+
 static void testTheSameMapsReadBothWaysAreTwoSetsAndBothGo() {
     // One descriptor holds one sampler, so the wrap is part of the SET's key -
     // and only of the set's: the texture's own key, by path, is untouched, so
@@ -2122,6 +2162,7 @@ static void runTests() {
     testEveryBindingIsSearchedForADeadTexture();
     testThePoolHoldsTheWalkWithRoomToSpare();
     testAMaterialReadsEachTexturesOwnWrapUnlessItClamps();
+    testAFilesMetaDecidesItsUpload();
     testTheSameMapsReadBothWaysAreTwoSetsAndBothGo();
     testClampToEdgeSurvivesASaveAndLoadAndIsWrittenOnlyWhenSet();
     testAnOverrideReplacesOnlyTheSurfaceItNames();
@@ -2169,4 +2210,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials", 388)
+TEST_MAIN("test_materials", 396)

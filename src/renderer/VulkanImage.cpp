@@ -208,7 +208,8 @@ vk::Sampler VulkanImage::makeSampler(vk::Filter filter, vk::SamplerAddressMode a
     samplerInfo.unnormalizedCoordinates = VK_FALSE;
     samplerInfo.compareEnable = VK_FALSE;
     samplerInfo.compareOp = vk::CompareOp::eAlways;
-    samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+    // Here, so the other-wrap twins GetSampler(addressMode) makes inherit it.
+    samplerInfo.mipmapMode = MipmapModeFor(filter);
     // maxLod defaults to 0, which pins sampling to the base level and makes a
     // mip chain that exists but is never read.
     samplerInfo.minLod = 0.0f;

@@ -140,6 +140,13 @@ bool AssetDatabase::ReadMeta(const std::string& metaPath, Entry& out) {
     // Absent means Linear, so every .meta already on disk keeps meaning what it
     // meant and nothing has to migrate.
     out.filter = FilterFromName(root["Filter"].AsString(""));
+
+    // The same for the rest of the import settings. A value of the wrong type -
+    // "Mipmaps": "no" - is the default too, for the reason an unknown filter
+    // is: the identity in this file matters more than any one setting.
+    out.wrap = WrapFromName(root["Wrap"].AsString(""));
+    out.mipmaps = root["Mipmaps"].AsBool(true);
+    out.fixAlphaBorder = root["FixAlphaBorder"].AsBool(false);
     return true;
 }
 
@@ -161,6 +168,26 @@ AssetDatabase::TextureFilter AssetDatabase::FilterForAsset(const std::string& as
     return entry.filter;
 }
 
+const char* AssetDatabase::NameOfWrap(TextureWrap wrap) {
+    return wrap == TextureWrap::Clamp ? "clamp" : "repeat";
+}
+
+AssetDatabase::TextureWrap AssetDatabase::WrapFromName(const std::string& name) {
+    // Only "clamp" changes anything, as only "nearest" does for the filter.
+    return name == "clamp" ? TextureWrap::Clamp : TextureWrap::Repeat;
+}
+
+AssetDatabase::TextureSettings AssetDatabase::TextureSettingsForAsset(const std::string& assetPath) {
+    Entry entry;
+    if (!ReadMeta(MetaPathFor(assetPath), entry)) return {};
+    TextureSettings settings;
+    settings.filter = entry.filter;
+    settings.wrap = entry.wrap;
+    settings.mipmaps = entry.mipmaps;
+    settings.fixAlphaBorder = entry.fixAlphaBorder;
+    return settings;
+}
+
 bool AssetDatabase::WriteMeta(const std::string& metaPath, const Entry& entry) {
     std::ofstream file(metaPath, std::ios::binary | std::ios::trunc);
     if (!file.is_open()) return false;
@@ -175,6 +202,15 @@ bool AssetDatabase::WriteMeta(const std::string& metaPath, const Entry& entry) {
     // one nobody reads.
     if (entry.filter != TextureFilter::Linear) {
         file << ",\n  \"Filter\": \"" << NameOfFilter(entry.filter) << "\"";
+    }
+    if (entry.wrap != TextureWrap::Repeat) {
+        file << ",\n  \"Wrap\": \"" << NameOfWrap(entry.wrap) << "\"";
+    }
+    if (!entry.mipmaps) {
+        file << ",\n  \"Mipmaps\": false";
+    }
+    if (entry.fixAlphaBorder) {
+        file << ",\n  \"FixAlphaBorder\": true";
     }
 
     file << "\n}\n";

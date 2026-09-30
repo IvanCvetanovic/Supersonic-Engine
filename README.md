@@ -454,7 +454,7 @@ verified by a screenshot of geometry it never touched.
 | `test_gltf` | glTF import against real assets in the tree, including a `.glb` with embedded textures |
 | `test_serialize` | JSON reader, scene and prefab round-trips, including the scene's encoding and quantisation as words written only when chosen, the clear each encoding gets, a 2D light under its own key with each missing field at its default, and a text label's alignment written as a word only when it is not Center |
 | `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
-| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, not reading our own save back, the count of material descriptor sets a dropped texture gives back, and the fourth map: each slot's own neutral (black for the overlay), the 2D sprite record, the switches and light mask sharing the flags word with the shader's copy, the premultiplied blend's factors, and the overlay, the 2D block and the third blend word surviving a save. And the 2D light buffer the shader declares: its record, its header, its cap and the mask's width. And the fifth map, the gloss: its white neutral, its binding, the stand-up's base line and the highlight's strength and power in the record, and all of them surviving a save while a sprite that uses none saves as before |
+| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, not reading our own save back, the count of material descriptor sets a dropped texture gives back, and the fourth map: each slot's own neutral (black for the overlay), the 2D sprite record, the switches and light mask sharing the flags word with the shader's copy, the premultiplied blend's factors, and the overlay, the 2D block and the third blend word surviving a save. And the 2D light buffer the shader declares: its record, its header, its cap and the mask's width. And the fifth map, the gloss: its white neutral, its binding, the stand-up's base line and the highlight's strength and power in the record, and all of them surviving a save while a sprite that uses none saves as before. And what a texture's `.meta` makes of its upload: nearest, clamp, one level and the alpha border each on its own, and a nearest filter nearest between levels too |
 | `test_input` | Action mapping, press/release edges, stick deadzone, gamepad fallback |
 | `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
@@ -463,7 +463,7 @@ verified by a screenshot of geometry it never touched.
 | `test_convexhull` | Hull building and collision: Euler's formula, convexity, a cube's six faces, the vertex cap, agreement with the box path, and dropping only the hulls built from an edited file |
 | `test_decomposition` | Concave collision: watertightness, the L's volume against its hull's, that the pieces cover the mesh and invent nothing, and that the notch stays empty |
 | `test_environmentmap` | IBL on the CPU: the cube face mapping, a constant sky irradiating to itself, both prefilter endpoints, and the Radiance decoder |
-| `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, which route a reference resolved by, and re-pointing a scene that is already open |
+| `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, which route a reference resolved by, and re-pointing a scene that is already open. And the import settings beside the identity: the filter, wrap, mip chain and alpha border, read, carried through a re-import, never written when default, and the default when a later build's value turns up |
 | `test_audio` | WAV decoding including the shipped clip, MP3 and Ogg Vorbis refusing what they cannot read, and reloading a clip without freeing what is playing it |
 | `test_scripts` | Script registry and dispatch |
 | `test_blending` | Cross-fade between clips, blend weights, clip switching |
@@ -475,7 +475,7 @@ verified by a screenshot of geometry it never touched.
 | `test_mixer` | Voice mixing: volume, summing, clamping rather than wrapping, looping, pitch and sample-rate conversion, panning, mono and 8-bit clips. There is no bus gain to test — the only volume is per voice |
 | `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths, and where a game's files resolve from: its own folder, the working directory, or the engine root the build named. And the window: the `Fullscreen` key and which of it and the two flags wins, a windowed game's manifest unchanged byte for byte, and `WindowControl`'s latch against a stand-in window — nothing applies until taken, the last request wins, a refused size latches nothing, hiding the cursor leaves a lock alone, a fullscreen mode rides on the fullscreen request and one the monitor does not offer is refused — with the modes a menu lists, the rate a fullscreen mode runs at, and the monitor a window goes fullscreen on |
 | `test_launchoptions` | Argument parsing, missing values, malformed counts, `--fullscreen` refused beside `--windowed`, and `--hidden` composing with a capture run, refused beside `--fullscreen` and warning without `--frames`. And `--screenshot-ui`: which frames are read back from the swapchain, decided before each is drawn, and their stamped names |
-| `test_imagepixels` | Pixels in memory: a swapchain readback packed for a PNG — BGRA swizzled channel by channel, RGBA untouched, every alpha 255, padded rows packed tight |
+| `test_imagepixels` | Pixels in memory: a swapchain readback packed for a PNG — BGRA swizzled channel by channel, RGBA untouched, every alpha 255, padded rows packed tight. And Godot's alpha-border fix, rule by rule: filled below alpha 20 and read from 20, four texels of reach in a square, the nearest by distance, ties to the first in row order, and a texel with nothing in reach left alone |
 | `test_json` | Depth limit, trailing content, duplicate keys, malformed input, and an object's keys in the order the document wrote them, through repeats, later additions, copies and moves, with the map underneath unchanged |
 | `test_scenemanager` | Deferred loads, Save As, failed-save and failed-load behaviour |
 | `test_assetwatcher` | Change detection, deleted and restored files, duplicate watches, and a write the engine made itself |
@@ -764,6 +764,29 @@ ordering is the feature: mint first and every renamed file gets a brand new
 identity, adoption finds nothing left to adopt, and the headline case silently
 does nothing while every counter still reads like success.
 
+**A texture's import settings live there too**, beside the identity, because
+they belong to the image and not to a material: `TextureRegistry` keeps one
+image per path, so two materials cannot disagree about them. Each key is
+written only when it is not the default, and one this build cannot read is the
+default, so the identity in the same file always survives:
+
+```json
+{
+  "Guid": "320e51673e6f8a91c3d06bca0efebea9",
+  "Hash": "c3d06bca0efebea9",
+  "Filter": "nearest",
+  "Wrap": "clamp",
+  "Mipmaps": false,
+  "FixAlphaBorder": true
+}
+```
+
+`Filter` is `linear` or `nearest` (nearest between mip levels too); `Wrap` is
+`repeat` or `clamp`, and a material's `ClampToEdge` can still clamp one that
+repeats; `Mipmaps: false` uploads one level; `FixAlphaBorder` is Godot's
+`process/fix_alpha_border`, applied to the decoded pixels before upload. A hot
+reload reads them again.
+
 **Scanning creates nothing.** A scan runs from load paths and from tests, and
 one that minted as a side effect would have the test suite writing sidecars into
 your assets folder the first time you ran it. `Scan` reads; `--import-assets`
@@ -900,6 +923,15 @@ against, have moved to their own repositories —
 - [x] Nearest-neighbour texture filtering, asked for by the asset's `.meta` and
       not by the material that uses it — so pixel art stays sharp, and two
       materials naming one file cannot disagree about it
+- [x] The rest of a texture's import, in the same `.meta` and mirroring
+      Godot's import flags, each written only when it is not the default:
+      `"Mipmaps": false` uploads one level, `"Wrap": "clamp"` holds the edge,
+      and `"FixAlphaBorder": true` gives nearly transparent texels their
+      nearest opaque neighbour's colour before upload, Godot's
+      `fix_alpha_border`, so linear filtering leaves no dark rim. The pass is
+      texel-exact against what Godot 4.7 imported for all 38 of Wolf
+      Brigade's sprites. A nearest filter now also steps between mip levels
+      rather than blending them
 - [x] A sound is freed once it has finished. `Play` minted a voice per call and
       only an explicit `Stop` ever released one, so a game playing
       fire-and-forget one-shots accumulated a live voice per sound for the

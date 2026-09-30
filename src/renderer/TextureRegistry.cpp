@@ -1,6 +1,7 @@
 #include "renderer/TextureRegistry.hpp"
 #include <algorithm>
 #include "core/AssetDatabase.hpp"
+#include "core/ImagePixels.hpp"
 #include "core/Log.hpp"
 #include "renderer/VulkanBuffer.hpp"
 
@@ -173,7 +174,8 @@ const TextureRegistry::Texture* TextureRegistry::get(uint32_t id) const {
 
 uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixels,
                                      uint32_t width, uint32_t height, bool srgb,
-                                     vk::Filter filter, vk::SamplerAddressMode addressMode) {
+                                     vk::Filter filter, vk::SamplerAddressMode addressMode,
+                                     bool mipmaps) {
     if (auto it = m_lookup.find(key); it != m_lookup.end()) {
         return it->second;
     }
@@ -202,12 +204,13 @@ uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixe
     // a glancing angle sampled full-resolution texels smaller than a pixel and
     // shimmered as the camera moved - which 4x MSAA does nothing about,
     // because it anti-aliases geometry edges rather than texture minification.
+    // Unless the caller said otherwise (`mipmaps`), for art drawn without one.
     texture.image = std::make_unique<VulkanImage>(
         m_deviceRef, width, height, format,
         vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
         vk::ImageAspectFlagBits::eColor,
         /*arrayLayers*/ 1, vk::SampleCountFlagBits::e1, /*cubeCompatible*/ false,
-        /*generateMipmaps*/ true);
+        /*generateMipmaps*/ mipmaps);
 
     // After the image, because the sampler's maxLod comes from its level count.
     //
@@ -224,14 +227,21 @@ uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixe
     // GenerateMipmaps leaves every level in eShaderReadOnlyOptimal, so it
     // REPLACES the transition that used to follow the copy rather than adding
     // to it - transitioning again from eTransferDstOptimal would be a lie about
-    // the layout the levels are actually in.
-    const bool filtered = VulkanImage::GenerateMipmaps(
-        m_deviceRef, m_commandPool, texture.image->GetImage(), format, width, height,
-        texture.image->GetMipLevels());
-    if (!filtered) {
-        SUPERSONIC_LOG_WARN("TextureRegistry")
-            << key << ": this format cannot be linearly filtered on this device, "
-            << "so only the base level is populated";
+    // the layout the levels are actually in. With one level there is nothing
+    // to build, and the transition is the one that always followed a copy.
+    if (mipmaps) {
+        const bool filtered = VulkanImage::GenerateMipmaps(
+            m_deviceRef, m_commandPool, texture.image->GetImage(), format, width, height,
+            texture.image->GetMipLevels());
+        if (!filtered) {
+            SUPERSONIC_LOG_WARN("TextureRegistry")
+                << key << ": this format cannot be linearly filtered on this device, "
+                << "so only the base level is populated";
+        }
+    } else {
+        VulkanImage::TransitionLayout(m_deviceRef, m_commandPool, texture.image->GetImage(),
+                                      vk::ImageLayout::eTransferDstOptimal,
+                                      vk::ImageLayout::eShaderReadOnlyOptimal);
     }
 
     const auto id = static_cast<uint32_t>(m_textures.size());
@@ -277,17 +287,27 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb, uint32_t f
     // Resolved HERE, from `path`, because `key` is not one - it carries a
     // colour-space prefix, and asking the filesystem about it looks for a
     // .meta that can never exist.
-    const AssetDatabase::TextureFilter wanted = AssetDatabase::FilterForAsset(path);
-    if (wanted == AssetDatabase::TextureFilter::Nearest) {
+    //
+    // The wrap, the mip chain and the alpha border come from the same file for
+    // the same reason. A hot reload (Invalidate, then this) reads them again,
+    // so an edited PNG comes back as its .meta asks.
+    const UploadChoice choice = ChooseUpload(AssetDatabase::TextureSettingsForAsset(path));
+    if (choice.fixAlphaBorder) {
+        ImagePixels::FixAlphaBorder(pixels, static_cast<uint32_t>(width),
+                                    static_cast<uint32_t>(height));
+    }
+    if (choice.filter != vk::Filter::eLinear || choice.addressMode != vk::SamplerAddressMode::eRepeat ||
+        !choice.mipmaps || choice.fixAlphaBorder) {
         SUPERSONIC_LOG_INFO("TextureRegistry")
-            << path << ": nearest-neighbour filtering, as its .meta asks." << std::endl;
+            << path << ": " << (choice.filter == vk::Filter::eNearest ? "nearest" : "linear")
+            << " filtering, " << (choice.addressMode == vk::SamplerAddressMode::eClampToEdge ? "clamped" : "repeated")
+            << ", " << (choice.mipmaps ? "a mip chain" : "one level")
+            << (choice.fixAlphaBorder ? ", alpha border fixed" : "") << ", as its .meta asks." << std::endl;
     }
 
     const uint32_t id = UploadRGBA(key, pixels,
                                    static_cast<uint32_t>(width), static_cast<uint32_t>(height), srgb,
-                                   wanted == AssetDatabase::TextureFilter::Nearest
-                                       ? vk::Filter::eNearest
-                                       : vk::Filter::eLinear);
+                                   choice.filter, choice.addressMode, choice.mipmaps);
     stbi_image_free(pixels);
 
     const auto* uploaded = get(id);

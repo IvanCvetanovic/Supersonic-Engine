@@ -10,6 +10,7 @@
 
 #include <vulkan/vulkan.hpp>
 
+#include "core/AssetDatabase.hpp"
 #include "renderer/MaterialSetLedger.hpp"
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanImage.hpp"
@@ -46,6 +47,10 @@ public:
     // occlusion/roughness/metallic reads as half occlusion, half roughness and
     // fully metallic - a darker, shinier, solid-metal surface arriving from a
     // typo, under a log line that said "flat-normal fallback" about an ORM map.
+    //
+    // How it is uploaded is the file's .meta's to say (ChooseUpload): the
+    // filter, the wrap, whether it has a mip chain and whether its alpha
+    // border is fixed. A file with no .meta is uploaded as every file was.
     uint32_t Acquire(const std::string& path, bool srgb, uint32_t fallback);
 
     // Uploads raw RGBA8 pixels under an explicit cache key.
@@ -68,10 +73,40 @@ public:
     // are transparent and bottom rows opaque shows it as a line floating above
     // the tile). ReplaceRGBA rebuilds a texture with the defaults, filter and
     // wrap alike.
+    //
+    // `mipmaps` false uploads the one level it is handed: no chain is built,
+    // and the sampler reads full-size texels however small the texture is
+    // drawn. For art authored for an engine that drew it that way (Godot's
+    // mipmaps/generate=false), and for a sheet whose cells must not blend
+    // into each other through a smaller level. ReplaceRGBA builds a chain.
     uint32_t UploadRGBA(const std::string& key, const uint8_t* pixels,
                         uint32_t width, uint32_t height, bool srgb = true,
                         vk::Filter filter = vk::Filter::eLinear,
-                        vk::SamplerAddressMode addressMode = vk::SamplerAddressMode::eRepeat);
+                        vk::SamplerAddressMode addressMode = vk::SamplerAddressMode::eRepeat,
+                        bool mipmaps = true);
+
+    // What a file's .meta settings mean for its upload - the one decision
+    // Acquire makes from them, pure so a suite can check it without a device.
+    // Defaults in, today's upload out: linear, repeat, a mip chain, the
+    // pixels as decoded.
+    struct UploadChoice {
+        vk::Filter filter{vk::Filter::eLinear};
+        vk::SamplerAddressMode addressMode{vk::SamplerAddressMode::eRepeat};
+        bool mipmaps{true};
+        bool fixAlphaBorder{false};
+    };
+    static UploadChoice ChooseUpload(const AssetDatabase::TextureSettings& settings) {
+        UploadChoice choice;
+        choice.filter = settings.filter == AssetDatabase::TextureFilter::Nearest
+                            ? vk::Filter::eNearest
+                            : vk::Filter::eLinear;
+        choice.addressMode = settings.wrap == AssetDatabase::TextureWrap::Clamp
+                                 ? vk::SamplerAddressMode::eClampToEdge
+                                 : vk::SamplerAddressMode::eRepeat;
+        choice.mipmaps = settings.mipmaps;
+        choice.fixAlphaBorder = settings.fixAlphaBorder;
+        return choice;
+    }
 
     // Descriptor set binding every map of one material, cached per five ids
     // so a scene sharing materials does not allocate a set per entity.

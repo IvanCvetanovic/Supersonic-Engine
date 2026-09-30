@@ -100,6 +100,16 @@ public:
 
     void CreateSampler(vk::Filter filter = vk::Filter::eLinear, vk::SamplerAddressMode addressMode = vk::SamplerAddressMode::eRepeat);
 
+    // How a sampler with `filter` moves between mip levels: nearest for a
+    // nearest filter, so a nearest-filtered texture blends with nothing - not
+    // with its neighbours and not with the next level down - and linear
+    // otherwise, as every sampler was. Only an image with more than one level
+    // can tell the difference, which in the engine is the registry's textures.
+    static constexpr vk::SamplerMipmapMode MipmapModeFor(vk::Filter filter) {
+        return filter == vk::Filter::eNearest ? vk::SamplerMipmapMode::eNearest
+                                              : vk::SamplerMipmapMode::eLinear;
+    }
+
     static void TransitionLayout(
         VulkanDevice& device,
         vk::CommandPool commandPool,

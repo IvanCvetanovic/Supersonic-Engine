@@ -47,6 +47,36 @@ public:
     // material genuinely cannot express.
     enum class TextureFilter { Linear, Nearest };
 
+    // How a texture is read past its edge: tiled, or its border texels held.
+    // A property of the image for the reason the filter is: one image per
+    // path. A material can still ask to clamp one that repeats
+    // (MaterialComponent::clampToEdge); an image that clamps stays clamped.
+    enum class TextureWrap { Repeat, Clamp };
+
+    // What a texture's .meta asks of its upload, beside the identity. Every
+    // default is what the engine did before the key existed, so a .meta that
+    // names none of them - every one written so far - changes nothing.
+    //
+    // The three besides the filter mirror Godot's texture import, so an asset
+    // imported there can be drawn the same way here:
+    // - mipmaps: Godot's mipmaps/generate. False uploads one level, so a
+    //   minified sprite samples its full-size texels as Godot's does, and a
+    //   sheet's cells never bleed into each other through a mip.
+    // - wrap: Godot's canvas draws clamped unless a draw tiles.
+    // - fixAlphaBorder: Godot's process/fix_alpha_border
+    //   (ImagePixels::FixAlphaBorder), which gives the RGB of nearly
+    //   transparent texels their nearest opaque neighbour's colour, so linear
+    //   filtering at a sprite's edge blends toward the sprite, not toward the
+    //   black a paint program leaves under alpha 0.
+    struct TextureSettings {
+        TextureFilter filter{TextureFilter::Linear};
+        TextureWrap wrap{TextureWrap::Repeat};
+        bool mipmaps{true};
+        bool fixAlphaBorder{false};
+
+        bool operator==(const TextureSettings&) const = default;
+    };
+
     struct Entry {
         std::string guid;
         std::string path;          // relative, forward slashes
@@ -55,6 +85,12 @@ public:
         // Absent from the file means Linear, which is what every .meta already
         // written says by saying nothing. Nothing has to migrate.
         TextureFilter filter{TextureFilter::Linear};
+
+        // "Wrap", "Mipmaps" and "FixAlphaBorder", with the same rule: absent,
+        // or of a type or spelling this build does not know, is the default.
+        TextureWrap wrap{TextureWrap::Repeat};
+        bool mipmaps{true};
+        bool fixAlphaBorder{false};
     };
 
     // The filter a texture asks for, read from the .meta beside it.
@@ -65,10 +101,16 @@ public:
     // file with no .meta, which is every texture in the tree today.
     static TextureFilter FilterForAsset(const std::string& assetPath);
 
+    // Everything the .meta beside a texture asks of its upload, read the same
+    // way: the defaults for a file with no .meta, or one without a Guid.
+    static TextureSettings TextureSettingsForAsset(const std::string& assetPath);
+
     // The two spellings that appear in a .meta, and their round trip. Exposed
     // so the writer and the reader cannot disagree about them.
     static const char* NameOfFilter(TextureFilter filter);
     static TextureFilter FilterFromName(const std::string& name);
+    static const char* NameOfWrap(TextureWrap wrap);
+    static TextureWrap WrapFromName(const std::string& name);
 
     // ---- Reading what is on disk -------------------------------------------
 
