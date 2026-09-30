@@ -147,8 +147,12 @@ vk::DescriptorSet TextureRegistry::fallbackSet() const {
     // Every slot named. A brace-initialised array zero-fills what it is not
     // given, and id 0 is the white albedo: an overlay of white. The gloss IS
     // white, named rather than left to the zero-fill, so the key says so.
-    const MaterialKey fallbackKey{m_whiteTexture, m_flatNormalTexture, m_neutralOrmTexture,
-                                  m_blackTexture, m_whiteTexture};
+    // Read with its own samplers: every one of these is a 1x1, which no wrap
+    // can change.
+    const MaterialSets::Key<VulkanPipeline::kMaterialBindingCount> fallbackKey{
+        MaterialKey{m_whiteTexture, m_flatNormalTexture, m_neutralOrmTexture, m_blackTexture,
+                    m_whiteTexture},
+        false};
     if (auto it = m_materialSets.find(fallbackKey); it != m_materialSets.end()) return it->second;
     return nullptr;
 }
@@ -296,17 +300,20 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb, uint32_t f
 
 vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_t normalId,
                                                       uint32_t ormId, uint32_t overlayId,
-                                                      uint32_t glossId) {
+                                                      uint32_t glossId, bool clampToEdge) {
     // Each slot falls back to its OWN neutral, not to a shared one. A missing
     // albedo is a mistake worth seeing, so it gets the checkerboard; a missing
     // normal, ORM or overlay map is the ordinary case - most materials have
     // none of them - so they get values that change nothing at all. The gloss
     // is white, what an unnamed one resolves to: a sprite asking for a
     // highlight with no map gets it uniform.
-    const MaterialKey key = MaterialSets::ResolveKey(
-        MaterialKey{albedoId, normalId, ormId, overlayId, glossId}, static_cast<uint32_t>(m_textures.size()),
-        MaterialKey{m_checkerTexture, m_flatNormalTexture, m_neutralOrmTexture, m_blackTexture,
-                    m_whiteTexture});
+    const MaterialSets::Key<VulkanPipeline::kMaterialBindingCount> key{
+        MaterialSets::ResolveKey(
+            MaterialKey{albedoId, normalId, ormId, overlayId, glossId},
+            static_cast<uint32_t>(m_textures.size()),
+            MaterialKey{m_checkerTexture, m_flatNormalTexture, m_neutralOrmTexture, m_blackTexture,
+                        m_whiteTexture}),
+        clampToEdge};
     if (auto it = m_materialSets.find(key); it != m_materialSets.end()) {
         return it->second;
     }
@@ -331,13 +338,17 @@ vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_
     // nothing will ever give back.
     std::array<vk::DescriptorImageInfo, VulkanPipeline::kMaterialBindingCount> images{};
     for (uint32_t i = 0; i < VulkanPipeline::kMaterialBindingCount; ++i) {
-        const Texture* texture = get(key[i]);
+        const Texture* texture = get(key.ids[i]);
         if (!texture || !texture->image) {
             throw std::runtime_error("Material references a texture that does not exist!");
         }
         images[i].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         images[i].imageView = texture->image->GetImageView();
-        images[i].sampler = texture->image->GetSampler();
+        // The texture's own sampler unless the material clamps; a clamped read
+        // of an image uploaded with repeat is a second sampler over the same
+        // image, made once and kept with it.
+        images[i].sampler = texture->image->GetSampler(
+            MaterialSets::WrapFor(texture->image->GetAddressMode(), clampToEdge));
 
         if (!images[i].sampler || !images[i].imageView) {
             throw std::runtime_error("Texture is missing a sampler or image view!");

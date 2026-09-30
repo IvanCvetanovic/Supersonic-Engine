@@ -719,6 +719,29 @@ struct MaterialComponent {
     // asked for it assigns one per sprite definition.
     std::string glossTexturePath;
 
+    // Read every map above clamped to its edges, rather than with the wrap its
+    // image was uploaded with.
+    //
+    // For a picture drawn ONCE, edge to edge: a 2D sprite. Bilinear filtering
+    // samples up to half a texel past the border wherever a pixel centre falls
+    // between texels - a sprite drawn magnified, or at a sub-pixel position -
+    // and under repeat that half texel comes from the OPPOSITE edge of the
+    // image. A claw whose arm leaves the picture on its left edge then draws a
+    // thin line of arm down its right; a ground tile opaque along its bottom
+    // row draws a dark line above its top. The 2D engines this path exists for
+    // clamped every texture they loaded (Ethanon's GLES2 textures are
+    // GL_CLAMP_TO_EDGE).
+    //
+    // A second sampler over the same image, never a second upload: a file is
+    // one image in TextureRegistry whichever way a material reads it. Off, the
+    // default, each map is read with its image's OWN sampler, so an image a
+    // game uploaded clamped (UploadRGBA's address mode) stays clamped, and a
+    // file keeps the repeat it was loaded with - which a tiled floor needs.
+    //
+    // Per entity and not on MaterialAsset, like the overlay: it describes how
+    // this surface draws its picture, not the look an asset shares.
+    bool clampToEdge{false};
+
     // A 2D sprite's light, carried in the unlit path's per-draw fields
     // (PushConstantData, whose layout is documented beside kSprite2D).
     // Meaningful only with `unlit`; the PBR path ignores it.

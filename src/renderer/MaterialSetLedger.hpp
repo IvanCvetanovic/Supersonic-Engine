@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#include <vulkan/vulkan.hpp>
 
 namespace Supersonic {
 
@@ -41,6 +44,51 @@ std::array<uint32_t, N> ResolveKey(const std::array<uint32_t, N>& ids, uint32_t 
         if (key[i] >= textureCount) key[i] = fallbacks[i];
     }
     return key;
+}
+
+// The wrap one of a material's textures is read with.
+//
+// THE TEXTURE'S OWN, whatever that is, unless the material asks for
+// clamp-to-edge (MaterialComponent::clampToEdge). Never a wrap the material
+// set picks for everyone: an image uploaded with eClampToEdge (UploadRGBA's
+// address mode) was clamped by the game that uploaded it and relies on it, and
+// a material that says nothing must not undo that. A file Acquire loaded was
+// uploaded with the default, repeat, and keeps it for the same reason - an
+// engine's floor tiles.
+//
+// The flag only ever adds clamping: it is how a 2D game says its picture is
+// drawn once, edge to edge, and that a sample half a texel past its border
+// must take the border's texel rather than the far side's.
+inline vk::SamplerAddressMode WrapFor(vk::SamplerAddressMode own, bool clampToEdge) {
+    return clampToEdge ? vk::SamplerAddressMode::eClampToEdge : own;
+}
+
+// A material set's cache key: the ids it is built from, in binding order, and
+// whether it reads them clamped to their edges.
+//
+// The wrap is in the key because a descriptor carries its sampler: one set
+// cannot read an image both ways, so the same ids asked for both ways are two
+// sets. It is not in the TEXTURE's key (TextureRegistry's lookup by path), and
+// that is the point of a second sampler over the same image: nothing is
+// uploaded twice, and Invalidate drops an image once, with every set naming it
+// either way.
+template <std::size_t N>
+struct Key {
+    std::array<uint32_t, N> ids{};
+    bool clampToEdge{false};
+
+    auto operator<=>(const Key&) const = default;
+};
+
+// The ids a key names, whichever of the two shapes it has: TakeNaming searches
+// these and never the wrap, which is not a texture.
+template <std::size_t N>
+const std::array<uint32_t, N>& IdsOf(const std::array<uint32_t, N>& key) {
+    return key;
+}
+template <std::size_t N>
+const std::array<uint32_t, N>& IdsOf(const Key<N>& key) {
+    return key.ids;
 }
 
 // A set is a few bytes of pool: five image-sampler descriptors. 1024 is twice
@@ -88,14 +136,16 @@ private:
 // checking two named bindings of three, and so what was dropped is in hand to
 // be given back rather than erased and forgotten.
 //
-// `Map` is an ordered map from an array of texture ids to a set handle; a
-// template so the policy is testable with plain numbers for handles.
+// `Map` is an ordered map from an array of texture ids, or a Key, to a set
+// handle; a template so the policy is testable with plain numbers for handles.
+// A Key's two wraps are two entries naming the same ids, and both go.
 template <typename Map>
 std::vector<typename Map::mapped_type> TakeNaming(Map& sets, const std::vector<uint32_t>& ids) {
     std::vector<typename Map::mapped_type> taken;
     if (ids.empty()) return taken;
     for (auto it = sets.begin(); it != sets.end();) {
-        const bool names = std::any_of(it->first.begin(), it->first.end(), [&ids](uint32_t id) {
+        const auto& named = IdsOf(it->first);
+        const bool names = std::any_of(named.begin(), named.end(), [&ids](uint32_t id) {
             return std::find(ids.begin(), ids.end(), id) != ids.end();
         });
         if (names) {

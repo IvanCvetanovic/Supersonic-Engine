@@ -79,6 +79,14 @@ public:
         // engine draws at an angle is why: Magic Portals' help popups turn an
         // arrow 23 degrees and a wall 90.
         glm::mat2 basis{1.0f};
+
+        // Read the texture clamped to its edges rather than with the wrap its
+        // image was loaded with (repeat, for a file): a HUD picture is drawn
+        // once, edge to edge, and under repeat a quad whose edge falls between
+        // texels takes half a texel of the picture's OPPOSITE edge along its
+        // border. MaterialComponent::clampToEdge is the same switch for a
+        // world sprite, and says why. Off, the default, draws as before.
+        bool clampToEdge{false};
     };
 
     // The basis that turns a quad `radians` COUNTER-CLOCKWISE on the screen, on

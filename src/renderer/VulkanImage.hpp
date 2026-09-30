@@ -1,5 +1,6 @@
 #pragma once
 
+#include <utility>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
@@ -75,6 +76,24 @@ public:
     }
     uint32_t GetArrayLayers() const { return m_arrayLayers; }
     vk::Sampler GetSampler() const { return m_sampler; }
+
+    // The wrap GetSampler() reads with, as CreateSampler was given it.
+    vk::SamplerAddressMode GetAddressMode() const { return m_addressMode; }
+
+    // This image read with another wrap: GetSampler() itself when `addressMode`
+    // is the one it was created with, and otherwise a second sampler identical
+    // to it but for the wrap - filter, anisotropy and mip range copied - made
+    // on the first request and destroyed with the image.
+    //
+    // One image, two ways to read its edge, and no second upload. The wrap
+    // cannot belong to the image alone: TextureRegistry keeps one image per
+    // path, and a file drawn once, edge to edge, as a 2D sprite wants its edge
+    // clamped, while the same file tiled across a floor wants it repeated
+    // (MaterialComponent::clampToEdge).
+    //
+    // Null before CreateSampler.
+    vk::Sampler GetSampler(vk::SamplerAddressMode addressMode);
+
     uint32_t GetMipLevels() const { return m_mipLevels; }
     uint32_t GetWidth() const { return m_width; }
     uint32_t GetHeight() const { return m_height; }
@@ -140,6 +159,11 @@ public:
     );
 
 private:
+    // The one place a sampler is described, so the other-wrap samplers
+    // GetSampler(addressMode) makes differ from the image's own in the wrap
+    // and nothing else.
+    vk::Sampler makeSampler(vk::Filter filter, vk::SamplerAddressMode addressMode) const;
+
     VulkanDevice& m_deviceRef;
     VmaAllocator m_allocator{VK_NULL_HANDLE};
     
@@ -150,6 +174,13 @@ private:
     uint32_t m_arrayLayers{1};
     vk::SampleCountFlagBits m_samples{vk::SampleCountFlagBits::e1};
     vk::Sampler m_sampler{nullptr};
+    vk::Filter m_filter{vk::Filter::eLinear};
+    vk::SamplerAddressMode m_addressMode{vk::SamplerAddressMode::eRepeat};
+
+    // Made by GetSampler(addressMode), at most one per wrap. A vector rather
+    // than a map: there are five wraps, and an image asked for any but its own
+    // is asked for one.
+    std::vector<std::pair<vk::SamplerAddressMode, vk::Sampler>> m_otherWraps;
 
     uint32_t m_mipLevels{1};
     uint32_t m_width{0};

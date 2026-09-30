@@ -188,6 +188,12 @@ public:
         // field added in the middle would shift every value after it into its
         // neighbour's place without a word from the compiler.
         uint32_t glossTextureID{0};
+
+        // MaterialComponent::clampToEdge, after the gloss for the same reason.
+        // Read from the material at the gather, every frame, rather than
+        // resolved onto the renderable with the ids: a switch is not a path,
+        // and the resolve runs only when a path changes.
+        bool clampToEdge{false};
     };
 
     // Orders a gathered opaque list by sortKey, ascending and STABLY.
@@ -391,6 +397,9 @@ public:
         // The gloss map's, last for the reason OpaqueDraw gives. 0 is the
         // white texture, which is also the gloss map's neutral.
         uint32_t glossTextureID{0};
+
+        // MaterialComponent::clampToEdge, as OpaqueDraw carries it.
+        bool clampToEdge{false};
     };
 
     // Orders blended draws back to front, then by sort key, then by gather

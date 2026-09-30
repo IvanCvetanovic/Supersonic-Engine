@@ -86,8 +86,16 @@ public:
     // the cache and not yet freed - hands out the white fallback's set and logs
     // it, rather than throwing out of the middle of a frame. So does a driver
     // that reports the pool out of memory or fragmented before that.
+    //
+    // `clampToEdge` reads every map of the set clamped to its edges
+    // (MaterialComponent::clampToEdge). False, the default, reads each with
+    // its OWN sampler - the wrap it was uploaded with - exactly as every set
+    // did before the flag existed (MaterialSets::WrapFor). The same ids asked
+    // for both ways are two sets over the same images: a second sampler, never
+    // a second upload.
     vk::DescriptorSet AcquireMaterialSet(uint32_t albedoId, uint32_t normalId, uint32_t ormId,
-                                         uint32_t overlayId, uint32_t glossId);
+                                         uint32_t overlayId, uint32_t glossId,
+                                         bool clampToEdge = false);
 
     // The four-map form every caller used before the gloss map, and what it
     // still means: no gloss, the white neutral. Kept for the callers outside
@@ -217,11 +225,11 @@ private:
     std::vector<Texture> m_textures;
     std::unordered_map<std::string, uint32_t> m_lookup;
 
-    // Keyed by the ids of every binding, in binding order. Ordered rather than
-    // hashed: five 32-bit ids do not pack into a 64-bit key, and a hash
-    // collision here would render one material with another's maps and say
-    // nothing about it.
-    std::map<std::array<uint32_t, VulkanPipeline::kMaterialBindingCount>,
+    // Keyed by the ids of every binding, in binding order, and the wrap they
+    // are read with (MaterialSets::Key). Ordered rather than hashed: five
+    // 32-bit ids do not pack into a 64-bit key, and a hash collision here
+    // would render one material with another's maps and say nothing about it.
+    std::map<MaterialSets::Key<VulkanPipeline::kMaterialBindingCount>,
              vk::DescriptorSet> m_materialSets;
 
     uint32_t m_whiteTexture{kInvalidTexture};

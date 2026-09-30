@@ -2058,7 +2058,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
                 sets.push_back(textures.AcquireMaterialSet(image, textures.GetFlatNormalTexture(),
                                                            textures.GetNeutralOrmTexture(),
                                                            textures.GetBlackTexture(),
-                                                           textures.GetWhiteTexture()));
+                                                           textures.GetWhiteTexture(),
+                                                           quad.clampToEdge));
             }
 
             offscreen.RecordOverlay(cmd, [&](vk::CommandBuffer pass) {

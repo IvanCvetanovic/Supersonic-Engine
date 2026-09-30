@@ -18,6 +18,7 @@
 #include "core/MaterialSystem.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/SceneSerializer.hpp"
+#include "core/ScreenOverlay.hpp"
 #include "renderer/MaterialSetLedger.hpp"
 #include "renderer/TextureRegistry.hpp"
 #include "renderer/VulkanPipeline.hpp"
@@ -1249,6 +1250,112 @@ static void testThePoolHoldsTheWalkWithRoomToSpare() {
     CHECK(ledger.HasRoom());
 }
 
+// --- clamp-to-edge: a second sampler over the same image --------------------
+//
+// A 2D sprite drawn magnified or at a sub-pixel position samples half a texel
+// past its border, and under repeat that half texel is the OPPOSITE edge: a
+// claw whose arm leaves its picture on the left drew a line of arm down its
+// right (Magic Portals 2-32), a ramp opaque along its bottom row a dark line
+// above its top (2-01). MaterialComponent::clampToEdge reads a material's maps
+// clamped. What the registry decides is pinned here; that the sampler it binds
+// really clamps is proved on the port's frames (the claw's line gone, with the
+// arm column cleared as the control), since no suite here has a device.
+
+static void testAMaterialReadsEachTexturesOwnWrapUnlessItClamps() {
+    using Wrap = vk::SamplerAddressMode;
+    // (a) An image a game uploaded clamped (UploadRGBA's address mode), under a
+    // material that says nothing: still clamped. A shared repeat sampler here
+    // would undo what the game asked for at upload.
+    CHECK_MSG(MaterialSets::WrapFor(Wrap::eClampToEdge, false) == Wrap::eClampToEdge,
+              "an image uploaded clamped keeps its clamp under a default material");
+    // (b) A file Acquire loaded - uploaded with the default, repeat - under a
+    // default material: still repeat, which a tiled floor needs.
+    CHECK_MSG(MaterialSets::WrapFor(Wrap::eRepeat, false) == Wrap::eRepeat,
+              "a file-loaded image keeps repeat under a default material");
+    // Whatever the image's own wrap is, the default leaves it alone.
+    CHECK(MaterialSets::WrapFor(Wrap::eMirroredRepeat, false) == Wrap::eMirroredRepeat);
+    // (c) The flag clamps, whatever the image was uploaded with.
+    CHECK_MSG(MaterialSets::WrapFor(Wrap::eRepeat, true) == Wrap::eClampToEdge,
+              "the flag clamps a file-loaded image");
+    CHECK_MSG(MaterialSets::WrapFor(Wrap::eClampToEdge, true) == Wrap::eClampToEdge,
+              "and an image uploaded clamped stays clamped - its own sampler, no twin");
+    CHECK(MaterialSets::WrapFor(Wrap::eMirroredRepeat, true) == Wrap::eClampToEdge);
+
+    // Off by default everywhere a picture can ask for it, so every material and
+    // every HUD quad written before it draws as it did.
+    CHECK_MSG(!MaterialComponent{}.clampToEdge, "a material reads its own wraps by default");
+    CHECK_MSG(!ScreenOverlay::Quad{}.clampToEdge, "and so does a screen overlay quad");
+    CHECK(!RenderSystem::OpaqueDraw{}.clampToEdge);
+    CHECK(!RenderSystem::TransparentDraw{}.clampToEdge);
+}
+
+static void testTheSameMapsReadBothWaysAreTwoSetsAndBothGo() {
+    // One descriptor holds one sampler, so the wrap is part of the SET's key -
+    // and only of the set's: the texture's own key, by path, is untouched, so
+    // nothing is uploaded twice and Invalidate drops one image.
+    using Key = MaterialSets::Key<VulkanPipeline::kMaterialBindingCount>;
+    const SetKey ids{12, 13, 14, 15, 16};
+    std::map<Key, int> cache;
+    cache.emplace(Key{ids, false}, 10);
+    cache.emplace(Key{ids, true}, 20);
+    CHECK_MSG(cache.size() == 2, "the same five ids, read both ways, are two sets");
+    CHECK((Key{ids, false} != Key{ids, true}));
+    CHECK_MSG(cache.at(Key{ids, false}) == 10 && cache.at(Key{ids, true}) == 20,
+              "each found under its own wrap");
+
+    // The wrap is not a texture: a key that clamps names no id 1, which is
+    // what a bool searched as an id would have matched.
+    std::map<Key, int> other{{Key{SetKey{2, 3, 4, 5, 6}, true}, 30}};
+    CHECK_MSG(MaterialSets::TakeNaming(other, {1}).empty(), "the clamp is never searched as an id");
+    CHECK_EQ(other.size(), size_t{1});
+
+    // A dead texture takes every set naming it, both wraps: a clamped set left
+    // pointing at a destroyed image is the same null-sampler bug as a plain one.
+    cache.emplace(Key{SetKey{20, 21, 22, 23, 24}, true}, 30);
+    const std::vector<int> taken = MaterialSets::TakeNaming(cache, {14});
+    CHECK_MSG(taken == std::vector<int>({10, 20}), "both wraps of a set naming it, in key order");
+    CHECK_EQ(cache.size(), size_t{1});
+    CHECK_MSG(cache.count(Key{SetKey{20, 21, 22, 23, 24}, true}) == 1, "and nothing that does not");
+}
+
+// The engine's own calls say which way a set reads; a caller from before the
+// switch - the four- and five-id forms above - still compiles and reads each
+// map with its own wrap.
+template <typename Registry>
+concept TakesTheWrap = requires(Registry& registry) {
+    { registry.AcquireMaterialSet(0u, 1u, 2u, 4u, 0u, true) } -> std::same_as<vk::DescriptorSet>;
+};
+static_assert(TakesTheWrap<TextureRegistry>, "a set can be asked for clamped");
+
+static void testClampToEdgeSurvivesASaveAndLoadAndIsWrittenOnlyWhenSet() {
+    // Written only when set, so a scene that never clamped saves to the bytes
+    // it saved before the switch; and it has to be written at all, or Play and
+    // Stop - which go through this text - would quietly turn it off.
+    cleanup();
+    entt::registry registry;
+    makeEntity(registry, "Plain");
+    const std::string plain = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(plain.find("ClampToEdge") == std::string::npos, "no key for a material that does not clamp");
+
+    const auto sprite = makeEntity(registry, "Sprite");
+    registry.get<MaterialComponent>(sprite).clampToEdge = true;
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("\"ClampToEdge\": true") != std::string::npos, "the key for one that does");
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
+    int clamped = 0;
+    int own = 0;
+    for (auto [e, tag, material] : loaded.view<TagComponent, MaterialComponent>().each()) {
+        (void)e;
+        if (tag.tag == "Sprite") clamped += material.clampToEdge ? 1 : 0;
+        if (tag.tag == "Plain") own += material.clampToEdge ? 0 : 1;
+    }
+    CHECK_MSG(clamped == 1, "the sprite came back clamping");
+    CHECK_MSG(own == 1, "and the plain material came back reading its own wraps");
+    cleanup();
+}
+
 // --- the fourth map, the 2D record and the premultiplied blend -------------
 //
 // The overlay is a fourth binding in every material set, and the choices that
@@ -2014,6 +2121,9 @@ static void runTests() {
     testGivingBackWhatWasNeverTakenChangesNothing();
     testEveryBindingIsSearchedForADeadTexture();
     testThePoolHoldsTheWalkWithRoomToSpare();
+    testAMaterialReadsEachTexturesOwnWrapUnlessItClamps();
+    testTheSameMapsReadBothWaysAreTwoSetsAndBothGo();
+    testClampToEdgeSurvivesASaveAndLoadAndIsWrittenOnlyWhenSet();
     testAnOverrideReplacesOnlyTheSurfaceItNames();
     testTheMapsSurviveTheOverride();
     testAnOverrideThatNamesNothingIsInert();
@@ -2059,4 +2169,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials", 365)
+TEST_MAIN("test_materials", 388)

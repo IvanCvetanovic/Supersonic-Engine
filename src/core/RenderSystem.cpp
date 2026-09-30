@@ -651,7 +651,8 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
                                                 renderable.normalTextureID,
                                                 renderable.ormTextureID,
                                                 renderable.overlayTextureID,
-                                                renderable.glossTextureID)) {
+                                                renderable.glossTextureID,
+                                                material && material->clampToEdge)) {
                 caster.alphaCutoff = alpha.cutoff;
                 caster.baseAlpha = alpha.baseAlpha;
                 caster.materialSet = set;
@@ -715,7 +716,8 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
                                                     section.normalTextureID,
                                                     section.ormTextureID,
                                                     textures.GetBlackTexture(),
-                                                    textures.GetWhiteTexture())) {
+                                                    textures.GetWhiteTexture(),
+                                                    material && material->clampToEdge)) {
                     surfaceCaster.alphaCutoff = resolved.alphaCutoff;
                     surfaceCaster.baseAlpha = alpha.baseAlpha * resolved.baseColor.a;
                     surfaceCaster.materialSet = set;
@@ -1247,8 +1249,9 @@ void RenderSystem::Render(
 
         // Diverted AFTER culling, so an off-screen pane costs nothing and the
         // culled count stays honest.
-        if (const auto* material = registry.try_get<MaterialComponent>(entity);
-            material && material->transparent) {
+        const auto* material = registry.try_get<MaterialComponent>(entity);
+        const bool clampToEdge = material != nullptr && material->clampToEdge;
+        if (material && material->transparent) {
             const glm::vec3 centre = (worldMin + worldMax) * 0.5f;
             ++stats.transparentDrawn;
             transparent.push_back(TransparentDraw{
@@ -1259,7 +1262,8 @@ void RenderSystem::Render(
                 renderable.sortKey,
                 static_cast<uint32_t>(transparent.size()),
                 EquationFor(material->blend),
-                renderable.glossTextureID});
+                renderable.glossTextureID,
+                clampToEdge});
             continue;
         }
 
@@ -1277,7 +1281,8 @@ void RenderSystem::Render(
             renderable.ormTextureID,
             renderable.overlayTextureID,
             renderable.sortKey,
-            renderable.glossTextureID});
+            renderable.glossTextureID,
+            clampToEdge});
     }
 
     // Only when somebody has an opinion. With every key equal this returns
@@ -1368,7 +1373,7 @@ void RenderSystem::Render(
             // it, exactly as distance ordering destroyed it for the transparent
             // pass.
             const vk::DescriptorSet materialSet =
-                textures.AcquireMaterialSet(albedo, normal, orm, overlay, gloss);
+                textures.AcquireMaterialSet(albedo, normal, orm, overlay, gloss, draw.clampToEdge);
 
             PassItem item;
             item.key = PassDraw{ static_cast<uint64_t>(draw.meshID), firstIndex, indexCount,
@@ -1481,7 +1486,7 @@ void RenderSystem::Render(
                 const vk::DescriptorSet blendedSet =
                     textures.AcquireMaterialSet(draw.albedoTextureID, draw.normalTextureID,
                                                 draw.ormTextureID, draw.overlayTextureID,
-                                                draw.glossTextureID);
+                                                draw.glossTextureID, draw.clampToEdge);
 
                 PassItem item;
 

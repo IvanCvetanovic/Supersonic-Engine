@@ -249,6 +249,11 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         if (!mat->glossTexturePath.empty()) {
             writeAssetRef(out, indent, "GlossTexture", mat->glossTexturePath, ",\n");
         }
+        // Only when set, like the maps above: a scene that never clamped saves
+        // to the bytes it saved before the switch existed.
+        if (mat->clampToEdge) {
+            out << indent << "  \"ClampToEdge\": true,\n";
+        }
         if (mat->sprite2D != MaterialComponent::Sprite2DLight{}) {
             const MaterialComponent::Sprite2DLight& sprite = mat->sprite2D;
             out << indent << "  \"Sprite2D\": {\n";
@@ -882,6 +887,9 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         material.overlayTexturePath = readAssetRef(m, "OverlayTexture");
         // The same for the gloss map: absent is none, a uniform gloss of one.
         material.glossTexturePath = readAssetRef(m, "GlossTexture");
+        // Absent from every scene written before the switch, and from every
+        // one since that did not set it: each map read with its own wrap.
+        material.clampToEdge = m["ClampToEdge"].AsBool(false);
         // Absent likewise, and each field on its own falls back to the default,
         // so a block missing a key reads as the sprite it would have been.
         if (m.Has("Sprite2D")) {

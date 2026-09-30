@@ -150,6 +150,11 @@ VulkanImage::~VulkanImage() {
         device.destroySampler(m_sampler);
         m_sampler = nullptr;
     }
+    for (auto& [wrap, sampler] : m_otherWraps) {
+        (void)wrap;
+        if (sampler) device.destroySampler(sampler);
+    }
+    m_otherWraps.clear();
 
     for (auto view : m_layerViews) {
         if (view) device.destroyImageView(view);
@@ -169,6 +174,24 @@ VulkanImage::~VulkanImage() {
 }
 
 void VulkanImage::CreateSampler(vk::Filter filter, vk::SamplerAddressMode addressMode) {
+    m_filter = filter;
+    m_addressMode = addressMode;
+    m_sampler = makeSampler(filter, addressMode);
+}
+
+vk::Sampler VulkanImage::GetSampler(vk::SamplerAddressMode addressMode) {
+    // Before CreateSampler there is nothing to copy, and a twin made from the
+    // defaults would describe a sampler this image was never given.
+    if (!m_sampler || addressMode == m_addressMode) return m_sampler;
+    for (const auto& [wrap, sampler] : m_otherWraps) {
+        if (wrap == addressMode) return sampler;
+    }
+    const vk::Sampler sampler = makeSampler(m_filter, addressMode);
+    m_otherWraps.emplace_back(addressMode, sampler);
+    return sampler;
+}
+
+vk::Sampler VulkanImage::makeSampler(vk::Filter filter, vk::SamplerAddressMode addressMode) const {
     vk::SamplerCreateInfo samplerInfo{};
     samplerInfo.magFilter = filter;
     samplerInfo.minFilter = filter;
@@ -191,7 +214,7 @@ void VulkanImage::CreateSampler(vk::Filter filter, vk::SamplerAddressMode addres
     samplerInfo.minLod = 0.0f;
     samplerInfo.maxLod = static_cast<float>(m_mipLevels);
 
-    m_sampler = m_deviceRef.GetDevice().createSampler(samplerInfo);
+    return m_deviceRef.GetDevice().createSampler(samplerInfo);
 }
 
 void VulkanImage::TransitionLayout(
