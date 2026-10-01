@@ -11,6 +11,7 @@
 #include "core/PrefabSerializer.hpp"
 #include "core/ComponentCodec.hpp"
 #include "core/AssetVersion.hpp"
+#include "core/AtomicFile.hpp"
 #include "core/Components.hpp"
 #include "core/PhysicsSettings.hpp"
 #include "core/RenderSettings.hpp"
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -1008,6 +1010,164 @@ static void testMissingPrefabReturnsNull() {
     CHECK(!result.ok);
 }
 
+// A save that fails part-way must leave the file that was there.
+//
+// Every writer in this file opened its target with std::ofstream, which
+// truncates it before a byte of the new content exists. A crash, a full disk or
+// an exception anywhere after that left a short file where a scene used to be.
+// The failure is made here with a component whose writer throws: it is the one
+// way to stop a real save part-way through that does not need a full disk.
+
+namespace {
+
+// A member, because EnTT stores no value for an empty type and try_get cannot return one.
+struct Boom {
+    int unused{0};
+};
+
+std::string slurp(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    std::ostringstream text;
+    text << file.rdbuf();
+    return text.str();
+}
+
+bool exists(const std::string& path) {
+    std::error_code ec;
+    return std::filesystem::exists(path, ec);
+}
+
+// Registered for the length of one test: registration is global by design, so a
+// leak would make the next suite's saves throw.
+struct ScopedThrowingComponent {
+    ScopedThrowingComponent() {
+        ComponentCodec::RegisterComponent(
+            "Boom",
+            [](const entt::registry& registry, entt::entity entity, std::ostream&) -> bool {
+                if (registry.try_get<Boom>(entity)) throw std::runtime_error("disk went away");
+                return false;
+            },
+            [](entt::registry&, entt::entity, const Json::Value&) {});
+    }
+    ~ScopedThrowingComponent() { ComponentCodec::ClearRegisteredComponents(); }
+};
+
+} // namespace
+
+static void testASceneSaveThatFailsPartWayLeavesThePreviousScene() {
+    const std::string path = "test_atomic_scene_tmp.scene";
+    std::remove(path.c_str());
+
+    entt::registry registry;
+    const entt::entity cube = registry.create();
+    registry.emplace<TagComponent>(cube, "cube");
+    registry.emplace<TransformComponent>(cube);
+    CHECK(SceneSerializer::Serialize(registry, path).ok);
+    const std::string before = slurp(path);
+    CHECK_MSG(!before.empty(), "the first save wrote a scene");
+
+    {
+        ScopedThrowingComponent boom;
+        const entt::entity extra = registry.create();
+        registry.emplace<TagComponent>(extra, "extra");
+        registry.emplace<Boom>(extra);
+
+        bool threw = false;
+        try {
+            SceneSerializer::Serialize(registry, path);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK_MSG(threw, "the save was stopped part-way, which is the failure under test");
+    }
+
+    CHECK_MSG(slurp(path) == before,
+              "the scene on disk is still the one before the failed save, not a truncated one");
+    CHECK_MSG(!exists(path + ".tmp"), "and no half-written temporary is left beside it");
+    std::remove(path.c_str());
+}
+
+static void testAPrefabSaveThatFailsPartWayLeavesThePreviousPrefab() {
+    const std::string path = "test_atomic_prefab_tmp.prefab";
+    std::remove(path.c_str());
+
+    entt::registry registry;
+    const entt::entity cube = registry.create();
+    registry.emplace<TagComponent>(cube, "cube");
+    registry.emplace<TransformComponent>(cube);
+    CHECK(PrefabSerializer::SavePrefab(registry, cube, path).ok);
+    const std::string before = slurp(path);
+    CHECK(!before.empty());
+
+    {
+        ScopedThrowingComponent boom;
+        registry.emplace<Boom>(cube);
+        bool threw = false;
+        try {
+            PrefabSerializer::SavePrefab(registry, cube, path);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK(threw);
+    }
+
+    CHECK_MSG(slurp(path) == before, "the prefab on disk is still the previous one");
+    CHECK(!exists(path + ".tmp"));
+    std::remove(path.c_str());
+}
+
+static void testAtomicFileReplacesTheTargetOnlyOnCommit() {
+    const std::string path = "test_atomic_file_tmp.txt";
+    std::remove(path.c_str());
+
+    // No target yet: committing creates it, and leaves no temporary.
+    {
+        AtomicFile file(path);
+        CHECK(file.IsOpen());
+        file.Stream() << "first\n";
+        CHECK(file.Commit());
+    }
+    CHECK(slurp(path) == "first\n");
+    CHECK(!exists(path + ".tmp"));
+
+    // Abandoned: the target is untouched, and the temporary is gone.
+    {
+        AtomicFile file(path);
+        file.Stream() << "never committed";
+    }
+    CHECK_MSG(slurp(path) == "first\n", "an abandoned write does not touch the target");
+    CHECK(!exists(path + ".tmp"));
+
+    // Until the commit, the OLD content is what a reader sees.
+    {
+        AtomicFile file(path);
+        file.Stream() << "second\n";
+        file.Stream().flush();
+        CHECK_MSG(slurp(path) == "first\n", "a reader sees the old file until the commit");
+        CHECK(file.Commit());
+    }
+    CHECK(slurp(path) == "second\n");
+    CHECK(!exists(path + ".tmp"));
+
+    // A second Commit is refused rather than renaming a file that is gone.
+    {
+        AtomicFile file(path);
+        file.Stream() << "third\n";
+        CHECK(file.Commit());
+        CHECK(!file.Commit());
+    }
+    CHECK(slurp(path) == "third\n");
+    std::remove(path.c_str());
+}
+
+static void testASaveToAnUnwritablePathFailsAndCreatesNothing() {
+    // The directory does not exist, so neither the temporary nor the in-place
+    // fallback can open: the caller must hear "not open", as it did before.
+    AtomicFile file("test_atomic_no_such_dir_tmp/inner/file.txt");
+    CHECK(!file.IsOpen());
+    CHECK(!exists("test_atomic_no_such_dir_tmp"));
+}
+
 static void testReadLayersOverAnEntityThatAlreadyHasComponents() {
     // ComponentCodec::Read is documented as applying onto an EXISTING entity,
     // leaving unmentioned components alone. Every branch used plain emplace,
@@ -1937,6 +2097,10 @@ static void runTests() {
     testAFutureSceneIsRefusedAndChangesNothing();
     testSavedScenesCarryTheCurrentVersion();
     testReadLayersOverAnEntityThatAlreadyHasComponents();
+    testASceneSaveThatFailsPartWayLeavesThePreviousScene();
+    testAPrefabSaveThatFailsPartWayLeavesThePreviousPrefab();
+    testAtomicFileReplacesTheTargetOnlyOnCommit();
+    testASaveToAnUnwritablePathFailsAndCreatesNothing();
     testJsonRoundTrip();
     testJsonRejectsGarbage();
     testTagEscaping();

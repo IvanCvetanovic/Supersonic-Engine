@@ -1,5 +1,6 @@
 #include "core/SceneSerializer.hpp"
 #include "core/AssetVersion.hpp"
+#include "core/AtomicFile.hpp"
 #include "core/Components.hpp"
 #include "core/Json.hpp"
 #include "core/AssetDatabase.hpp"
@@ -456,15 +457,17 @@ SerializationResult SceneSerializer::Serialize(entt::registry& registry, const s
         }
     }
 
-    std::ofstream file(filepath);
-    if (!file.is_open()) {
+    // Through a temporary, so a save that dies part-way leaves the previous scene
+    // rather than the front of the new one: opening the file directly truncated
+    // it before the first entity was written.
+    AtomicFile file(filepath);
+    if (!file.IsOpen()) {
         return { false, "Failed to open " + filepath + " for writing." };
     }
 
-    const size_t count = writeScene(registry, file);
-    file.flush();
+    const size_t count = writeScene(registry, file.Stream());
 
-    if (!file) {
+    if (!file.Commit()) {
         return { false, "Write error while saving " + filepath + "." };
     }
     return { true, "Saved " + std::to_string(count) + " entities to " + filepath + "." };

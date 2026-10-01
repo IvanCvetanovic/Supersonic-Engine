@@ -1,4 +1,5 @@
 #include "core/MaterialLibrary.hpp"
+#include "core/AtomicFile.hpp"
 #include "core/AssetDatabase.hpp"
 #include "core/AssetWatcher.hpp"
 #include "core/AssetVersion.hpp"
@@ -236,20 +237,25 @@ bool MaterialLibrary::Save(uint32_t id) const {
         fs::create_directories(path.parent_path(), ec);
     }
 
-    std::ofstream file(entry.path, std::ios::trunc);
-    if (!file) {
+    // Through a temporary, so a save that dies part-way leaves the previous
+    // material rather than a truncated one.
+    AtomicFile file(entry.path);
+    if (!file.IsOpen()) {
         SUPERSONIC_LOG_ERROR("MaterialLibrary") << "Could not write " << entry.path << "." << std::endl;
         return false;
     }
-    file << Serialize(entry.asset);
-    if (!file) return false;
+    file.Stream() << Serialize(entry.asset);
 
-    // Before returning, and after the stream is known good. The file is still
-    // open here, so close it first: on Windows the write time is not settled
-    // until the handle is released, and acknowledging early records the time
-    // from BEFORE the flush - which the next poll then sees as a change, which
-    // is the exact loop this is here to prevent.
-    file.close();
+    // Commit closes the stream before it replaces the target, and it is that
+    // order the acknowledgement below depends on: on Windows the write time is
+    // not settled until the handle is released, and acknowledging early records
+    // the time from BEFORE the flush - which the next poll then sees as a change,
+    // which is the exact loop this is here to prevent. The rename also happens
+    // inside Commit, so the time read afterwards is the finished file's.
+    if (!file.Commit()) {
+        SUPERSONIC_LOG_ERROR("MaterialLibrary") << "Write to " << entry.path << " failed." << std::endl;
+        return false;
+    }
     if (m_watcher) m_watcher->Acknowledge(entry.path);
     return true;
 }

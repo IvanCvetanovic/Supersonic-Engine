@@ -1,4 +1,5 @@
 #include "core/PrefabSerializer.hpp"
+#include "core/AtomicFile.hpp"
 
 #include <unordered_map>
 #include "core/AssetVersion.hpp"
@@ -27,8 +28,9 @@ SerializationResult PrefabSerializer::SavePrefab(entt::registry& registry, entt:
         }
     }
 
-    std::ofstream file(filepath);
-    if (!file.is_open()) {
+    // Through a temporary, so a save that dies part-way leaves the previous prefab.
+    AtomicFile file(filepath);
+    if (!file.IsOpen()) {
         return { false, "Failed to open " + filepath + " for writing." };
     }
 
@@ -36,13 +38,13 @@ SerializationResult PrefabSerializer::SavePrefab(entt::registry& registry, entt:
     // has rather than the five components this file used to know about. A
     // prefab of a scripted, lit, animated entity used to come back as a bare
     // mesh, and nothing said so.
-    file << "{\n";
-    file << "  \"Version\": " << AssetVersion::kCurrent << ",\n";
-    ComponentCodec::Write(registry, entity, file, "  ");
-    file << "}\n";
-    file.flush();
+    std::ostream& out = file.Stream();
+    out << "{\n";
+    out << "  \"Version\": " << AssetVersion::kCurrent << ",\n";
+    ComponentCodec::Write(registry, entity, out, "  ");
+    out << "}\n";
 
-    if (!file) {
+    if (!file.Commit()) {
         return { false, "Write to " + filepath + " failed." };
     }
     // The file on disk has changed, so whatever was parsed from it is now the
