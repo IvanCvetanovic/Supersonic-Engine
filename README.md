@@ -12,8 +12,21 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![Tests](https://img.shields.io/badge/tests-57%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT-0](https://img.shields.io/badge/license-MIT--0-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
+[![Free to use](https://img.shields.io/badge/price-free-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#license)
+[![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](https://claude.com/claude-code)
 
 </div>
+
+> **Free to use, with no guarantees.** Supersonic Engine is completely free: use
+> it, change it, ship it, sell it. It is provided **as is**, and Ivan Cvetanović
+> takes **no responsibility** for anything that happens through its use — to your
+> code, your game, your machine or your data. See [License](#license).
+>
+> **Built with Claude Code.** This engine was made using
+> [Claude Code](https://claude.com/claude-code), Anthropic's AI coding assistant.
+> It has tests and it is documented, but treat it like any code you did not write
+> yourself: read it, build it, and check that it does what you need before you
+> rely on it.
 
 ---
 
@@ -25,7 +38,8 @@ stateless systems over those components; every byte of GPU memory is allocated
 through VMA. The editor is part of the engine rather than a separate application:
 it edits the same registry the renderer draws and the physics steps.
 
-It is a solo project, built to be read as much as to be run. Where the
+It is a solo project, written with [Claude Code](https://claude.com/claude-code),
+and built to be read as much as to be run. Where the
 implementation departs from the design, the departure is written down in
 [ARCHITECTURE.md](ARCHITECTURE.md) instead of being left as an aspiration the
 code quietly contradicts.
@@ -1256,14 +1270,22 @@ Built on the work of others, all vendored in `third_party/`:
 
 ## License
 
-[MIT No Attribution](LICENSE) (MIT-0). Use it, change it, ship it, sell it —
-commercially or otherwise, with or without credit. There are no conditions: not
-even the copyright notice has to travel with copies of the engine's own source.
+**The engine is completely free to use.** It is under the
+[MIT No Attribution](LICENSE) licence (MIT-0). Use it, change it, ship it, sell
+it — commercially or otherwise, with or without credit. There are no conditions:
+not even the copyright notice has to travel with copies of the engine's own
+source.
 
-It comes with **no warranty of any kind, and no liability**: Ivan Cvetanović is
-not responsible for anything that happens through its use. If you build
-something with it and that something breaks, that is yours to own, not the
+It comes with **no warranty of any kind, and no liability**: Ivan Cvetanović
+takes no responsibility for anything that happens through its use, whether that
+is a crash, lost work, a broken build, damaged hardware or anything else. If you
+build something with it and that something breaks, that is yours to own, not the
 author's.
+
+**Made with Claude Code.** The engine was written using
+[Claude Code](https://claude.com/claude-code), Anthropic's AI coding assistant.
+That is stated here so nobody has to guess. It does not change the licence or
+the lack of a warranty above.
 
 The licence covers the engine's own source, shaders, branding and
 documentation.
