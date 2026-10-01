@@ -51,7 +51,6 @@ void MeshRegistry::BuildSections(const std::vector<GltfLoader::Submesh>& submesh
     std::vector<std::string> groupKeys;      // first-seen order
     std::unordered_map<std::string, std::vector<const GltfLoader::Submesh*>> groups;
 
-    size_t kept = 0;
     for (const auto& submesh : submeshes) {
         if (submesh.skinIndex != mergeSkin) {
             SUPERSONIC_LOG_ERROR("MeshRegistry") << "Skipping '" << submesh.name << "' in " << sourcePath
@@ -60,7 +59,6 @@ void MeshRegistry::BuildSections(const std::vector<GltfLoader::Submesh>& submesh
                       << std::endl;
             continue;
         }
-        ++kept;
 
         // The prefix is a control character, which a glTF material
         // name cannot usefully contain - so a file cannot collide
