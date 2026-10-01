@@ -5,8 +5,12 @@ pinned submodule, and each holds byte-exact baselines: screenshot hashes, a stat
 hash, replay files. The question asked was whether anything in the engine can be
 improved without disturbing them. It can, and most of it is not gameplay code.
 
-This is a plan, not a record of work done. Nothing below has been changed yet
-except where it says so.
+This began as a plan. Phase 0 and Phase 1 have since been carried out, on the
+branch `claude/friendly-bohr-jofghe`; the [Outcome](#outcome) section at the end
+says what was done, where it differs from the plan, and what was not checked.
+Phases 2 and 3 have not been started. The tables below are left as they were
+written, so a row may describe a fix as intended where the Outcome says how it
+was actually made.
 
 ## How this was found
 
@@ -192,3 +196,97 @@ something a game can observe or to something every game inherits.
 
 A rough size, as an estimate and not a measurement: Phase 0 is two to three days,
 Phase 1 about a week, Phase 2 about a week. Phase 3 depends on the answers.
+
+## Outcome
+
+Phases 0 and 1 are done; Phases 2 and 3 were not authorised and are untouched.
+Every change is its own commit with the reasoning in the message.
+
+### What the numbers are now
+
+| | Before | After |
+|---|---|---|
+| Suites | 58 (57 pass, `test_jobs` flaky) | 62, all pass, none flaky |
+| Suite run time | about 7 s | about 0.6 s |
+| GCC 13 warnings | 17–23 | 0, and held by `-DSUPERSONIC_WERROR=ON` |
+| Clang 18 warnings | not measured before; the first full build found one dead variable, and VMA's nullability noise was already known | 0 under `SUPERSONIC_WERROR=ON` |
+| ASan + UBSan + LSan | clean on 58, with UBSan not halting and LSan off in CI | clean on all 62, and CI now fails on either |
+
+Not run anywhere: MSVC, macOS, and anything that needs a GPU or a window (see
+"Not checked").
+
+### Phase 0
+
+All ten items are in. 0.9 is the one that differs: `tools/check.sh` has the steps
+`docs shaders build options asan tsan tidy all`, and `ci.yml` calls the same code,
+but the **bash port of `verify-replay` was not written**; G3 still means running
+`tools/verify-replay.ps1` on Windows. `check.sh docs` now also fails when a suite
+has no README row or a `tests/test_*.cpp` is not registered, which is the drift 0.1
+fixed by hand. The `tsan` step runs seven suites, not the six the table counts:
+`test_log` starts threads and is in the list.
+
+### Phase 1
+
+All of 1.1–1.14 are in, each with a test written to fail first wherever the code
+can be run here. Where it differs from the table:
+
+- **1.5** The plan said to cap `visitNode` recursion. A cap of 1024 still
+  overflowed the stack under ASan, so the walk is iterative with an explicit stack
+  and has no depth limit at all.
+- **1.6** The caps are `kMaxRecordedTicks` 2^22, `kMaxHeightfieldSide` 32768 with
+  at most 2^26 cells, `kMaxParticlesPerEmitter` 2^20 (clamped, not refused), 256
+  bitmap-font pages, and a Radiance image of at most 32768 a side and 2^28
+  texels. They were chosen well above anything in this repository. **They have not been checked
+  against the three games' scenes**, which is what the plan said must be done
+  first. Do that at the next submodule bump.
+- **1.13** "Camera pitch ±90 produces NaN" did not reproduce: a probe showed only a
+  non-finite angle does. That case is fixed and tested, and the commit says so.
+  The zero-area triangle and the out-of-range `static_cast<int>(double)` cases are
+  fixed. The latter goes through `asU32` / `asI32` / `asIndex`, which keep
+  x86's result for every in-range value and define the rest.
+- **1.2** Saves go through one `AtomicFile` (`<path>.tmp`, then rename). The
+  asset database's scans match on the `.meta` suffix and a list of known
+  extensions, and `.tmp` is neither. If the temporary cannot be created the save
+  falls back to the old in-place write rather than newly failing.
+- **1.3** Done as planned, with a facet imbued by an RAII guard so the stream's
+  locale is restored on every exit.
+- **1.14** Added `test_particles`, `test_hotreload`, `test_log` and
+  `test_platform` (the safe area), plus the PNG round trip in `test_imagepixels`.
+  **`PipelineCache` and `ThumbnailCache` still have no suite**: both need a
+  device.
+
+The last ASan + UBSan + LSan pass over all 62 suites found one failure, and it was
+a test's, not the engine's: `test_hotreload` took "some shared library" from
+`dladdr(&printf)`, which under ASan is libasan itself, and loading a copy of the
+sanitizer runtime aborts the process. It failed 20 times in 20 there and passed in
+the ordinary build. It now uses `std::cos` (libm), and the mutation check still
+fails it at the same line.
+
+Extras that came out of the work and are in the tree: `SUPERSONIC_WERROR`, the
+`StbImageImplementation.cpp` translation unit, `{}` initialisers on the
+`MeshComponent` / `ScriptComponent` string and map members (which is what fixed the
+emplace warnings without touching the call sites), and a differential test of
+`SpriteAnimationSystem` against a verbatim copy of the old code.
+
+### Not checked
+
+- **G3 and G4.** `test_determinism` passes and its `kCanonical` hash is unchanged,
+  but `verify-replay.ps1` and the `--frames 120 --fixed-step --screenshot`
+  comparison need the owner's machine. Run both before bumping any game.
+- **Device paths.** 1.1 (`UIImageStore::Update`), 1.4 (the environment probe's
+  deferred destroy), 1.10 (the oversize-texture fallback) and the device parts of
+  1.13 were fixed from reading the code and the pure helpers they call
+  (`BarrierFor`, `FitsTheDevice`) were tested. Nothing here ran them against a
+  driver or the validation layers.
+- **Windows and macOS.** The MSVC branches of the CMake changes and
+  `StbImageImplementation.cpp`'s warning pragma were not compiled.
+- **Linux CI.** Nothing was dispatched; the repository's workflow is dispatch-only.
+- **Optional parts of 0.7.** The 71 MB of unused vendored trees was left in place.
+
+### What is left for the owner
+
+- **Phase 2** (bit-identical speedups) needs G3 and G4 on a machine with a GPU.
+- **Phase 3** is the list of decisions above and still waits on answers.
+- Merge the branch so the README notice (free to use, as is, no responsibility, built
+  with Claude Code) shows on the repository's front page. The repository's
+  "About" line is a GitHub setting and was not changed.

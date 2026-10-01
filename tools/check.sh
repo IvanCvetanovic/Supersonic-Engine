@@ -288,7 +288,7 @@ check_tsan() {
     # nothing a single thread can do.
     TSAN_OPTIONS="halt_on_error=1" \
         ctest --test-dir "$BUILD_ROOT/tsan" -C RelWithDebInfo --output-on-failure \
-              -R '^test_(jobs|mixer|audio|scripts|layerstack|assetwatcher)$'
+              -R '^test_(jobs|mixer|audio|scripts|layerstack|assetwatcher|log)$'
 }
 
 check_tidy() {
