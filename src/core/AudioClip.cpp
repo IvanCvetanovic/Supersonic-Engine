@@ -4,6 +4,7 @@
 #include <cctype>
 #include <climits>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 
@@ -353,13 +354,40 @@ bool AudioClip::LoadMp3(const std::string& path, AudioClip& out, std::string& er
 bool AudioClip::LoadWav(const std::string& path, AudioClip& out, std::string& error) {
     out = AudioClip{};
 
+    // Every refusal leaves the clip empty, as LoadOgg and LoadMp3 document: by the
+    // time most of them are decided the fmt chunk has filled in the channels, the
+    // rate and the depth, and a clip that says it is valid after a failed load is
+    // one a caller can play.
+    const auto refuse = [&](std::string message) {
+        error = std::move(message);
+        out = AudioClip{};
+        return false;
+    };
+
+    // A directory opens as an ifstream on some platforms, and tellg() on one is -1
+    // or the largest offset there is. That was cast straight to size_t and handed to
+    // a vector: an exception, from a path somebody mistyped. Ask the filesystem
+    // first, and then do not trust the size either.
+    std::error_code fsError;
+    if (!std::filesystem::is_regular_file(path, fsError)) {
+        error = std::filesystem::exists(path, fsError) ? path + " is not a file"
+                                                        : "cannot open " + path;
+        return false;
+    }
+
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         error = "cannot open " + path;
         return false;
     }
 
-    const auto size = static_cast<size_t>(file.tellg());
+    const std::streamoff end = file.tellg();
+    // RIFF sizes are 32-bit, so nothing larger is a WAV file whatever it says.
+    if (end < 0 || static_cast<unsigned long long>(end) > 0xFFFFFFFFull) {
+        error = path + " is not a size a WAV file can be";
+        return false;
+    }
+    const auto size = static_cast<size_t>(end);
     if (size < 44) {
         error = path + " is too small to be a WAV file";
         return false;
@@ -412,24 +440,41 @@ bool AudioClip::LoadWav(const std::string& path, AudioClip& out, std::string& er
     }
 
     if (!haveFormat) {
-        error = path + " has no fmt chunk";
-        return false;
+        return refuse(path + " has no fmt chunk");
     }
     if (formatTag != kFormatPcm && formatTag != kFormatFloat) {
-        error = path + " uses unsupported compressed format tag " + std::to_string(formatTag);
-        return false;
+        return refuse(path + " uses unsupported compressed format tag " + std::to_string(formatTag));
     }
     if (out.channels == 0 || out.channels > 2) {
-        error = path + " has unsupported channel count " + std::to_string(out.channels);
-        return false;
+        return refuse(path + " has unsupported channel count " + std::to_string(out.channels));
     }
     if (out.bitsPerSample != 8 && out.bitsPerSample != 16 && out.bitsPerSample != 32) {
-        error = path + " has unsupported bit depth " + std::to_string(out.bitsPerSample);
-        return false;
+        return refuse(path + " has unsupported bit depth " + std::to_string(out.bitsPerSample));
+    }
+    // The clip keeps the bit depth and not the format tag, and everything downstream
+    // reads a 32-bit clip as IEEE float - the mixer, and the Windows output, which
+    // asks for a float format exactly when bitsPerSample is 32. So a float tag has
+    // to mean 32 bits (a "float" at 16 was read as int16), and 32-bit INTEGER PCM,
+    // which the checks above let through, has to become float here: reinterpreted
+    // it was noise, and NaNs, from a legal file.
+    if (formatTag == kFormatFloat && out.bitsPerSample != 32) {
+        return refuse(path + " is IEEE float at " + std::to_string(out.bitsPerSample) +
+                " bits; only 32-bit float is read");
     }
     if (out.pcm.empty()) {
-        error = path + " has no data chunk";
-        return false;
+        return refuse(path + " has no data chunk");
+    }
+
+    if (formatTag == kFormatPcm && out.bitsPerSample == 32) {
+        const size_t samples = out.pcm.size() / 4;   // a ragged tail is not a sample
+        std::vector<uint8_t> converted(samples * sizeof(float));
+        for (size_t i = 0; i < samples; ++i) {
+            const auto value = static_cast<int32_t>(readU32(out.pcm.data() + i * 4));
+            const float scaled = static_cast<float>(static_cast<double>(value) / 2147483648.0);
+            std::memcpy(converted.data() + i * sizeof(float), &scaled, sizeof(float));
+        }
+        out.pcm = std::move(converted);
+        if (out.pcm.empty()) return refuse(path + " has no whole samples");
     }
 
     return true;

@@ -18,6 +18,9 @@
 #include <thread>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
+#include <filesystem>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -628,6 +631,114 @@ AudioClip aClipWithSamples() {
 
 } // namespace
 
+// --- what a WAV's format tag and width are allowed to mean ------------------
+//
+// The clip does not remember the format TAG, only the bit depth, and the mixer (and
+// the Windows output, which asks for IEEE float exactly when bitsPerSample == 32)
+// read a 32-bit clip as float. LoadWav accepted integer PCM at 32 bits too, so a
+// 32-bit integer WAV was reinterpreted as floats: noise, and NaNs, from a legal file.
+
+namespace {
+
+std::string wavFile(uint16_t tag, uint16_t channels, uint32_t rate, uint16_t bits,
+                    const std::string& data) {
+    const auto u16 = [](uint16_t v) {
+        return std::string{static_cast<char>(v & 0xFF), static_cast<char>((v >> 8) & 0xFF)};
+    };
+    const auto u32 = [](uint32_t v) {
+        return std::string{static_cast<char>(v & 0xFF), static_cast<char>((v >> 8) & 0xFF),
+                           static_cast<char>((v >> 16) & 0xFF), static_cast<char>((v >> 24) & 0xFF)};
+    };
+    std::string fmt = u16(tag) + u16(channels) + u32(rate) +
+                      u32(rate * channels * (bits / 8)) + u16(static_cast<uint16_t>(channels * (bits / 8))) +
+                      u16(bits);
+    std::string body = "WAVE" + std::string("fmt ") + u32(static_cast<uint32_t>(fmt.size())) + fmt +
+                       "data" + u32(static_cast<uint32_t>(data.size())) + data;
+    return "RIFF" + u32(static_cast<uint32_t>(body.size())) + body;
+}
+
+template <typename T>
+std::string bytesOf(std::initializer_list<T> values) {
+    std::string out;
+    for (const T v : values) out.append(reinterpret_cast<const char*>(&v), sizeof(T));
+    return out;
+}
+
+float floatAt(const AudioClip& clip, size_t index) {
+    float v = 0.0f;
+    std::memcpy(&v, clip.pcm.data() + index * sizeof(float), sizeof(float));
+    return v;
+}
+
+} // namespace
+
+void testA32BitIntegerWavIsConvertedToTheFloatsTheMixerReads() {
+    const std::string path = "test_audio_int32_tmp.wav";
+    writeBytes(path, wavFile(1, 1, 44100, 32,
+                             bytesOf<int32_t>({0x40000000, -0x40000000, 0x7FFFFFFF, 0})));
+
+    AudioClip clip;
+    std::string error;
+    CHECK_MSG(AudioClip::LoadWav(path, clip, error), error);
+    std::remove(path.c_str());
+    if (!clip.valid() || clip.pcm.size() != 4 * sizeof(float)) {
+        CHECK_MSG(false, "four samples in, four floats out");
+        return;
+    }
+    CHECK_EQ(static_cast<int>(clip.bitsPerSample), 32);
+    CHECK_NEAR(floatAt(clip, 0), 0.5f);
+    CHECK_NEAR(floatAt(clip, 1), -0.5f);
+    CHECK_NEAR(floatAt(clip, 2), 1.0f);
+    CHECK_NEAR(floatAt(clip, 3), 0.0f);
+}
+
+void testAnIeeeFloatWavIsLeftExactlyAsItWas() {
+    // The control: a real float WAV must not be touched by the conversion above.
+    const std::string path = "test_audio_float32_tmp.wav";
+    writeBytes(path, wavFile(3, 1, 44100, 32, bytesOf<float>({0.25f, -0.75f, 1.0f})));
+
+    AudioClip clip;
+    std::string error;
+    CHECK_MSG(AudioClip::LoadWav(path, clip, error), error);
+    std::remove(path.c_str());
+    if (clip.pcm.size() != 3 * sizeof(float)) { CHECK_MSG(false, "three floats"); return; }
+    CHECK(floatAt(clip, 0) == 0.25f && floatAt(clip, 1) == -0.75f && floatAt(clip, 2) == 1.0f);
+}
+
+void testAFloatTaggedWavOfTheWrongWidthIsRefused() {
+    // IEEE float is 32 or 64 bits. Tag 3 with 16 was accepted and read as int16.
+    const std::string path = "test_audio_float16_tmp.wav";
+    writeBytes(path, wavFile(3, 1, 44100, 16, bytesOf<int16_t>({100, 200, 300, 400})));
+
+    AudioClip clip;
+    std::string error;
+    CHECK_MSG(!AudioClip::LoadWav(path, clip, error), "a float tag with a 16-bit width is refused");
+    CHECK_MSG(!error.empty(), "and says why");
+    CHECK(!clip.valid());
+    std::remove(path.c_str());
+}
+
+void testADirectoryIsNotAWavFile() {
+    // ifstream opens a directory without complaint on some platforms, and tellg()
+    // then returns -1 - which was cast straight to size_t, an eighteen-exabyte
+    // vector. A path somebody mistyped, or a folder named like a file.
+    const std::string directory = "test_audio_dir_tmp.wav";
+    std::filesystem::create_directories(directory);
+
+    AudioClip clip;
+    std::string error;
+    bool threw = false;
+    bool loaded = true;
+    try {
+        loaded = AudioClip::LoadWav(directory, clip, error);
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    std::filesystem::remove_all(directory);
+    CHECK_MSG(!threw, "a directory is refused, not thrown");
+    CHECK_MSG(!loaded, "and not loaded");
+}
+
 void testAMissingOggFailsWithAReasonRatherThanCrashing() {
     AudioClip clip = aClipWithSamples();
     std::string error;
@@ -704,6 +815,10 @@ static void runTests() {
     testAMissingOggFailsWithAReasonRatherThanCrashing();
     testAFileThatIsNotOggVorbisIsRefusedCleanly();
     testLoadsValidWav();
+    testA32BitIntegerWavIsConvertedToTheFloatsTheMixerReads();
+    testAnIeeeFloatWavIsLeftExactlyAsItWas();
+    testAFloatTaggedWavOfTheWrongWidthIsRefused();
+    testADirectoryIsNotAWavFile();
     testSkipsUnknownChunks();
     testRejectsNonRiff();
     testRejectsTruncatedFile();
