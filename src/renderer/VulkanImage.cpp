@@ -124,26 +124,39 @@ VulkanImage::VulkanImage(
     }
 #endif
 
-    m_imageView = m_deviceRef.GetDevice().createImageView(viewInfo);
+    // The image exists by now, and a destructor does not run for an object whose
+    // constructor throws: so a createImageView that fails here (out of memory, a
+    // lost device) used to leave the allocation, and any views already made, with
+    // nobody to free them. Everything made so far is released, then the error goes on.
+    try {
+        m_imageView = m_deviceRef.GetDevice().createImageView(viewInfo);
 
-    // Per-layer views for framebuffer attachments. Only worth creating for an
-    // array image; a single-layer image's own view already is one.
-    if (m_arrayLayers > 1) {
-        m_layerViews.reserve(m_arrayLayers);
-        for (uint32_t layer = 0; layer < m_arrayLayers; ++layer) {
-            vk::ImageViewCreateInfo layerInfo = viewInfo;
+        // Per-layer views for framebuffer attachments. Only worth creating for an
+        // array image; a single-layer image's own view already is one.
+        if (m_arrayLayers > 1) {
+            m_layerViews.reserve(m_arrayLayers);
+            for (uint32_t layer = 0; layer < m_arrayLayers; ++layer) {
+                vk::ImageViewCreateInfo layerInfo = viewInfo;
 #if defined(__APPLE__)
-            layerInfo.pNext = nullptr;   // these ARE the attachments: the image's full usage
+                layerInfo.pNext = nullptr;   // these ARE the attachments: the image's full usage
 #endif
-            layerInfo.viewType = vk::ImageViewType::e2D;
-            layerInfo.subresourceRange.baseArrayLayer = layer;
-            layerInfo.subresourceRange.layerCount = 1;
-            m_layerViews.push_back(m_deviceRef.GetDevice().createImageView(layerInfo));
+                layerInfo.viewType = vk::ImageViewType::e2D;
+                layerInfo.subresourceRange.baseArrayLayer = layer;
+                layerInfo.subresourceRange.layerCount = 1;
+                m_layerViews.push_back(m_deviceRef.GetDevice().createImageView(layerInfo));
+            }
         }
+    } catch (...) {
+        releaseResources();
+        throw;
     }
 }
 
 VulkanImage::~VulkanImage() {
+    releaseResources();
+}
+
+void VulkanImage::releaseResources() noexcept {
     vk::Device device = m_deviceRef.GetDevice();
 
     if (m_sampler) {

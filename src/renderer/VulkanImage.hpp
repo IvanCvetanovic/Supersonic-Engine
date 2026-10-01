@@ -189,6 +189,10 @@ public:
     );
 
 private:
+    // Everything the image owns, freed. The destructor, and the constructor's own
+    // failure path - a destructor does not run for an object whose constructor threw.
+    void releaseResources() noexcept;
+
     // The one place a sampler is described, so the other-wrap samplers
     // GetSampler(addressMode) makes differ from the image's own in the wrap
     // and nothing else.

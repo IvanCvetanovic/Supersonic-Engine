@@ -184,10 +184,15 @@ void VulkanRenderer::RecreateSwapchain() {
     int width = 0, height = 0;
 #if SUPERSONIC_WINDOW_GLFW
     glfwGetFramebufferSize(m_windowRef.GetNativeWindow(), &width, &height);
-    while (width == 0 || height == 0) {
+    while ((width == 0 || height == 0) && !glfwWindowShouldClose(m_windowRef.GetNativeWindow())) {
         glfwGetFramebufferSize(m_windowRef.GetNativeWindow(), &width, &height);
         glfwWaitEvents();
     }
+    // Asked to close while minimised - the taskbar's Close on a minimised window - the
+    // wait above used to go on until somebody restored it, so the window could not be
+    // closed. Nothing to build on: leave the old swapchain for the shutdown that is
+    // coming, as the no-window branch below does.
+    if (width == 0 || height == 0) return;
 #else
     // Not a wait here: with no window there is nothing to build on, and the
     // app waits for one in Window::PollEvents, after which RestoreSurface

@@ -60,7 +60,11 @@ SerializationResult GamePackager::PackageStandaloneGame(const std::string& outpu
     for (const auto& entry : fs::directory_iterator(exe.parent_path(), ec)) {
         if (ec) break;
         const auto& p = entry.path();
-        if (!entry.is_regular_file()) continue;
+        // The error_code overload: the plain one throws on an entry that cannot be
+        // stat'd (a file removed mid-walk, a broken permission), which took the whole
+        // packaging run - and the editor - down for one bad directory entry.
+        std::error_code entryError;
+        if (!entry.is_regular_file(entryError) || entryError) continue;
         const std::string ext = p.extension().string();
         if (ext != ".dll" && ext != ".so" && ext != ".dylib") continue;
 
