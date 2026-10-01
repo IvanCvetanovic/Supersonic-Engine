@@ -189,59 +189,15 @@ jobs:
           version: 1.4.357.0
           cache: true
 
-      # The committed .spv blobs must actually correspond to the GLSL sources.
-      # The hand-run compile_shaders.bat named four of the ten declared
-      # shaders, so the rest could drift from their source indefinitely.
-      # It has been deleted in favour of the generated Shaders target.
+      # The committed .spv blobs must actually correspond to the GLSL sources, and
+      # every shader source on disk must be one CMake builds. The pairs come from
+      # CMakeLists rather than a copy kept in step with it by hand.
       #
-      # The pairs come from CMakeLists rather than a copy kept in step with it
-      # by hand. There used to be a second step here whose whole job was to
-      # compare this list against that one, which is only necessary while there
-      # are two lists - and it was itself four shaders out of date, failing
-      # every run.
-      - name: Recompile every shader
-        run: |
-          set -euo pipefail
-          declared=$(grep -oE '"[a-z_]+\.(vert|frag)=[a-z_]+\.spv"' CMakeLists.txt | tr -d '"')
-          test -n "$declared" \
-            || { echo "no shader jobs found in CMakeLists.txt - has SHADER_JOBS moved?"; exit 1; }
-
-          while IFS= read -r job; do
-            src="${job%%=*}"
-            out="${job##*=}"
-            echo "Compiling $src"
-            glslc "assets/shaders/$src" -o "/tmp/$out"
-
-            # The comparison this step's own comment promised and never made.
-            # Compiling to /tmp and discarding it proved every shader builds
-            # and nothing whatsoever about whether the .spv the engine loads
-            # was built from the .frag next to it - which is exactly the drift
-            # CONTRIBUTING.md warns about and CMake prints a warning for.
-            if ! cmp -s "/tmp/$out" "assets/shaders/$out"; then
-              echo "::error file=assets/shaders/$out::committed SPIR-V does not match $src"
-              echo "  Rebuild the shaders and commit the result:"
-              echo "    cmake --build build --target Shaders"
-              exit 1
-            fi
-          done <<< "$declared"
-
-          echo "All shaders compile cleanly and match their committed SPIR-V."
-
-      # The other direction: a shader sitting in assets/shaders that CMake never
-      # compiles is a source the engine may well be loading a stale blob for.
-      - name: Every shader source is built by CMake
-        run: |
-          set -euo pipefail
-          declared=$(grep -oE '"[a-z_]+\.(vert|frag)=' CMakeLists.txt | tr -d '"=' | sort)
-          onDisk=$(cd assets/shaders && ls *.vert *.frag | sort)
-
-          if [ "$declared" != "$onDisk" ]; then
-            echo "assets/shaders and CMakeLists.txt disagree about which shaders exist:"
-            echo "  < only in CMakeLists   > only on disk"
-            diff <(echo "$declared") <(echo "$onDisk") || true
-            exit 1
-          fi
-          echo "Every shader source is compiled by the build."
+      # The logic lives in tools/check.sh, which CI calls and a person runs
+      # locally with `tools/check.sh shaders`: this job used to carry its own copy
+      # of the script, and two copies of a check are how a check goes stale.
+      - name: Recompile every shader, and check the list
+        run: bash tools/check.sh shaders
 
   # ---------------------------------------------------------------------------
   # Validation layers, under a software rasteriser.
@@ -422,104 +378,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Suite count
-        run: |
-          set -euo pipefail
-          # Anchored to a call with an argument: a bare count would also match
-          # the line that DEFINES add_engine_test, which is how a check like
-          # this reports one more suite than exists and is quietly disbelieved.
-          #
-          # Digits allowed in the name. Without them test_light2d did not
-          # match, and the check counted one suite fewer than ctest runs.
-          #
-          # ONE REGISTRAR since the games left for their own repositories:
-          # add_port_test, the Wolf Brigade suites' wrapper, went with them.
-          # Missing a second registrar was worse than not checking - it once
-          # counted 48 while ctest ran 61 - so a new wrapper has to be counted
-          # here the day it is added.
-          actual=$(grep -cE '^add_engine_test\([a-z0-9_]+\)$' tests/CMakeLists.txt)
-          echo "tests/CMakeLists.txt registers $actual suites."
-          test "$actual" -gt 0
-
-          fail=0
-          for f in README.md AGENTS.md CONTRIBUTING.md ARCHITECTURE.md; do
-            test -f "$f" || continue
-            # Any "<number> suites" phrasing, digits or the words this project
-            # actually uses.
-            #
-            # The tens and the unit are ONE group with an optional suffix, rather
-            # than every compound spelled out. The enumerated version had a cap
-            # nobody had chosen: it stopped at forty-nine, so the first time the
-            # suite count passed fifty every spelled-out claim would have stopped
-            # matching and this check would have passed on anything at all. A
-            # gate that silently stops gating is worse than no gate, and it would
-            # have expired four suites from where it was written.
-            #
-            # grep -E is leftmost-longest, so the optional "-one" is preferred
-            # over bare "thirty" and the ordering trap the enumeration was built
-            # to dodge does not arise: "thirty" ahead of "thirty-one" used to
-            # match six letters, fail on the space, then find "one suites" inside
-            # it and report a claim of one.
-            tens='(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)'
-            units='(one|two|three|four|five|six|seven|eight|nine)'
-            teens='(eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|ten)'
-            claimed=$(grep -oiE "(${tens}(-${units})?|${teens}|${units}|[0-9]+)( green)? suites\b" "$f" || true)
-            while IFS= read -r phrase; do
-              test -n "$phrase" || continue
-              word=$(echo "$phrase" | sed -E 's/( green)? suites$//' | tr 'A-Z' 'a-z')
-
-              # One place that knows what a number word is worth, used for both
-              # halves of a compound, so "sixty-one" needs no entry of its own.
-              value() {
-                case "$1" in
-                  one) echo 1 ;; two) echo 2 ;; three) echo 3 ;; four) echo 4 ;;
-                  five) echo 5 ;; six) echo 6 ;; seven) echo 7 ;; eight) echo 8 ;;
-                  nine) echo 9 ;; ten) echo 10 ;; eleven) echo 11 ;;
-                  twelve) echo 12 ;; thirteen) echo 13 ;; fourteen) echo 14 ;;
-                  fifteen) echo 15 ;; sixteen) echo 16 ;; seventeen) echo 17 ;;
-                  eighteen) echo 18 ;; nineteen) echo 19 ;; twenty) echo 20 ;;
-                  thirty) echo 30 ;; forty) echo 40 ;; fifty) echo 50 ;;
-                  sixty) echo 60 ;; seventy) echo 70 ;; eighty) echo 80 ;;
-                  ninety) echo 90 ;;
-                  *) echo "" ;;
-                esac
-              }
-
-              case "$word" in
-                [0-9]*)
-                  n="$word"
-                  ;;
-                *-*)
-                  n=$(( $(value "${word%%-*}") + $(value "${word#*-}") ))
-                  ;;
-                *)
-                  n=$(value "$word")
-                  ;;
-              esac
-
-              # A word this check cannot price is a check that is not checking.
-              # Say so rather than comparing an empty string and passing.
-              if [ -z "$n" ]; then
-                echo "::error file=$f::claims \"$phrase\", and this check cannot read that number"
-                fail=1
-                continue
-              fi
-              if [ "$n" != "$actual" ]; then
-                echo "::error file=$f::claims \"$phrase\"; the build registers $actual"
-                fail=1
-              fi
-            done <<< "$claimed"
-          done
-
-          # The README badge is URL-encoded, so the prose check above cannot
-          # see it - and the badge is the first number anyone reads.
-          # sed, not a second grep -oE '[0-9]+': the URL-encoded space in
-          # "tests-24%20suites" is itself a number, so grep returns "24" and
-          # "20" and the check compares the wrong one.
-          badge=$(grep -oE 'tests-[0-9]+%20suites' README.md | cut -d- -f2 | cut -d'%' -f1)
-          if [ -n "$badge" ] && [ "$badge" != "$actual" ]; then
-            echo "::error file=README.md::the tests badge claims $badge suites; the build registers $actual"
-            fail=1
-          fi
-
-          exit $fail
+      # The logic lives in tools/check.sh, which CI calls and a person runs locally
+      # with `tools/check.sh docs`. Besides the suite count in the prose and the
+      # badge it now checks that every suite has a row in the README's Testing
+      # table and that every tests/test_*.cpp is registered.
+      - name: Documented counts, badge, table and registrations
+        run: bash tools/check.sh docs

@@ -313,6 +313,23 @@ and floats are written as their bits.
 > scene, not of the feature; `test_replay` carries the claim that recorded input
 > drives state.
 
+### Running CI's checks locally
+
+```bash
+tools/check.sh                # docs, shaders, build + every suite
+tools/check.sh asan           # ASan + UBSan + LSan over every suite
+tools/check.sh --help         # all of them: tsan, tidy, options, all
+```
+
+CI is dispatch-only (the repository is private, so every automatic run is
+charged), which means a check that lives only there reports on request. This runs
+the same ones on a Linux or macOS machine. The `docs` and `shaders` steps are the
+code CI itself runs, not a copy of it. Build trees go under `build-check/`
+(ignored); set `JOBS=2` on a small machine.
+
+It does not include the replay round trip below, which needs a window and a
+Vulkan device.
+
 ### Checking the determinism claim before a push
 
 ```powershell
