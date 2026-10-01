@@ -24,6 +24,7 @@
 #include "core/TerrainGenerator.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -1307,7 +1308,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::TextDisabled("While on, a left click or drag in the viewport paints this "
                                 "map instead of selecting.");
 
-            const int lastIndex = atlasColumns * atlasRows - 1;
+            // 64-bit, because these are typed fields: the product of two large ints
+            // is signed overflow, which is undefined behaviour.
+            const int lastIndex = static_cast<int>(std::min<int64_t>(
+                static_cast<int64_t>(atlasColumns) * atlasRows - 1, std::numeric_limits<int>::max()));
             if (m_tileBrush.atlasIndex > lastIndex) m_tileBrush.atlasIndex = lastIndex;
             if (m_tileBrush.atlasIndex < 0) m_tileBrush.atlasIndex = 0;
             ImGui::DragInt("Atlas Index", &m_tileBrush.atlasIndex, 0.2f, 0, lastIndex);

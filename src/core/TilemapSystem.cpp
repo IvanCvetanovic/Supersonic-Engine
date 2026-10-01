@@ -86,7 +86,9 @@ bool TilemapSystem::Bake(const TilemapComponent& map, MeshData& out, BakeReport*
         return false;
     }
 
-    const uint32_t atlasCells = map.atlasColumns * map.atlasRows;
+    // 64-bit: 65536 x 65536 atlas cells is 2^32, which as a uint32 product was zero
+    // and put every cell "past the atlas", so a legal map drew nothing.
+    const uint64_t atlasCells = static_cast<uint64_t>(map.atlasColumns) * map.atlasRows;
     const size_t present = std::min(map.cells.size(), cellCount);
 
     uint32_t occupied = 0;

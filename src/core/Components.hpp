@@ -1813,9 +1813,15 @@ struct SpriteAnimationComponent {
     // How many cells this animation actually plays, resolved once so the system
     // and the inspector cannot disagree about what zero means.
     uint32_t resolvedFrameCount() const {
-        const uint32_t grid = (columns == 0 || rows == 0) ? 0u : columns * rows;
+        // 64-bit: a grid is a number a scene writes, and 65536 x 65536 is 2^32 cells,
+        // which as a uint32 product was zero - an animation that played nothing.
+        // Clamped to what a frame count can hold. Identical for every grid whose
+        // cells fit.
+        const uint64_t grid = (columns == 0 || rows == 0) ? 0u : static_cast<uint64_t>(columns) * rows;
         if (frameCount != 0) return frameCount;
-        return firstFrame < grid ? grid - firstFrame : 0u;
+        if (firstFrame >= grid) return 0u;
+        const uint64_t left = grid - firstFrame;
+        return left > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(left);
     }
 };
 

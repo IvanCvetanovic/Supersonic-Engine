@@ -20,6 +20,8 @@
 #include "core/StateHash.hpp"
 
 #include <cmath>
+#include <limits>
+#include <cstring>
 #include <sstream>
 #include <string>
 
@@ -186,6 +188,139 @@ static void testAZeroRateHoldsStillRatherThanDividingByIt() {
     SpriteAnimationComponent sprite = sheet(4, 4, 0.0f);
     for (int i = 0; i < 10; ++i) SpriteAnimationSystem::Advance(sprite, kTick);
     CHECK_MSG(sprite.frame == 0u, "no rate is no motion, not an infinite one");
+}
+
+// --- numbers a file can write that a clock cannot run on --------------------
+
+// The original loop, verbatim, as the reference the real one has to agree with
+// for every input a flipbook can really have. `frame` and `elapsed` are in the
+// state hash, so "agrees" is bit for bit and not "close".
+static void referenceAdvance(SpriteAnimationComponent& sprite, float fixedDelta) {
+    if (!sprite.playing) return;
+    if (fixedDelta <= 0.0f) return;
+    if (sprite.framesPerSecond <= 0.0f) return;
+    const uint32_t count = sprite.resolvedFrameCount();
+    if (count == 0) return;
+    if (count == 1) { sprite.frame = 0; return; }
+
+    const float secondsPerFrame = 1.0f / sprite.framesPerSecond;
+    sprite.elapsed += fixedDelta;
+    while (sprite.elapsed >= secondsPerFrame) {
+        sprite.elapsed -= secondsPerFrame;
+        if (sprite.frame + 1 < count) { ++sprite.frame; continue; }
+        if (sprite.loop) { sprite.frame = 0; continue; }
+        sprite.playing = false;
+        sprite.elapsed = 0.0f;
+        return;
+    }
+}
+
+static bool sameBits(float a, float b) { return std::memcmp(&a, &b, sizeof(float)) == 0; }
+
+static void testEveryRateAFlipbookCanHaveAdvancesAsItAlwaysDid() {
+    // The property that lets the guards below exist: for every rate and tick a
+    // flipbook really runs at, the new loop and the old one are the same
+    // function. The grid keeps the frames crossed in one tick under about nine
+    // hundred; past that is the regime the guard is for.
+    const float rates[] = {0.5f, 1.0f, 7.5f, 10.0f, 12.0f, 24.0f, 30.0f, 60.0f, 100.0f, 240.0f, 1000.0f};
+    const float ticks[] = {kTick, 1.0f / 120.0f, 0.045f, 0.5f, 1.0f};
+    const uint32_t grids[][3] = {{1, 1, 0}, {2, 2, 0}, {4, 4, 0}, {8, 1, 3}, {3, 5, 7}, {4, 4, 100}};
+
+    int compared = 0;
+    for (const float fps : rates) {
+        for (const float delta : ticks) {
+            if (fps * delta > 900.0f) continue;
+            for (const auto& g : grids) {
+                for (const bool loop : {true, false}) {
+                    SpriteAnimationComponent a = sheet(g[0], g[1], fps);
+                    a.loop = loop;
+                    a.frameCount = g[2];
+                    SpriteAnimationComponent b = a;
+                    for (int step = 0; step < 150; ++step) {
+                        SpriteAnimationSystem::Advance(a, delta);
+                        referenceAdvance(b, delta);
+                        if (a.frame != b.frame || !sameBits(a.elapsed, b.elapsed) || a.playing != b.playing) {
+                            CHECK_MSG(false, "diverged from the original loop at fps " +
+                                                 std::to_string(fps) + " delta " + std::to_string(delta));
+                            return;
+                        }
+                    }
+                    ++compared;
+                }
+            }
+        }
+    }
+    CHECK_MSG(compared > 400, "and the grid really compared a lot of cases");
+}
+
+static void testAGridPastThirtyTwoBitsDoesNotWrapItsCellCount() {
+    // 65536 x 65536 is 2^32 cells: columns * rows in uint32_t was ZERO, and
+    // `cell % 0` is an integer division by zero - a crash, from a sheet size a
+    // scene can say. One row more wraps to a small wrong number instead.
+    glm::vec2 scale(0.0f), offset(0.0f);
+    SpriteAnimationSystem::CellTransform(65536, 65536, 5, scale, offset);
+    CHECK_NEAR(scale.x, 1.0f / 65536.0f);
+    CHECK_NEAR(offset.x, 5.0f / 65536.0f);
+    CHECK_NEAR(offset.y, 0.0f);
+
+    // 65537 x 65537 is 4295098369 cells, which wraps to 131073. The last cell a
+    // uint32 can name is well inside the real grid, and sits where integer
+    // arithmetic in 64 bits says it does.
+    const uint64_t cell = 4294967295ull;
+    SpriteAnimationSystem::CellTransform(65537, 65537, static_cast<uint32_t>(cell), scale, offset);
+    CHECK_NEAR(offset.x, static_cast<float>(cell % 65537) / 65537.0f);
+    CHECK_NEAR(offset.y, static_cast<float>(cell / 65537) / 65537.0f);
+}
+
+static void testASheetTooBigToCountStillResolvesItsFrames() {
+    // The same product, in resolvedFrameCount: 2^32 cells came back as a grid of
+    // zero, so the animation played nothing. It is clamped to what a frame count
+    // can hold.
+    SpriteAnimationComponent sprite = sheet(65536, 65536, 12.0f);
+    CHECK_MSG(sprite.resolvedFrameCount() == 0xFFFFFFFFu,
+              "a grid of more cells than a frame count can hold keeps all it can count");
+
+    // An ordinary sheet is exactly what it was.
+    SpriteAnimationComponent ordinary = sheet(4, 4, 12.0f);
+    ordinary.firstFrame = 3;
+    CHECK_EQ(static_cast<int>(ordinary.resolvedFrameCount()), 13);
+}
+
+static void testARateOfInfinityDoesNotHangTheTick() {
+    // 1 / infinity is zero, and `while (elapsed >= 0)` never ends: a simulation
+    // tick that never returns, from "FramesPerSecond": 1e999 in a scene.
+    SpriteAnimationComponent sprite = sheet(4, 4, std::numeric_limits<float>::infinity());
+    SpriteAnimationSystem::Advance(sprite, kTick);
+    CHECK_MSG(sprite.frame < 16u, "the call returned, and left a frame that exists");
+
+    SpriteAnimationComponent nan = sheet(4, 4, std::numeric_limits<float>::quiet_NaN());
+    SpriteAnimationSystem::Advance(nan, kTick);
+    CHECK_MSG(nan.frame < 16u, "and so did NaN");
+}
+
+static void testAVeryFastRateCrossesItsFramesInOneBoundedStep() {
+    // A rate of 1e30 is 1.6e28 frames in one tick. The loop would have run them
+    // one at a time. It lands where the arithmetic says, in bounded time, with
+    // the invariants any flipbook has: a frame that exists, and a remainder that
+    // is less than a frame.
+    SpriteAnimationComponent looping = sheet(2, 2, 1e30f);
+    SpriteAnimationSystem::Advance(looping, kTick);
+    CHECK_MSG(looping.frame < 4u, "a looping sheet is on a frame it has");
+    CHECK_MSG(looping.elapsed >= 0.0f && looping.elapsed < 1.0f / 1e30f * 1.0001f,
+              "and carries less than one frame of time");
+    CHECK(looping.playing);
+
+    // A one-shot passes its last frame many times over, so it has stopped there.
+    SpriteAnimationComponent once = sheet(2, 2, 1e30f);
+    once.loop = false;
+    SpriteAnimationSystem::Advance(once, kTick);
+    CHECK_MSG(!once.playing, "a one-shot has finished");
+    CHECK_EQ(static_cast<int>(once.frame), 3);
+    CHECK_NEAR(once.elapsed, 0.0f);
+
+    // Many ticks of it, each bounded.
+    for (int i = 0; i < 1000; ++i) SpriteAnimationSystem::Advance(looping, kTick);
+    CHECK(looping.frame < 4u);
 }
 
 static void testFrameCountZeroMeansEveryCellFromTheFirst() {
@@ -506,6 +641,11 @@ static void runTests() {
     testAPausedFlipbookDoesNotMove();
     testASingleCellAnimationDoesNotSpin();
     testAZeroRateHoldsStillRatherThanDividingByIt();
+    testEveryRateAFlipbookCanHaveAdvancesAsItAlwaysDid();
+    testAGridPastThirtyTwoBitsDoesNotWrapItsCellCount();
+    testASheetTooBigToCountStillResolvesItsFrames();
+    testARateOfInfinityDoesNotHangTheTick();
+    testAVeryFastRateCrossesItsFramesInOneBoundedStep();
     testFrameCountZeroMeansEveryCellFromTheFirst();
     testASecondAnimationInTheSameSheetPlaysItsOwnCells();
 
