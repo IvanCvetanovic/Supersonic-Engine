@@ -12,6 +12,8 @@
 #include "core/Skeleton.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -633,11 +635,356 @@ static void testAFileWithNoAnimationIsUntouched() {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// A glTF file is untrusted input.
+//
+// tinygltf parses the JSON and checks neither that an accessor fits the buffer
+// view it names nor that a view fits its buffer, and the importer used to take
+// every index and count in the file at its word: an attribute index past the
+// accessor table, a `count` the buffer cannot hold, a vertex count of four
+// billion. Each of those was an out-of-bounds read at best and, for the last, a
+// 240 GB allocation before a single byte was validated.
+//
+// Every file below is a valid triangle with ONE thing wrong with it. What each
+// case asserts is what a safe importer does with that file - the property, not
+// the particular bytes - and the memory-safety half of it is only fully seen
+// under the sanitizers (tools/check.sh asan), which is where a read past the end
+// of a std::vector's allocation is a report rather than a lucky zero.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Three vertices (0,0,0) (1,0,0) (0,1,0), indices 0 1 2, two animation keys and
+// their translations. The buffer every case but one shares, so a case differs
+// from the sound file only where it says so.
+const char* kSharedBuffer =
+    "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAABAAIAAAAAAAAAAACAPwAAoEAAAAAAAAAAAAAAoEAAACBBAAAAAA==";
+
+// The same triangle with a sixth index of 99, which no vertex answers to:
+// positions, then 0 1 2 0 1 99 as unsigned shorts.
+const char* kOutOfRangeIndexBuffer =
+    "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAABAAIAAAABAGMA";
+
+std::string replaceAll(std::string text, const std::string& from, const std::string& to) {
+    for (size_t at = text.find(from); at != std::string::npos; at = text.find(from, at + to.size())) {
+        text.replace(at, from.size(), to);
+    }
+    return text;
+}
+
+// One triangle, with the holes a case needs left as @NAMES@.
+const char* kHardeningTemplate = R"({
+  "asset": { "version": "2.0" },
+  "scene": 0,
+  "scenes": [ { "nodes": [0] } ],
+  "nodes": [ { "mesh": 0 } ],
+  "meshes": [ { "primitives": [ { "attributes": { "POSITION": 0@ATTRIBUTES@ }, "indices": @INDICES@ } ] } ],
+  "buffers": [ { "byteLength": @BYTES@, "uri": "@URI@" } ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0,  "byteLength": 36 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 6  },
+    { "buffer": 0, "byteOffset": 44, "byteLength": 8  },
+    { "buffer": 0, "byteOffset": 52, "byteLength": 24 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": @POSITIONS@, "type": "VEC3",
+      "min": [0,0,0], "max": [1,1,0] },
+    { "bufferView": 1, "componentType": 5123, "count": @INDEXCOUNT@, "type": "SCALAR" }
+    @ACCESSORS@
+  ]
+})";
+
+struct Case {
+    std::string attributes;          // appended inside "attributes": { "POSITION": 0 ... }
+    std::string positions{"3"};      // the POSITION accessor's count
+    std::string indexCount{"3"};     // the index accessor's count
+    std::string accessors;           // extra accessors, each led by a comma
+    std::string indices{"1"};        // the accessor the primitive's indices come from
+    std::string uri{kSharedBuffer};
+    std::string bytes{"76"};
+};
+
+GltfLoader::Scene loadCase(const Case& c, const std::string& name) {
+    std::string text = kHardeningTemplate;
+    text = replaceAll(text, "@ATTRIBUTES@", c.attributes);
+    text = replaceAll(text, "@POSITIONS@", c.positions);
+    text = replaceAll(text, "@INDEXCOUNT@", c.indexCount);
+    text = replaceAll(text, "@ACCESSORS@", c.accessors);
+    text = replaceAll(text, "@INDICES@", c.indices);
+    text = replaceAll(text, "@URI@", c.uri);
+    text = replaceAll(text, "@BYTES@", c.bytes);
+
+    const std::string path = writeTempGltf(name, text.c_str());
+    GltfLoader::Scene scene;
+    bool threw = false;
+    try {
+        scene = GltfLoader::Load(path);
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    std::filesystem::remove(path);
+    CHECK_MSG(!threw, name + ": the importer threw on a malformed file instead of refusing it");
+    return scene;
+}
+
+const glm::vec3 kUp(0.0f, 1.0f, 0.0f);
+
+} // namespace
+
+static void testAnAccessorThatOutrunsItsBufferIsRefused() {
+    // 1000 positions out of a buffer that holds three. Taken at its word the
+    // loader read 12 kilobytes from a 76-byte allocation.
+    Case c;
+    c.positions = "1000";
+    const auto scene = loadCase(c, "supersonic_hard_outrun.gltf");
+    CHECK_MSG(scene.submeshes.empty(),
+              "a primitive whose positions do not fit the buffer is not drawn");
+}
+
+static void testAnAbsurdVertexCountDoesNotAllocateFirst() {
+    // The vertex array was sized from the declared count BEFORE any check, so
+    // four billion became a std::length_error - or, on a machine with the
+    // address space, a 240 GB allocation - from a file of a few hundred bytes.
+    Case c;
+    c.positions = "4000000000";
+    const auto scene = loadCase(c, "supersonic_hard_huge.gltf");
+    CHECK(scene.submeshes.empty());
+}
+
+static void testIndicesThatOutrunTheBufferAreRefused() {
+    Case c;
+    c.indexCount = "1000";
+    const auto scene = loadCase(c, "supersonic_hard_idxoutrun.gltf");
+    CHECK_MSG(scene.submeshes.empty(), "indices the buffer cannot hold are not read past its end");
+
+    Case huge;
+    huge.indexCount = "4000000000";
+    const auto hugeScene = loadCase(huge, "supersonic_hard_idxhuge.gltf");
+    CHECK_MSG(hugeScene.submeshes.empty(), "and a huge index count reserves nothing");
+}
+
+static void testAnAttributeIndexOutsideTheFileIsIgnored() {
+    // NORMAL names accessor 99 in a file with two. The geometry is sound, so it
+    // loads - with the normal an absent attribute gets - rather than the loader
+    // indexing past the accessor table.
+    for (const char* index : {"99", "-1"}) {
+        Case c;
+        c.attributes = std::string(", \"NORMAL\": ") + index;
+        const auto scene = loadCase(c, "supersonic_hard_badindex.gltf");
+        CHECK_MSG(scene.ok, std::string("NORMAL ") + index + ": " + scene.error);
+        if (!scene.ok || scene.submeshes.empty()) continue;
+        const auto& vertices = scene.submeshes[0].mesh.vertices;
+        CHECK_EQ(static_cast<int>(vertices.size()), 3);
+        for (const auto& v : vertices) CHECK(v.normal == kUp);
+    }
+}
+
+static void testAnAttributeShorterThanThePositionsIsIgnored() {
+    // A NORMAL accessor of one element for three vertices. Reading three of them
+    // runs two elements past the accessor, into whatever follows - here the
+    // positions, which would come out as normals.
+    Case c;
+    c.attributes = ", \"NORMAL\": 2";
+    c.accessors = R"(, { "bufferView": 0, "componentType": 5126, "count": 1, "type": "VEC3" })";
+    const auto scene = loadCase(c, "supersonic_hard_shortnormal.gltf");
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok || scene.submeshes.empty()) return;
+    for (const auto& v : scene.submeshes[0].mesh.vertices) {
+        CHECK_MSG(v.normal == kUp, "a short attribute is treated as absent, not read past its count");
+    }
+}
+
+static void testAnAttributeOfTheWrongShapeIsIgnored() {
+    // Normals as normalised bytes (what KHR_mesh_quantization would write) were
+    // read as if they were floats: three bytes an element, twelve bytes read.
+    Case c;
+    c.attributes = ", \"NORMAL\": 2";
+    c.accessors = R"(, { "bufferView": 0, "componentType": 5120, "normalized": true, "count": 3, "type": "VEC3" })";
+    const auto scene = loadCase(c, "supersonic_hard_bytenormal.gltf");
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok || scene.submeshes.empty()) return;
+    for (const auto& v : scene.submeshes[0].mesh.vertices) {
+        CHECK_MSG(v.normal == kUp, "an attribute the loader cannot read as floats is absent, not garbage");
+    }
+}
+
+static void testSkinningInfluencesOfTheWrongShapeAreIgnored() {
+    // JOINTS_0 as one unsigned byte per vertex, placed so the last element is the
+    // last byte of the buffer. The loader reads four components of every
+    // element, so the last one reads three bytes past the end.
+    Case c;
+    c.attributes = ", \"JOINTS_0\": 2, \"WEIGHTS_0\": 3";
+    c.accessors =
+        R"(, { "bufferView": 3, "byteOffset": 21, "componentType": 5121, "count": 3, "type": "SCALAR" })"
+        R"(, { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC4" })";
+    const auto scene = loadCase(c, "supersonic_hard_badjoints.gltf");
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok || scene.submeshes.empty()) return;
+    const Vertex defaults{};
+    for (const auto& v : scene.submeshes[0].mesh.vertices) {
+        CHECK_MSG(v.jointWeights == defaults.jointWeights,
+                  "influences that are not VEC4 are dropped, leaving the vertex bound to joint 0");
+    }
+}
+
+static void testAnIndexNoVertexAnswersToDropsItsWholeTriangle() {
+    // Indices 0 1 2 0 1 99. Dropping only the 99 left five indices - a triangle
+    // and two stray vertices - which the next triangle then shifts by two.
+    Case c;
+    c.uri = kOutOfRangeIndexBuffer;
+    c.bytes = "48";
+    c.indexCount = "6";
+    const auto scene = loadCase(c, "supersonic_hard_badindexvalue.gltf");
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok || scene.submeshes.empty()) return;
+    const auto& indices = scene.submeshes[0].mesh.indices;
+    CHECK_MSG(indices.size() == 3, "the sound triangle survives and the bad one goes whole");
+    CHECK_MSG(indices.size() % 3 == 0, "indices always form whole triangles");
+}
+
+static void testAnimationOutputsOfTheWrongShapeAreIgnored() {
+    // A translation channel whose output is SCALAR, placed so the last key is the
+    // last eight bytes of the buffer: three floats are read for a key that has
+    // one, which is eight bytes past the end.
+    const std::string text = replaceAll(R"({
+  "asset": { "version": "2.0" },
+  "scenes": [ { "nodes": [0] } ],
+  "scene": 0,
+  "nodes": [
+    { "name": "arm",   "translation": [5, 0, 0], "children": [1] },
+    { "name": "plate", "translation": [2, 0, 0], "mesh": 0 }
+  ],
+  "meshes": [ { "primitives": [ { "attributes": { "POSITION": 0 }, "indices": 1 } ] } ],
+  "animations": [ {
+    "name": "swing",
+    "channels": [ { "sampler": 0, "target": { "node": 0, "path": "translation" } } ],
+    "samplers": [ { "input": 2, "output": 3, "interpolation": "LINEAR" } ]
+  } ],
+  "buffers": [ { "byteLength": 76, "uri": "@URI@" } ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0,  "byteLength": 36 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 6  },
+    { "buffer": 0, "byteOffset": 44, "byteLength": 8  },
+    { "buffer": 0, "byteOffset": 52, "byteLength": 24 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0] },
+    { "bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR" },
+    { "bufferView": 2, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0], "max": [1] },
+    { "bufferView": 3, "byteOffset": 16, "componentType": 5126, "count": 2, "type": "SCALAR" }
+  ]
+})", "@URI@", kSharedBuffer);
+
+    const std::string path = writeTempGltf("supersonic_hard_badoutput.gltf", text.c_str());
+    const auto scene = GltfLoader::Load(path);
+    std::filesystem::remove(path);
+
+    CHECK_MSG(scene.ok, scene.error);
+    CHECK_MSG(scene.clips.empty(),
+              "a translation output that is not VEC3 makes no channel, so no clip");
+}
+
+static void testAShortInverseBindArrayIsIgnored() {
+    // Two joints, one inverse bind matrix: the second is read from 64 bytes
+    // past the end of the accessor. The skeleton is still built, with the
+    // matrices of a skin that names none - which the glTF spec says are all the
+    // identity.
+    const std::string text = replaceAll(R"({
+  "asset": { "version": "2.0" },
+  "scene": 0,
+  "scenes": [ { "nodes": [0, 1] } ],
+  "nodes": [
+    { "mesh": 0, "skin": 0 },
+    { "children": [2] },
+    { "translation": [0, 1, 0] }
+  ],
+  "skins": [ { "joints": [1, 2], "inverseBindMatrices": 2 } ],
+  "meshes": [ { "primitives": [ { "attributes": { "POSITION": 0 }, "indices": 1 } ] } ],
+  "buffers": [ { "byteLength": 76, "uri": "@URI@" } ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0,  "byteLength": 36 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 6  },
+    { "buffer": 0, "byteOffset": 52, "byteLength": 24 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0] },
+    { "bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR" },
+    { "bufferView": 2, "componentType": 5126, "count": 1, "type": "MAT4" }
+  ]
+})", "@URI@", kSharedBuffer);
+
+    const std::string path = writeTempGltf("supersonic_hard_shortibm.gltf", text.c_str());
+    const auto scene = GltfLoader::Load(path);
+    std::filesystem::remove(path);
+
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok || scene.skeletons.empty()) return;
+    const Skeleton& skeleton = scene.skeletons[0];
+    CHECK_EQ(static_cast<int>(skeleton.joints.size()), 2);
+    for (const Joint& joint : skeleton.joints) {
+        for (int c = 0; c < 4; ++c) {
+            for (int r = 0; r < 4; ++r) {
+                CHECK_MSG(joint.inverseBind[c][r] == (c == r ? 1.0f : 0.0f),
+                          "the short array is ignored whole: every inverse bind is the identity, "
+                          "not the one real matrix repeated or memory past the accessor");
+            }
+        }
+    }
+}
+
+static void testAVeryDeepNodeChainDoesNotOverflowTheStack() {
+    // Sixty thousand nodes, each the only child of the one before. The walk
+    // recursed once per level, so this was a stack overflow - a crash, not an
+    // error - from a file with no malformed field in it.
+    constexpr int kDepth = 60000;
+    std::string text = R"({
+  "asset": { "version": "2.0" },
+  "scene": 0,
+  "scenes": [ { "nodes": [0] } ],
+  "meshes": [ { "primitives": [ { "attributes": { "POSITION": 0 }, "indices": 1 } ] } ],
+  "buffers": [ { "byteLength": 76, "uri": ")";
+    text += kSharedBuffer;
+    text += R"(" } ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0,  "byteLength": 36 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 6  }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0] },
+    { "bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR" }
+  ],
+  "nodes": [ { "mesh": 0, "children": [1] })";
+    for (int i = 1; i < kDepth; ++i) {
+        text += ",{ \"children\": [" + std::to_string(i + 1) + "] }";
+    }
+    text += ",{}]\n}";
+
+    const std::string path = writeTempGltf("supersonic_hard_deep.gltf", text.c_str());
+    const auto scene = GltfLoader::Load(path);
+    std::filesystem::remove(path);
+
+    CHECK_MSG(scene.ok, scene.error);
+    CHECK_MSG(!scene.submeshes.empty(),
+              "the mesh at the top of the chain is still imported; only the depth is cut");
+}
+
 static void runTests() {
     testAFileThatAnimatesNodesAndHasNoSkinStillAnimates();
     testAFileWithNoAnimationIsUntouched();
     testBakedVertexColourSurvivesTheImport();
     testAMeshWithNoVertexColourIsStillWhite();
+    testAnAccessorThatOutrunsItsBufferIsRefused();
+    testAnAbsurdVertexCountDoesNotAllocateFirst();
+    testIndicesThatOutrunTheBufferAreRefused();
+    testAnAttributeIndexOutsideTheFileIsIgnored();
+    testAnAttributeShorterThanThePositionsIsIgnored();
+    testAnAttributeOfTheWrongShapeIsIgnored();
+    testSkinningInfluencesOfTheWrongShapeAreIgnored();
+    testAnIndexNoVertexAnswersToDropsItsWholeTriangle();
+    testAnimationOutputsOfTheWrongShapeAreIgnored();
+    testAShortInverseBindArrayIsIgnored();
+    testAVeryDeepNodeChainDoesNotOverflowTheStack();
     // The fixture is committed to the tree and CTest runs this suite from the
     // project root, so it is always reachable. It used to be optional: a miss
     // printed a note, ran two of seven cases and exited 0, which meant a broken
