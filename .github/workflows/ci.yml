@@ -36,6 +36,21 @@ name: CI
 # ---------------------------------------------------------------------------
 on:
   workflow_dispatch:
+    inputs:
+      legs:
+        description: >-
+          Which jobs to run. "quick" is the shader byte-compare and the
+          documented-counts check, about a minute between them, for when the
+          builds are not worth the minutes. "all" is everything, as before.
+        type: choice
+        default: all
+        options:
+          - all
+          - quick
+
+# Nothing here writes to the repository or to anything it hosts.
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -44,6 +59,12 @@ concurrency:
 jobs:
   build:
     name: ${{ matrix.name }}
+    # A cap, not an expectation: a hung suite otherwise holds a runner for
+    # GitHub's default six hours, out of the allowance that is the reason
+    # automatic runs are off. Set generously from what these builds are
+    # known to cost, so a slow day is not a red one; tighten after real runs.
+    if: ${{ inputs.legs != 'quick' }}
+    timeout-minutes: 90
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -152,6 +173,7 @@ jobs:
 
   shader-check:
     name: Shaders compile from source
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -243,6 +265,8 @@ jobs:
   # author cannot fix gets deleted, which is worse.
   validation:
     name: Validation layers (lavapipe)
+    if: ${{ inputs.legs != 'quick' }}
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -301,6 +325,8 @@ jobs:
   # through a hand-written JSON parser with no depth limit.
   sanitizers:
     name: ASan + UBSan (Linux)
+    if: ${{ inputs.legs != 'quick' }}
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -353,6 +379,8 @@ jobs:
   # it does not.
   options-off:
     name: Configure with tests and plugin OFF
+    if: ${{ inputs.legs != 'quick' }}
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -389,6 +417,7 @@ jobs:
   # rots; this makes the build the only place the number lives.
   doc-facts:
     name: Documented counts match the build
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
