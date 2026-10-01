@@ -7,14 +7,20 @@
 // be given a different file, not copy and re-open the broken one every other frame
 // for as long as the game runs.
 //
-// The "plugin" here is a real shared library that is not a plugin: the C library, or
-// kernel32 on Windows. It loads fine and has none of the entry points, which is
-// exactly a plugin that fails for a reason no retry will cure.
+// The "plugin" here is a real shared library that is not a plugin: the maths library
+// (the C library where they are one), or kernel32 on Windows. It loads fine and has
+// none of the entry points, which is exactly a plugin that fails for a reason no retry
+// will cure.
+//
+// Not a function the sanitizers intercept: under ASan the address of printf is inside
+// libasan, and loading a second copy of the sanitizer runtime aborts the process
+// ("Shadow memory range interleaves with an existing memory mapping").
 
 #include "TestHarness.hpp"
 #include "core/HotReloadEngine.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -39,8 +45,9 @@ std::string aSharedLibraryThatIsNotAPlugin() {
     if (!module || GetModuleFileNameA(module, buffer, MAX_PATH) == 0) return {};
     return buffer;
 #else
+    double (*const cosine)(double) = &std::cos;
     Dl_info info{};
-    if (dladdr(reinterpret_cast<void*>(&std::printf), &info) == 0 || !info.dli_fname) return {};
+    if (dladdr(reinterpret_cast<void*>(cosine), &info) == 0 || !info.dli_fname) return {};
     return info.dli_fname;
 #endif
 }
