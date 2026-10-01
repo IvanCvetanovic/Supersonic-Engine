@@ -14,6 +14,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <thread>
@@ -30,9 +31,19 @@ void write(const std::string& path, const char* contents) {
 
 // Filesystem timestamps are coarse - on some filesystems 1s, on NTFS ~100ns but
 // with a lazily-updated cache. Two writes inside the same tick are
-// indistinguishable, so the test that depends on a CHANGE has to outlive one.
-void letTheClockMove() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+// indistinguishable, so a test that depends on a CHANGE needs the second write to
+// LOOK later than the first.
+//
+// This used to sleep for 1.1 seconds before every edit, which was nearly all of
+// this suite's run time and most of the whole test run's. The watcher compares write
+// times and nothing else, so what it needs is a write time that differs, and setting
+// one is exact where waiting for the clock is only likely: the edit is written, then
+// its write time is put two seconds after the file's previous one.
+void writeAsALaterEdit(const std::string& path, const char* contents) {
+    std::error_code ec;
+    const auto before = std::filesystem::last_write_time(path, ec);
+    write(path, contents);
+    if (!ec) std::filesystem::last_write_time(path, before + std::chrono::seconds(2), ec);
 }
 
 } // namespace
@@ -67,8 +78,7 @@ static void testAChangedFileFiresOnceWithItsPath() {
     watcher.Watch(path);
     CHECK_EQ(watcher.Poll(), size_t{0});
 
-    letTheClockMove();
-    write(path, "edited");
+    writeAsALaterEdit(path, "edited");
 
     CHECK_EQ(watcher.Poll(), size_t{1});
     CHECK_EQ(seen.size(), size_t{1});
@@ -168,8 +178,7 @@ static void testAnAcknowledgedWriteDoesNotFire() {
     watcher.Watch(path);
     CHECK_EQ(watcher.Poll(), size_t{0});
 
-    letTheClockMove();
-    write(path, "written by the engine");
+    writeAsALaterEdit(path, "written by the engine");
     watcher.Acknowledge(path);
 
     CHECK_MSG(watcher.Poll() == size_t{0}, "an acknowledged write must not fire");
@@ -177,8 +186,7 @@ static void testAnAcknowledgedWriteDoesNotFire() {
 
     // And the watcher is not deafened: the NEXT change, made by somebody else,
     // still fires. Acknowledging must adopt one write, not stop watching.
-    letTheClockMove();
-    write(path, "edited in another program");
+    writeAsALaterEdit(path, "edited in another program");
 
     CHECK_MSG(watcher.Poll() == size_t{1}, "acknowledging must not stop later changes firing");
     CHECK_EQ(fired, 1);
@@ -240,8 +248,7 @@ static void testACallbackMayWatchMorePaths() {
     watcher.Watch(path);
     CHECK_EQ(watcher.Poll(), size_t{0});
 
-    letTheClockMove();
-    write(path, "edited");
+    writeAsALaterEdit(path, "edited");
 
     CHECK_MSG(watcher.Poll() == size_t{1}, "the edit must still be reported");
     CHECK_EQ(fired, 1);

@@ -448,9 +448,15 @@ static void writeRaw(const std::string& path, const std::string& text) {
 }
 
 // Filesystem write times are coarse, so a test that depends on a file looking
-// CHANGED has to outlive one tick. See test_assetwatcher for the same helper.
-static void letTheClockMove() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+// CHANGED needs a write time that differs. Waiting for the clock to tick cost 1.1
+// seconds a time; moving the write time costs nothing and is exact. See
+// test_assetwatcher for the same reasoning.
+static void moveWriteTime(const std::string& path, int seconds) {
+    std::error_code ec;
+    const auto current = std::filesystem::last_write_time(path, ec);
+    if (!ec) {
+        std::filesystem::last_write_time(path, current + std::chrono::seconds(seconds), ec);
+    }
 }
 
 static void testReloadKeepsTheIdAndPicksUpTheNewValues() {
@@ -537,6 +543,16 @@ static void testSavingFromTheEditorDoesNotFireTheWatcher() {
     library.Create(kPathA, makeAsset("Tuned", 0.3f));
 
     const uint32_t id = library.Acquire(kPathA);
+
+    // The watcher records the file's write time when it starts watching, and this
+    // test only means something if the engine's own save lands on a DIFFERENT one:
+    // if they matched, the poll below would report nothing whether or not Save
+    // acknowledged its write, and the test would pass with the acknowledgement
+    // deleted. The file used to be made to differ by sleeping 1.1 seconds before the
+    // save; instead it is aged two seconds, and the watcher - which the library
+    // already registered it with when it was created - adopts the aged time.
+    moveWriteTime(kPathA, -2);
+    watcher.Acknowledge(kPathA);
     watcher.Watch(kPathA);
     CHECK_EQ(watcher.Poll(), size_t{0});
 
@@ -544,7 +560,6 @@ static void testSavingFromTheEditorDoesNotFireTheWatcher() {
     // the acknowledgement the next poll reads the file back over the values
     // still being dragged: harmless while they match, wrong on the first frame
     // where the slider has moved on.
-    letTheClockMove();
     if (MaterialAsset* asset = library.Get(id)) asset->roughness = 0.9f;
     library.Save(id);
 
@@ -552,8 +567,8 @@ static void testSavingFromTheEditorDoesNotFireTheWatcher() {
     CHECK_EQ(fired, 0);
 
     // And it is still watching: an edit made ELSEWHERE still fires.
-    letTheClockMove();
     writeRaw(kPathA, MaterialLibrary::Serialize(makeAsset("External", 0.11f)));
+    moveWriteTime(kPathA, +2);   // a later edit than the save the watcher acknowledged
     CHECK_MSG(watcher.Poll() == size_t{1}, "an edit from outside must still fire");
 
     cleanup();
