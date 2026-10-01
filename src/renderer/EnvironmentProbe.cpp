@@ -1,6 +1,7 @@
 #include "renderer/EnvironmentProbe.hpp"
 
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #include "core/Log.hpp"
@@ -173,7 +174,10 @@ void EnvironmentProbe::UploadOne(std::unique_ptr<VulkanImage>& target,
                          vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_ONLY);
     staging.UploadData(staged.data(), offset);
 
-    target = std::make_unique<VulkanImage>(
+    // Built and filled BEFORE it replaces anything, so a failure part-way through
+    // leaves the image that was already there, as it did when this assigned
+    // straight into `target`.
+    auto fresh = std::make_unique<VulkanImage>(
         m_deviceRef, baseSize, baseSize, kFormat,
         vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
         vk::ImageAspectFlagBits::eColor,
@@ -182,10 +186,25 @@ void EnvironmentProbe::UploadOne(std::unique_ptr<VulkanImage>& target,
 
     // Clamped, not repeated. A cube sampler wraps across faces on its own, and
     // eRepeat on a cube is a sampler asking for a face that is not there.
-    target->CreateSampler(vk::Filter::eLinear, vk::SamplerAddressMode::eClampToEdge);
+    fresh->CreateSampler(vk::Filter::eLinear, vk::SamplerAddressMode::eClampToEdge);
 
     VulkanImage::UploadLayeredImage(m_deviceRef, m_commandPool, staging.GetBuffer(),
-                                    target->GetImage(), Cubemap::kFaceCount, mipLevels, regions);
+                                    fresh->GetImage(), Cubemap::kFaceCount, mipLevels, regions);
+
+    // The image being replaced may still be in use. The descriptors that sample
+    // it were written last frame, and with two frames in flight the GPU can be
+    // reading it right now: this runs before the frame's fence has been waited
+    // on, and updateEnvironmentDescriptors only idles the device AFTER the load
+    // returns. Assigning over `target` freed the old cube - image, view and
+    // sampler - on the spot, which is a use-after-free for as long as that frame
+    // runs. So it goes to the device, which frees it once the frame it was
+    // queued on is complete: the same hand-off MeshRegistry and TextureRegistry
+    // make for what they drop.
+    if (target) {
+        m_deviceRef.DeferDestroy(
+            [old = std::shared_ptr<VulkanImage>(std::move(target))]() mutable { old.reset(); });
+    }
+    target = std::move(fresh);
 }
 
 vk::DescriptorImageInfo EnvironmentProbe::IrradianceInfo() const {
