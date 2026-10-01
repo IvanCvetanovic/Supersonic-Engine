@@ -1391,6 +1391,24 @@ static void testAPairNobodyHasWrittenABarrierForIsRefused() {
     CHECK(!VulkanImage::BarrierFor(L::eColorAttachmentOptimal, L::eShaderReadOnlyOptimal).has_value());
 }
 
+// Whether a decoded image is one the device can hold, decided before anything is
+// created (TextureRegistry::FitsTheDevice). A PNG can be any size, and the device's
+// answer to one past maxImageDimension2D was an exception out of the image
+// constructor - fatal - with the decoded pixels never freed. The refusal itself
+// needs a device; the boundary does not.
+static void testAnImagePastTheDeviceLimitIsRefusedBeforeItIsMade() {
+    constexpr uint32_t kVulkanMinimum = 4096;   // the least a device may report
+    CHECK(TextureRegistry::FitsTheDevice(1, 1, kVulkanMinimum));
+    CHECK(TextureRegistry::FitsTheDevice(4096, 4096, kVulkanMinimum));
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(4097, 1, kVulkanMinimum), "one pixel too wide");
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(1, 4097, kVulkanMinimum), "one pixel too tall");
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(40000, 40000, 16384), "a 40000 x 40000 PNG on a 16384 device");
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(0, 16, 16384), "an empty axis is not an image");
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(16, 0, 16384), "either axis");
+    CHECK(TextureRegistry::FitsTheDevice(16384, 16384, 16384));
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(0xFFFFFFFFu, 0xFFFFFFFFu, 16384), "and the largest a uint32 can say");
+}
+
 static void testTheSameMapsReadBothWaysAreTwoSetsAndBothGo() {
     // One descriptor holds one sampler, so the wrap is part of the SET's key -
     // and only of the set's: the texture's own key, by path, is untouched, so
@@ -2226,6 +2244,7 @@ static void runTests() {
     testAMaterialReadsEachTexturesOwnWrapUnlessItClamps();
     testAFilesMetaDecidesItsUpload();
     testEveryTransitionAnUploadAsksForIsInTheTable();
+    testAnImagePastTheDeviceLimitIsRefusedBeforeItIsMade();
     testAPairNobodyHasWrittenABarrierForIsRefused();
     testTheSameMapsReadBothWaysAreTwoSetsAndBothGo();
     testClampToEdgeSurvivesASaveAndLoadAndIsWrittenOnlyWhenSet();

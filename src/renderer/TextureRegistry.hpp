@@ -108,6 +108,18 @@ public:
         return choice;
     }
 
+    // Whether an image of this size can be made at all, against the device's
+    // maxImageDimension2D. A decoded file can be any size - stb_image will hand back
+    // a 40000 x 40000 PNG - and the device's answer was a thrown exception from
+    // inside the image constructor, which the loader turns into a fatal exit; it
+    // also skipped freeing the decoded pixels. Decided here, before anything is
+    // created, so it is the same refusal an unreadable file gets: a log line and the
+    // caller's fallback texture. A pure function so the boundary can be tested with
+    // no device (the Vulkan minimum for the limit is 4096; real devices are 16384+).
+    static constexpr bool FitsTheDevice(uint32_t width, uint32_t height, uint32_t maxDimension) {
+        return width > 0 && height > 0 && width <= maxDimension && height <= maxDimension;
+    }
+
     // Descriptor set binding every map of one material, cached per five ids
     // so a scene sharing materials does not allocate a set per entity.
     //

@@ -7,6 +7,7 @@
 
 #include <array>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -185,6 +186,17 @@ uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixe
         return m_checkerTexture;
     }
 
+    // Before the staging buffer and the image, either of which would throw for an
+    // image the device cannot hold; see FitsTheDevice.
+    const uint32_t maxDimension =
+        m_deviceRef.GetPhysicalDevice().getProperties().limits.maxImageDimension2D;
+    if (!FitsTheDevice(width, height, maxDimension)) {
+        SUPERSONIC_LOG_ERROR("TextureRegistry") << "'" << key << "' is " << width << "x" << height
+            << ", larger than the " << maxDimension << " this device can make an image of; "
+            << "using the checkerboard." << std::endl;
+        return m_checkerTexture;
+    }
+
     const vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(width) * height * 4;
 
     VulkanBuffer staging(m_deviceRef.GetAllocator(), imageSize,
@@ -262,19 +274,37 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb, uint32_t f
     int height = 0;
     int channels = 0;
     // Forced to 4 channels so the upload path only ever deals with RGBA8.
-    stbi_uc* pixels = stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+    //
+    // Owned by a unique_ptr from the moment it exists: everything below can throw
+    // (the upload, the .meta read), and a manual stbi_image_free at the end of the
+    // function was skipped by every one of those, leaking the whole decoded image.
+    std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> decoded(
+        stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha), &stbi_image_free);
+    stbi_uc* pixels = decoded.get();
 
     if (!pixels || width <= 0 || height <= 0) {
         SUPERSONIC_LOG_ERROR("TextureRegistry") << "Could not load '" << path << "': "
                   << (stbi_failure_reason() ? stbi_failure_reason() : "unknown")
                   << " - using the caller's fallback texture." << std::endl;
-        if (pixels) stbi_image_free(pixels);
         // Cache the failure against this key so it is not retried every frame.
         //
         // Which is why every built-in has to be protected from Invalidate: this
         // line puts a BUILT-IN id under a real file's key, so invalidating that
         // file would otherwise reach in and destroy a texture every material in
         // the scene is sharing.
+        m_lookup.emplace(key, fallback);
+        return fallback;
+    }
+
+    // A file the device cannot hold an image of is a failed load like an unreadable
+    // one - cached against the key so it is not decoded again every frame, and the
+    // caller's fallback in its place - not an exception out of the image constructor.
+    const uint32_t maxDimension =
+        m_deviceRef.GetPhysicalDevice().getProperties().limits.maxImageDimension2D;
+    if (!FitsTheDevice(static_cast<uint32_t>(width), static_cast<uint32_t>(height), maxDimension)) {
+        SUPERSONIC_LOG_ERROR("TextureRegistry") << "'" << path << "' is " << width << "x" << height
+            << ", larger than the " << maxDimension << " this device can make an image of"
+            << " - using the caller's fallback texture." << std::endl;
         m_lookup.emplace(key, fallback);
         return fallback;
     }
@@ -308,7 +338,6 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb, uint32_t f
     const uint32_t id = UploadRGBA(key, pixels,
                                    static_cast<uint32_t>(width), static_cast<uint32_t>(height), srgb,
                                    choice.filter, choice.addressMode, choice.mipmaps);
-    stbi_image_free(pixels);
 
     const auto* uploaded = get(id);
     const uint32_t mips = uploaded && uploaded->image ? uploaded->image->GetMipLevels() : 1;
