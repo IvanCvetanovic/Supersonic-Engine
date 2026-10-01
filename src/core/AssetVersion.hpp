@@ -3,6 +3,7 @@
 #include <string>
 
 #include "core/Json.hpp"
+#include "core/JsonInts.hpp"
 
 namespace Supersonic {
 
@@ -39,7 +40,10 @@ inline constexpr int kCurrent = 2;
 
 // Absent means 0: everything written before this existed.
 inline int Read(const Json::Value& root) {
-    return static_cast<int>(root["Version"].AsNumber(0.0));
+    // asI32, not a cast: a version of 1e20 is a number a scene can say, and the cast
+    // was undefined behaviour that gave INT_MIN - an "ancient" file that is migrated -
+    // where saturating makes it what it plainly is, newer than this build.
+    return asI32(root["Version"].AsNumber(0.0));
 }
 
 // A file from the future is refused rather than partially read. There is no

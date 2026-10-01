@@ -2,6 +2,7 @@
 #include "core/AssetVersion.hpp"
 #include "core/AtomicFile.hpp"
 #include "core/FiniteNumbers.hpp"
+#include "core/JsonInts.hpp"
 #include "core/Components.hpp"
 #include "core/Json.hpp"
 #include "core/AssetDatabase.hpp"
@@ -210,7 +211,10 @@ bool validateSceneArray(const Json::Array& entities, std::string& error) {
         if (!node.IsObject()) continue;
         if (node.Has("Parent")) {
             const double raw = node["Parent"].AsNumber(-1.0);
-            if (raw < 0.0 || static_cast<size_t>(raw) >= objectCount) {
+            // asIndex, and `!(raw >= 0)` so NaN fails it too. The cast this replaced was
+            // undefined for anything past 64 bits and gave 0 for 1e20 on x86 GCC - which
+            // is "in range", so a Parent of 1e20 was accepted as entity 0.
+            if (!(raw >= 0.0) || asIndex(raw) >= objectCount) {
                 error = "entity " + std::to_string(index) +
                         " has an out-of-range Parent index (" + std::to_string(raw) + ")";
                 return false;
@@ -218,7 +222,7 @@ bool validateSceneArray(const Json::Array& entities, std::string& error) {
         }
         if (node.Has("JointConnectedBody")) {
             const double raw = node["JointConnectedBody"].AsNumber(-1.0);
-            if (raw < 0.0 || static_cast<size_t>(raw) >= objectCount) {
+            if (!(raw >= 0.0) || asIndex(raw) >= objectCount) {
                 error = "entity " + std::to_string(index) +
                         " has an out-of-range JointConnectedBody index (" +
                         std::to_string(raw) + ")";
@@ -398,7 +402,9 @@ SerializationResult applyScene(entt::registry& registry, const Json::Array& enti
         const entt::entity entity = created[cursor++];
 
         if (node.Has("Parent")) {
-            const auto parentIndex = static_cast<size_t>(node["Parent"].AsNumber(-1.0));
+            // asIndex: -1, NaN and anything past the array are all "no parent", which is
+            // what the cast to size_t used to give by being undefined behaviour.
+            const auto parentIndex = asIndex(node["Parent"].AsNumber(-1.0));
             if (parentIndex < created.size() && created[parentIndex] != entity) {
                 registry.emplace<HierarchyComponent>(entity, created[parentIndex]);
             }

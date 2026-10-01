@@ -1330,6 +1330,98 @@ static void testAPrefabWithANonFiniteNumberIsStillReadable() {
     std::remove(path.c_str());
 }
 
+// A scene's integers are doubles until something converts them, and converting a
+// double to an integer type it does not fit is undefined behaviour. About thirty
+// casts in the codec did that to whatever a scene said.
+//
+// What the cast DID on x86, which is what every existing scene was loaded with, is
+// kept - for unsigned a value that fits in 64 bits wraps modulo 2^32, so a hand-written
+// "Layer": -1 is every bit set - and made defined. What changes is only the signed
+// case that was never meaningful: INT_MIN for anything out of range, which is now
+// saturation toward the end the number is past.
+
+namespace {
+
+BoxColliderComponent boxWith(const std::string& layer, const std::string& collidesWith) {
+    const std::string text = R"({"Version": 2, "Entities": [{"Tag": "e", "BoxCollider": {"Layer": )" +
+                             layer + R"(, "CollidesWith": )" + collidesWith + "}}]}";
+    entt::registry registry;
+    const SerializationResult result = SceneSerializer::DeserializeFromString(registry, text);
+    CHECK_MSG(result.ok, result.message);
+    for (const entt::entity e : registry.view<BoxColliderComponent>()) {
+        return registry.get<BoxColliderComponent>(e);
+    }
+    return BoxColliderComponent{};
+}
+
+int maxLengthWith(const std::string& number) {
+    const std::string text = R"({"Version": 2, "Entities": [{"Tag": "e", "UITextField": {"MaxLength": )" +
+                             number + "}}]}";
+    entt::registry registry;
+    const SerializationResult result = SceneSerializer::DeserializeFromString(registry, text);
+    CHECK_MSG(result.ok, result.message);
+    for (const entt::entity e : registry.view<UITextFieldComponent>()) {
+        return registry.get<UITextFieldComponent>(e).maxLength;
+    }
+    return -999;
+}
+
+} // namespace
+
+static void testAnUnsignedFieldKeepsWhatTheCastAlwaysGaveItAndNowDefinesIt() {
+    CHECK_MSG(boxWith("-1", "1").layer == 0xFFFFFFFFu, "-1 is every bit set, the hand-written 'all layers'");
+    CHECK(boxWith("-5", "1").layer == 4294967291u);
+    CHECK(boxWith("4294967295", "1").layer == 4294967295u);
+    CHECK_MSG(boxWith("4294967296", "1").layer == 0u, "2^32 wraps to 0");
+    CHECK_MSG(boxWith("1e20", "1").layer == 0u, "past 64 bits is 0, as it was");
+    CHECK(boxWith("1", "-1e20").collidesWith == 0u);
+    CHECK_MSG(boxWith("3.9", "1").layer == 3u, "a fraction truncates toward zero");
+    CHECK(boxWith("7", "5").layer == 7u && boxWith("7", "5").collidesWith == 5u);
+}
+
+static void testASignedFieldSaturatesInsteadOfBecomingTheMostNegativeNumber() {
+    CHECK_EQ(maxLengthWith("24"), 24);
+    CHECK_EQ(maxLengthWith("3.7"), 3);
+    CHECK_EQ(maxLengthWith("-3.7"), -3);
+    CHECK_MSG(maxLengthWith("1e10") == std::numeric_limits<int>::max(),
+              "a field a scene says is ten billion long is very long, not negative");
+    CHECK_MSG(maxLengthWith("-1e10") == std::numeric_limits<int>::min(), "and the other end");
+    CHECK_EQ(maxLengthWith("2147483647"), std::numeric_limits<int>::max());
+}
+
+static void testAVersionNoBuildCouldHaveWrittenIsNewerNotAncient() {
+    // 1e20 as an int was INT_MIN - far below every real version, so "an old file,
+    // migrate it". It is plainly not old.
+    const std::string path = "test_hugever_tmp.scene";
+    {
+        std::ofstream f(path);
+        f << R"({"Version": 1e20, "Entities": [{"Tag": "Ghost"}]})";
+    }
+    entt::registry registry;
+    const auto result = SceneSerializer::Deserialize(registry, path);
+    std::remove(path.c_str());
+    CHECK_MSG(!result.ok, "a version of 1e20 is refused as newer than this build");
+}
+
+static void testAParentThatIsNotAnIndexIsRefusedRatherThanReadAsEntityZero() {
+    // The validation pass range-checks a Parent before anything is loaded, with a cast
+    // to size_t. That cast is undefined past 64 bits, and on x86 GCC 1e20 came out as 0
+    // - an index that is IN range - so the file was accepted and the entity silently
+    // parented to the first one in the scene.
+    for (const char* parent : {"-1", "-7", "1e20", "9999", "18446744073709551616"}) {
+        const std::string text = std::string(R"({"Version": 2, "Entities": [{"Tag": "a"}, {"Tag": "b", "Parent": )") +
+                                 parent + "}]}";
+        entt::registry registry;
+        const SerializationResult result = SceneSerializer::DeserializeFromString(registry, text);
+        CHECK_MSG(!result.ok, std::string("a Parent of ") + parent + " is out of range and is refused");
+        CHECK_MSG(registry.view<HierarchyComponent>().size() == 0, "and nothing was parented");
+    }
+    const std::string text = R"({"Version": 2, "Entities": [{"Tag": "a"}, {"Tag": "b", "Parent": 0}]})";
+    entt::registry registry;
+    CHECK(SceneSerializer::DeserializeFromString(registry, text).ok);
+    CHECK_MSG(registry.view<HierarchyComponent>().size() == 1, "and a real index still parents");
+}
+
 static void testReadLayersOverAnEntityThatAlreadyHasComponents() {
     // ComponentCodec::Read is documented as applying onto an EXISTING entity,
     // leaving unmentioned components alone. Every branch used plain emplace,
@@ -2260,6 +2352,10 @@ static void runTests() {
     testSavedScenesCarryTheCurrentVersion();
     testReadLayersOverAnEntityThatAlreadyHasComponents();
     testASceneSaveThatFailsPartWayLeavesThePreviousScene();
+    testAnUnsignedFieldKeepsWhatTheCastAlwaysGaveItAndNowDefinesIt();
+    testASignedFieldSaturatesInsteadOfBecomingTheMostNegativeNumber();
+    testAVersionNoBuildCouldHaveWrittenIsNewerNotAncient();
+    testAParentThatIsNotAnIndexIsRefusedRatherThanReadAsEntityZero();
     testTheFacetFormatsEveryFiniteNumberAsTheStandardOneDoes();
     testTheFacetWritesNothingAJsonReaderRefuses();
     testTheGuardLeavesTheStreamAsItFoundIt();
