@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -147,6 +149,11 @@ glm::vec3 Cubemap::Sample(const glm::vec3& direction) const {
 namespace EnvironmentMap {
 
 namespace {
+
+// What LoadRadiance will believe a resolution line about; see where they are
+// used, in LoadRadiance, for why there are two kinds of limit.
+constexpr int kMaxRadianceSide = 32768;
+constexpr uint64_t kMaxRadianceTexels = uint64_t{1} << 28;
 
 // RGBE to three floats. A zero exponent is black rather than a very small
 // number, which is what the format says and what stops a denormal storm.
@@ -307,9 +314,35 @@ bool LoadRadiance(const std::string& path, std::vector<glm::vec3>& outPixels,
         return false;
     }
 
+    // The resolution is the file's claim, and the pixel array was sized from it
+    // before a scanline was read: "-Y 100000 +X 100000" is ten billion texels, a
+    // hundred and twenty gigabytes, from a file of a few dozen bytes.
+    //
+    // Two limits. One is absolute: 32768 a side and 2^28 texels, twice the largest
+    // panoramas that get published (16384 x 8192). The other is what the FILE can
+    // hold: Radiance's run-length coding tops out near sixteen texels a byte, and
+    // an uncompressed scanline is four, so a file claiming more than thirty-two a
+    // byte cannot be telling the truth - and is refused without a byte allocated.
+    const uint64_t texels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+    std::error_code sizeError;
+    const uint64_t fileBytes = std::filesystem::file_size(path, sizeError);
+    if (width > kMaxRadianceSide || height > kMaxRadianceSide || texels > kMaxRadianceTexels) {
+        outError = path + " declares " + std::to_string(width) + " x " + std::to_string(height) +
+                   " texels, more than the " + std::to_string(kMaxRadianceSide) + " a side (" +
+                   std::to_string(kMaxRadianceTexels) + " in all) this reads";
+        outPixels.clear();
+        return false;
+    }
+    if (!sizeError && texels > fileBytes * 32) {
+        outError = path + " declares " + std::to_string(texels) + " texels but is only " +
+                   std::to_string(fileBytes) + " bytes, which cannot hold that many";
+        outPixels.clear();
+        return false;
+    }
+
     outWidth = static_cast<uint32_t>(width);
     outHeight = static_cast<uint32_t>(height);
-    outPixels.resize(static_cast<size_t>(width) * height);
+    outPixels.resize(static_cast<size_t>(texels));
 
     std::vector<unsigned char> row;
     for (uint32_t y = 0; y < outHeight; ++y) {

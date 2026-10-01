@@ -1,5 +1,6 @@
 #include "core/ParticleSystem.hpp"
 #include "core/JobSystem.hpp"
+#include "core/Log.hpp"
 
 #include <algorithm>
 #include <random>
@@ -37,8 +38,18 @@ void ParticleSystem::Update(entt::registry& registry, float deltaTime) {
         auto& emitter = view.get<ParticleEmitterComponent>(entity);
         emitters.push_back(&emitter);
 
-        const size_t capacity = std::max<size_t>(1, emitter.maxParticles);
+        // A ceiling, not a rounding: every size an effect really uses is exactly
+        // what it asked for. maxParticles is a uint32 out of a scene file, and
+        // the vector was sized from it as it stood.
+        const size_t requested = std::max<size_t>(1, emitter.maxParticles);
+        const size_t capacity = std::min(requested, kMaxParticlesPerEmitter);
         if (emitter.particles.size() != capacity) {
+            // Inside the resize, so a clamped emitter says so once and not on
+            // every frame.
+            if (requested > capacity) {
+                SUPERSONIC_LOG_WARN("ParticleSystem") << "An emitter asks for " << requested
+                    << " particles; keeping " << capacity << "." << std::endl;
+            }
             emitter.particles.resize(capacity);
         }
 

@@ -29,6 +29,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -1214,7 +1215,47 @@ static void testAVersionOneRecordingStillReads() {
     CHECK_MSG(parsed.ticks.size() == 2 && parsed.ticks[0].scroll == 0.0f, "with no wheel in it");
 }
 
+// A replay file is text a person can edit, so it is also text a person can get
+// wrong, and the tick count in its header was an allocation request. The count is
+// written twice (the end marker repeats it, to catch truncation) and the tick
+// array was sized from it the moment the two agreed.
+static void testATickCountIsNotAnAllocationRequest() {
+    // Four billion ticks. Each is a few hundred bytes, so this was a terabyte,
+    // asked for by a file of forty bytes that passes every check but this one.
+    bool threw = false;
+    bool ok = true;
+    try {
+        ok = InputRecording::Parse("SUPERSONICREPLAY 1\nticks 4000000000\nend 4000000000\n", "huge.replay").ok;
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    CHECK_MSG(!threw, "a huge tick count is refused, not thrown");
+    CHECK_MSG(!ok, "and not accepted");
+
+    // The limit is about 19 hours at 60 ticks a second. A session of one hour
+    // parses, whatever it costs, because it is a session somebody could have played.
+    CHECK_MSG(InputRecording::Parse("SUPERSONICREPLAY 1\nticks 216000\nend 216000\n", "hour.replay").ok,
+              "an hour at 60 Hz is a replay");
+}
+
+static void testACountTooBigForTheParserIsNotSilentlyWrapped() {
+    // 2^64 + 4 is twenty digits, which the digit-count guard let through, and
+    // value * 10 + digit wrapped it to 4 - which matches "end 4", so the file was
+    // accepted as a four-tick replay.
+    const InputRecording parsed =
+        InputRecording::Parse("SUPERSONICREPLAY 1\nticks 18446744073709551620\nend 4\n", "wrapped.replay");
+    CHECK_MSG(!parsed.ok, "a count that does not fit in 64 bits is refused, not read modulo 2^64");
+
+    // And the largest count that does fit is read as itself, then refused as too many.
+    const InputRecording biggest =
+        InputRecording::Parse("SUPERSONICREPLAY 1\nticks 18446744073709551615\nend 18446744073709551615\n",
+                              "biggest.replay");
+    CHECK(!biggest.ok);
+}
+
 static void runTests() {
+    testATickCountIsNotAnAllocationRequest();
+    testACountTooBigForTheParserIsNotSilentlyWrapped();
     testTheWheelIsWrittenAsAnEdgeAndReadBackBitForBit();
     testAReplayedTickAnswersTheWheel();
     testACaptureCarriesTheWheel();

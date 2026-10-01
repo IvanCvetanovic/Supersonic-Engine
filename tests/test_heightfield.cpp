@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <vector>
 
 using namespace Supersonic;
@@ -714,8 +715,39 @@ void testAPointedHullFitsWhereItsBoundingBoxCannot() {
               "the bounding box must collide here, or this fixture proves nothing");
 }
 
+// How big a collision grid is allowed to be. The size is a scene file's claim, and
+// the grid was sized from it before anything checked: 65536 x 65536 is 17 GB of
+// heights, asked for by a few bytes of JSON on the first physics step.
+void testAGridTooBigToBuildIsRefusedBeforeItIsAllocated() {
+    Heightfield out;
+
+    // Over the side limit, but small in cells: the old code built this happily,
+    // which is what makes the failure visible without allocating anything absurd.
+    CHECK_MSG(!TerrainGenerator::GenerateHeightfield(TerrainGenerator::kMaxHeightfieldSide + 1, 2,
+                                                     1.0f, 1.0f, out),
+              "a side past the limit is refused");
+
+    // Under the side limit on both, over the cell limit.
+    CHECK_MSG(!TerrainGenerator::GenerateHeightfield(8193, 8193, 1.0f, 1.0f, out),
+              "more cells than the limit is refused");
+
+    // Four billion by four billion: must come back false, not an allocation.
+    bool threw = false;
+    try {
+        CHECK(!TerrainGenerator::GenerateHeightfield(4000000000u, 4000000000u, 1.0f, 1.0f, out));
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    CHECK_MSG(!threw, "an absurd size is refused, not thrown");
+
+    // And the limits are not an accident of the check: a real size still builds.
+    CHECK_MSG(TerrainGenerator::GenerateHeightfield(64, 64, 1.0f, 1.0f, out),
+              "an ordinary grid still builds");
+}
+
 void runTests() {
     testBuildRejectsWhatCannotBeACell();
+    testAGridTooBigToBuildIsRefusedBeforeItIsAllocated();
     testTheGridIsCentredTheWayTheMeshIs();
     testTheColliderIsTheMesh();
 
