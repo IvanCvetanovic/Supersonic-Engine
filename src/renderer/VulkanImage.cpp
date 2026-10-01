@@ -218,12 +218,44 @@ vk::Sampler VulkanImage::makeSampler(vk::Filter filter, vk::SamplerAddressMode a
     return m_deviceRef.GetDevice().createSampler(samplerInfo);
 }
 
+std::optional<VulkanImage::LayoutBarrier> VulkanImage::BarrierFor(vk::ImageLayout oldLayout,
+                                                                  vk::ImageLayout newLayout) {
+    if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
+        return LayoutBarrier{vk::AccessFlagBits::eNone, vk::AccessFlagBits::eTransferWrite,
+                             vk::PipelineStageFlagBits::eTopOfPipe,
+                             vk::PipelineStageFlagBits::eTransfer};
+    }
+    if (oldLayout == vk::ImageLayout::eTransferDstOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+        return LayoutBarrier{vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
+                             vk::PipelineStageFlagBits::eTransfer,
+                             vk::PipelineStageFlagBits::eFragmentShader};
+    }
+    // An image a shader has been sampling, written again (UIImageStore::Update).
+    // A write after a read needs an execution dependency and nothing more: reads
+    // leave no writes to make available, so the source access is empty and the
+    // source stage is the point. The copy must not begin until the fragment
+    // shader that was sampling the old pixels has finished with them.
+    if (oldLayout == vk::ImageLayout::eShaderReadOnlyOptimal && newLayout == vk::ImageLayout::eTransferDstOptimal) {
+        return LayoutBarrier{vk::AccessFlags{}, vk::AccessFlagBits::eTransferWrite,
+                             vk::PipelineStageFlagBits::eFragmentShader,
+                             vk::PipelineStageFlagBits::eTransfer};
+    }
+    return std::nullopt;
+}
+
 void VulkanImage::TransitionLayout(
     VulkanDevice& device,
     vk::CommandPool commandPool,
     vk::Image image,
     vk::ImageLayout oldLayout,
     vk::ImageLayout newLayout) {
+
+    // Before anything is allocated: refusing a pair after the command buffer is
+    // allocated and begun used to leave it recording and never freed.
+    const std::optional<LayoutBarrier> table = BarrierFor(oldLayout, newLayout);
+    if (!table) {
+        throw std::invalid_argument("Unsupported layout transition!");
+    }
 
     vk::CommandBufferAllocateInfo allocInfo{};
     allocInfo.level = vk::CommandBufferLevel::ePrimary;
@@ -251,22 +283,10 @@ void VulkanImage::TransitionLayout(
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
 
-    vk::PipelineStageFlags sourceStage;
-    vk::PipelineStageFlags destinationStage;
-
-    if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
-        barrier.srcAccessMask = vk::AccessFlagBits::eNone;
-        barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-        sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
-        destinationStage = vk::PipelineStageFlagBits::eTransfer;
-    } else if (oldLayout == vk::ImageLayout::eTransferDstOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
-        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-        sourceStage = vk::PipelineStageFlagBits::eTransfer;
-        destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
-    } else {
-        throw std::invalid_argument("Unsupported layout transition!");
-    }
+    barrier.srcAccessMask = table->srcAccess;
+    barrier.dstAccessMask = table->dstAccess;
+    const vk::PipelineStageFlags sourceStage = table->srcStage;
+    const vk::PipelineStageFlags destinationStage = table->dstStage;
 
     commandBuffer.pipelineBarrier(
         sourceStage, destinationStage,

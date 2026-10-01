@@ -1329,6 +1329,68 @@ static void testAFilesMetaDecidesItsUpload() {
     CHECK(VulkanImage::MipmapModeFor(vk::Filter::eLinear) == vk::SamplerMipmapMode::eLinear);
 }
 
+// The layout pairs VulkanImage::TransitionLayout can record, read as a table
+// because no suite here has a device to record one with.
+//
+// UIImageStore::Update re-uploads an image in place - it is what a fog-of-war
+// texture needs - by moving it ShaderReadOnly -> TransferDst, copying, and moving
+// it back. The first of those pairs was not in the table, so TransitionLayout
+// threw, and a throw out of a game's tick ends the process. Nothing built a
+// UIImageStore, so nothing saw it: every call to Update failed the same way.
+
+static void testEveryTransitionAnUploadAsksForIsInTheTable() {
+    using L = vk::ImageLayout;
+    using Access = vk::AccessFlagBits;
+    using Stage = vk::PipelineStageFlagBits;
+
+    // The first upload of an image: nothing in it yet, written, then read.
+    const auto toWrite = VulkanImage::BarrierFor(L::eUndefined, L::eTransferDstOptimal);
+    CHECK_MSG(toWrite.has_value(), "Undefined -> TransferDst");
+    if (toWrite) {
+        CHECK(toWrite->srcAccess == vk::AccessFlags{});
+        CHECK(toWrite->dstAccess == vk::AccessFlags{Access::eTransferWrite});
+        CHECK(toWrite->srcStage == vk::PipelineStageFlags{Stage::eTopOfPipe});
+        CHECK(toWrite->dstStage == vk::PipelineStageFlags{Stage::eTransfer});
+    }
+
+    const auto toRead = VulkanImage::BarrierFor(L::eTransferDstOptimal, L::eShaderReadOnlyOptimal);
+    CHECK_MSG(toRead.has_value(), "TransferDst -> ShaderReadOnly");
+    if (toRead) {
+        CHECK(toRead->srcAccess == vk::AccessFlags{Access::eTransferWrite});
+        CHECK(toRead->dstAccess == vk::AccessFlags{Access::eShaderRead});
+        CHECK(toRead->srcStage == vk::PipelineStageFlags{Stage::eTransfer});
+        CHECK(toRead->dstStage == vk::PipelineStageFlags{Stage::eFragmentShader});
+    }
+
+    // Writing it AGAIN, which is what UIImageStore::Update does: an image a
+    // shader has been sampling goes back to being a transfer target. A write
+    // after a read is an execution dependency and nothing more - the copy has to
+    // wait for the fragment shader that was reading, and there are no earlier
+    // writes to make available, so the source access is empty.
+    const auto again = VulkanImage::BarrierFor(L::eShaderReadOnlyOptimal, L::eTransferDstOptimal);
+    CHECK_MSG(again.has_value(),
+              "ShaderReadOnly -> TransferDst: UIImageStore::Update asks for it on every call");
+    if (again) {
+        CHECK(again->srcAccess == vk::AccessFlags{});
+        CHECK(again->dstAccess == vk::AccessFlags{Access::eTransferWrite});
+        CHECK(again->srcStage == vk::PipelineStageFlags{Stage::eFragmentShader});
+        CHECK(again->dstStage == vk::PipelineStageFlags{Stage::eTransfer});
+    }
+}
+
+static void testAPairNobodyHasWrittenABarrierForIsRefused() {
+    using L = vk::ImageLayout;
+
+    // Refused, not guessed at: a barrier with the wrong stages is a hazard
+    // validation may or may not catch, where a refusal is seen at once.
+    CHECK_MSG(!VulkanImage::BarrierFor(L::eUndefined, L::eShaderReadOnlyOptimal).has_value(),
+              "an image cannot go from nothing to readable without being written");
+    CHECK(!VulkanImage::BarrierFor(L::eShaderReadOnlyOptimal, L::eShaderReadOnlyOptimal).has_value());
+    CHECK(!VulkanImage::BarrierFor(L::eTransferDstOptimal, L::eTransferDstOptimal).has_value());
+    CHECK(!VulkanImage::BarrierFor(L::eShaderReadOnlyOptimal, L::eUndefined).has_value());
+    CHECK(!VulkanImage::BarrierFor(L::eColorAttachmentOptimal, L::eShaderReadOnlyOptimal).has_value());
+}
+
 static void testTheSameMapsReadBothWaysAreTwoSetsAndBothGo() {
     // One descriptor holds one sampler, so the wrap is part of the SET's key -
     // and only of the set's: the texture's own key, by path, is untouched, so
@@ -2163,6 +2225,8 @@ static void runTests() {
     testThePoolHoldsTheWalkWithRoomToSpare();
     testAMaterialReadsEachTexturesOwnWrapUnlessItClamps();
     testAFilesMetaDecidesItsUpload();
+    testEveryTransitionAnUploadAsksForIsInTheTable();
+    testAPairNobodyHasWrittenABarrierForIsRefused();
     testTheSameMapsReadBothWaysAreTwoSetsAndBothGo();
     testClampToEdgeSurvivesASaveAndLoadAndIsWrittenOnlyWhenSet();
     testAnOverrideReplacesOnlyTheSurfaceItNames();
