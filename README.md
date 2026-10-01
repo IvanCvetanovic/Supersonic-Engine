@@ -1299,8 +1299,9 @@ the lack of a warranty above.
 The licence covers the engine's own source, shaders, branding and
 documentation.
 
-Every vendored dependency under `third_party/` is permissive too — MIT, zlib or
-Apache-2.0 — and none of them puts a condition on what you may build. Unlike
+Every vendored dependency under `third_party/` is permissive too — MIT, zlib,
+Apache-2.0, public domain, or for the typefaces the SIL Open Font License — and
+none of them puts a condition on what you may build. Unlike
 the engine's own licence, theirs ask for their notices to travel with copies of
 them.
 Attributions and full licence texts are in

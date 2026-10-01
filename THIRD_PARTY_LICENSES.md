@@ -12,10 +12,10 @@ what you may build with the engine beyond keeping the notices below.
 |---|---|---|---|
 | [EnTT](https://github.com/skypjack/entt) | 3.13.2 | MIT | © 2017–2023 Michele Caini |
 | [GLFW](https://www.glfw.org/) | 3.4 | zlib/libpng | © 2002–2006 Marcus Geelnard, © 2006–2019 Camilla Löwy |
-| [GLM](https://github.com/g-truc/glm) | — | The Happy Bunny License **or** MIT, at your option | © 2005 G-Truc Creation |
-| [Dear ImGui](https://github.com/ocornut/imgui) | docking branch | MIT | © 2014–2026 Omar Cornut |
-| [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo) | — | MIT | © 2016–2026 Cedric Guillemet and contributors |
-| [stb](https://github.com/nothings/stb) (`stb_image`, `stb_image_write`, `stb_vorbis` 1.22) | — | Public domain (Unlicense) **or** MIT, at your option | Sean Barrett |
+| [GLM](https://github.com/g-truc/glm) | 1.0.1 | The Happy Bunny License **or** MIT, at your option | © 2005 G-Truc Creation |
+| [Dear ImGui](https://github.com/ocornut/imgui) | 1.93.0 WIP, docking branch | MIT | © 2014–2026 Omar Cornut |
+| [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo) | 1.92.5 WIP | MIT | © 2016–2026 Cedric Guillemet and contributors |
+| [stb](https://github.com/nothings/stb) (`stb_image`, `stb_image_write`, `stb_vorbis` 1.22) | `stb_image` 2.30, `stb_image_write` 1.16 | Public domain (Unlicense) **or** MIT, at your option | Sean Barrett |
 | [tinygltf](https://github.com/syoyo/tinygltf) | — | MIT | © 2015–present Syoyo Fujita, Aurélien Chatelain and contributors |
 | [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | 3.1.0 | MIT | © 2017–2024 Advanced Micro Devices, Inc. |
 | [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | 1.3.290 | Apache-2.0 **or** MIT, at your option | © 2015–2023 The Khronos Group Inc. |
@@ -36,11 +36,12 @@ third_party/Vulkan-Headers-1.3.290/LICENSE.md
 third_party/Vulkan-Headers-1.3.290/LICENSES/          Apache-2.0.txt, MIT.txt
 ```
 
-Four carry their licence in a comment in the file rather than in a separate file:
+Five carry their licence in a comment in the file rather than in a separate file:
 
 ```
 third_party/imguizmo/ImGuizmo.h        MIT, at the top of the file
 third_party/stb/stb_image.h            dual public-domain / MIT, at the foot of the file
+third_party/stb/stb_image_write.h      dual public-domain / MIT, at the foot of the file
 third_party/stb/stb_vorbis.c           dual public-domain / MIT, at the foot of the file
 third_party/tinygltf/tiny_gltf.h       MIT, at the top of the file
 ```
@@ -77,6 +78,20 @@ inside the file:
 
 Dear ImGui embeds the ProggyClean bitmap font by Tristan Grimmer, covered by
 ImGui's own MIT licence.
+
+`third_party/imgui/misc/fonts/` also holds five example typefaces that ImGui
+ships beside its sources. Nothing in this engine's build or its packaged output
+loads them - the editor's own faces are the two above - but they are in the tree,
+so a copy of the repository redistributes them. Their licences, as ImGui's own
+`docs/FONTS.md` records them:
+
+| File | Author | License |
+|---|---|---|
+| `Roboto-Medium.ttf` | Christian Robertson | Apache-2.0 |
+| `Cousine-Regular.ttf` | Steve Matteson (digitized data © 2010 Google Corporation) | SIL OFL 1.1 |
+| `DroidSans.ttf` | Steve Matteson | Apache-2.0 |
+| `ProggyTiny.ttf` | Tristan Grimmer | MIT |
+| `Karla-Regular.ttf` | Jonathan Pinhorn | SIL OFL 1.1 |
 
 ## Assets
 

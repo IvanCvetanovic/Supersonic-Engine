@@ -26,3 +26,8 @@ Testing/
 # engine rewrites on every run. Committing it churns a binary in every diff
 # and is worse than useless on anyone else's GPU, which will not accept it.
 cache/
+
+# Scratch files the suites write into the directory they run from - the project
+# root, for the nine that need the engine's assets - and normally delete again.
+# A suite that crashes leaves them behind; this keeps that out of `git status`.
+/test_*_tmp*
