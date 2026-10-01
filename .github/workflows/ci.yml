@@ -304,11 +304,16 @@ jobs:
       # produce a readable report, and a -O0 build of this tree is what the OOM
       # killer takes on this runner.
       #
-      # No -fno-sanitize-recover: the vendored tinygltf and ImGui translation
-      # units are compiled here too, and aborting on the first unsigned
-      # overflow inside somebody else's parser would make this job a report
-      # about third-party code. Failures still surface through the test exit
-      # status and the log.
+      # No -fno-sanitize-recover, but UBSan is made fatal at RUN time below. This
+      # job used to let undefined behaviour print and carry on, so a report
+      # exited 0 and the job stayed green - and it ran with leak detection off.
+      # The worry that kept it that way was the vendored tinygltf and ImGui
+      # translation units, compiled here too: a fatal UBSan inside somebody
+      # else's parser would make the job a report about third-party code. Measured
+      # on 1 October 2026, over every suite, with UBSan halting and leaks fatal:
+      # no findings at all. If that stops being true, this is where to look
+      # first - a finding in third_party/ is a reason to suppress it by name, not
+      # to go back to a job that cannot fail.
       - name: Configure
         run: |
           cmake -S . -B build \
@@ -324,8 +329,8 @@ jobs:
       # allocations under ASan are somebody else's report.
       - name: Test
         env:
-          ASAN_OPTIONS: abort_on_error=1:detect_leaks=0
-          UBSAN_OPTIONS: print_stacktrace=1
+          ASAN_OPTIONS: abort_on_error=1:detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --test-dir build -C RelWithDebInfo --output-on-failure
 
   # ---------------------------------------------------------------------------
