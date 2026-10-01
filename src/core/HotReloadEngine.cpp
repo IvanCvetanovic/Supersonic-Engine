@@ -59,6 +59,15 @@ void registerScriptThunk(void* /*opaque*/, const char* name, SupersonicScriptUpd
 
 } // namespace
 
+namespace {
+
+// How long a retryable failure waits. Frames are ~16 ms and a build tool that still
+// has the plugin open lets go in well under a second, so this loses nothing a person
+// can see - and a copy and a dlopen every second frame was the alternative.
+constexpr std::chrono::milliseconds kRetryInterval{250};
+
+} // namespace
+
 HotReloadEngine::~HotReloadEngine() {
     unload();
 }
@@ -80,6 +89,11 @@ void HotReloadEngine::WatchPlugin(const std::string& pluginPath) {
     }
 
     if (ReloadNow()) {
+        m_lastWriteTime = fs::last_write_time(m_pluginPath, ec);
+        m_haveWriteTime = !ec;
+    } else if (m_failureIsPermanent) {
+        // Seen, and wrong. Poll should wait for the file to change rather than
+        // meet this same write time as news and try it a second time.
         m_lastWriteTime = fs::last_write_time(m_pluginPath, ec);
         m_haveWriteTime = !ec;
     }
@@ -116,6 +130,9 @@ void HotReloadEngine::Poll() {
 
     if (!m_reloadPending) return;
 
+    // A failed attempt waits before the next: see kRetryInterval.
+    if (std::chrono::steady_clock::now() < m_nextRetry) return;
+
     // Retry until it succeeds: a build tool can hold the file open for a moment
     // after its final write, and that is not a reason to give up. The previously
     // loaded plugin stays live and working throughout.
@@ -123,15 +140,32 @@ void HotReloadEngine::Poll() {
         m_lastWriteTime = writeTime;
         m_haveWriteTime = true;
         m_reloadPending = false;
-    } else if (!m_reportedFailure) {
+        return;
+    }
+
+    if (!m_reportedFailure) {
         // Once per reload attempt, not once per frame.
         SUPERSONIC_LOG_ERROR("HotReload") << m_status << std::endl;
         m_reportedFailure = true;
+    }
+
+    if (m_failureIsPermanent) {
+        // The file is the problem, not getting at it, so it will fail the same way
+        // until it is replaced. Record that this write time has been seen - exactly
+        // as a success does - and nothing more happens until the next one. The
+        // running plugin, if there is one, stays live.
+        m_lastWriteTime = writeTime;
+        m_haveWriteTime = true;
+        m_reloadPending = false;
+    } else {
+        m_nextRetry = std::chrono::steady_clock::now() + kRetryInterval;
     }
 }
 
 bool HotReloadEngine::ReloadNow() {
     if (m_pluginPath.empty()) return false;
+    ++m_loadAttempts;
+    m_failureIsPermanent = false;
 
     // Open the NEW module before tearing down the old one.
     //
@@ -199,6 +233,7 @@ bool HotReloadEngine::openPlugin(int slot, void*& outHandle, SupersonicScriptPlu
         m_status = std::string("plugin is missing ") + SUPERSONIC_SCRIPT_PLUGIN_VERSION_SYMBOL +
                    " / " + SUPERSONIC_SCRIPT_PLUGIN_REGISTER_SYMBOL;
         closeLibrary(handle);
+        m_failureIsPermanent = true;
         return false;
     }
 
@@ -210,6 +245,7 @@ bool HotReloadEngine::openPlugin(int slot, void*& outHandle, SupersonicScriptPlu
                    " does not match engine version " + std::to_string(SUPERSONIC_SCRIPT_API_VERSION) +
                    "; rebuild the plugin";
         closeLibrary(handle);
+        m_failureIsPermanent = true;
         return false;
     }
 

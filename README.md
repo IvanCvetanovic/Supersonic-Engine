@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-59%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-60%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT-0](https://img.shields.io/badge/license-MIT--0-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 [![Free to use](https://img.shields.io/badge/price-free-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#license)
@@ -440,7 +440,7 @@ units that exist only to compile VMA, tinygltf and stb_vorbis.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Fifty-nine suites, each a plain executable with no test framework behind it —
+Sixty suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 There is also a scene that exists to be rendered rather than to be played:
@@ -518,6 +518,7 @@ verified by a screenshot of geometry it never touched.
 | `test_uilayer` | When the HUD is drawn rather than where: the order the coloured rectangles appear in ImGui's vertex buffer, with no device |
 | `test_userdata` | Where a game writes what belongs to the player: the name sanitiser, and a per-user directory that is absolute, exists afterwards and does not collide |
 | `test_particles` | What an emitter is allowed to ask for: a scene's maxParticles is clamped to a ceiling rather than becoming a 200 GB allocation, and an ordinary emitter is left exactly as it asked |
+| `test_hotreload` | What the script-plugin reloader does with a plugin that cannot work: tried once and then left alone until the file changes, not copied and re-opened every other frame |
 | `test_worldshapes` | The world-space shape buffer's tessellation and accumulation; the pixels need a device and are not covered here |
 
 Every suite is a regression test for a bug that actually happened. The header
