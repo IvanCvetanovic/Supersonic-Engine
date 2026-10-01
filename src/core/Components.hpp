@@ -1077,7 +1077,14 @@ struct MeshComponent {
     // would resolve to nothing on load, which is worse than a scene that says
     // the entity has no mesh - so ComponentCodec writes the primitive and the
     // path and deliberately not this.
-    std::string meshKey;
+    //
+    // `{}` here and on the two members below it is not decoration: a member with no default
+    // initialiser that an aggregate initialiser leaves out draws -Wmissing-field-initializers,
+    // and EnTT's emplace<T>(args...) aggregate-initialises, so every emplace of these types
+    // that did not spell out every member warned (thirteen of them, in six files). With the
+    // initialiser it neither warns nor changes anything: the layout, and what a member
+    // left out is initialised to, are the same.
+    std::string meshKey{};
 
     // Set when a user ASSIGNS a model, cleared as soon as the material behind
     // it has been copied onto this entity's MaterialComponent. Runtime state,
@@ -1740,7 +1747,7 @@ struct ScriptComponent {
     // parameter then needs no ABI change and no recompile of the engine.
     //
     // Serialised, because they are authored data.
-    std::vector<std::pair<std::string, float>> parameters;
+    std::vector<std::pair<std::string, float>> parameters{};
 
     // Scratch the script owns between frames.
     //
@@ -1753,7 +1760,7 @@ struct ScriptComponent {
     // NOT serialised: this is where a script is, not what it was authored as.
     // Writing it into the scene would make a save depend on how long the game
     // had been running when it was taken.
-    std::vector<std::pair<std::string, float>> state;
+    std::vector<std::pair<std::string, float>> state{};
 };
 
 struct Particle {

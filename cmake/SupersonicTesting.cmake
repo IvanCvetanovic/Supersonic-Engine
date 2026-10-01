@@ -43,5 +43,15 @@ function(supersonic_add_test name)
         target_compile_options(${name} PRIVATE -Wall -Wextra)
     endif()
 
+    # SUPERSONIC_WERROR is read when a suite is registered, so a game that sets it
+    # holds its own suites to it; off by default (CMakeLists.txt says why).
+    if (SUPERSONIC_WERROR)
+        if (MSVC)
+            target_compile_options(${name} PRIVATE /WX)
+        else()
+            target_compile_options(${name} PRIVATE -Werror)
+        endif()
+    endif()
+
     add_test(NAME ${name} COMMAND ${name})
 endfunction()

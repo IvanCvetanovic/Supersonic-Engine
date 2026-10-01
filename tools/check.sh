@@ -246,8 +246,10 @@ configure_and_build() {
 
 check_build() {
     step "build: Release, then every suite"
+    # SUPERSONIC_WERROR: "zero warnings" is a claim in the README, and this is where it is
+    # held to. The sanitizer builds below do not set it - they are for different findings.
     configure_and_build "$BUILD_ROOT/release" "" \
-        -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DSUPERSONIC_WERROR=ON
     ctest --test-dir "$BUILD_ROOT/release" --output-on-failure -j "$JOBS"
 }
 

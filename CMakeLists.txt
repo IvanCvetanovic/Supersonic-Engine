@@ -34,6 +34,16 @@ else()
     string(COMPARE EQUAL "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}" SUPERSONIC_IS_TOP_LEVEL)
 endif()
 
+# Warnings in the engine's own code and in its suites are errors.
+#
+# OFF by default, and PRIVATE where it is applied, so it costs a game nothing: a game that
+# wants its own suites held to it sets this in its own build, and it is then also on for
+# the engine it compiles. The point is to keep "zero warnings" - which README.md and
+# CONTRIBUTING.md claim - a fact the build enforces rather than one somebody checked once;
+# tools/check.sh turns it on. Vendored code is compiled with its warnings off (see
+# VENDORED_SOURCES) and is therefore not held to it.
+option(SUPERSONIC_WERROR "Treat warnings in the engine's own code and suites as errors" OFF)
+
 # The engine checkout's root, for a project building the engine as a
 # subproject that has to name something in it - the working directory of a
 # suite that reads the engine's assets, say. A cache entry because a
@@ -411,6 +421,9 @@ set(VENDORED_SOURCES
     # stb_vorbis, which decodes AudioClip::LoadOgg's files. The loader includes
     # only its declarations, so its warnings are confined to this one TU.
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/StbVorbisImplementation.cpp
+    # stb_image, which decodes every texture. Its implementation used to be defined in
+    # TextureRegistry.cpp, so its warnings were the engine's.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/StbImageImplementation.cpp
 )
 
 # PRIVATE, not PUBLIC: the engine's own warning level is the engine's business.
@@ -428,6 +441,20 @@ else()
         target_compile_options(SupersonicEngine PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+endif()
+
+if (SUPERSONIC_WERROR)
+    if (MSVC)
+        target_compile_options(SupersonicCore PRIVATE /WX)
+        if (SUPERSONIC_BUILD_EDITOR)
+            target_compile_options(SupersonicEngine PRIVATE /WX)
+        endif()
+    else()
+        target_compile_options(SupersonicCore PRIVATE -Werror)
+        if (SUPERSONIC_BUILD_EDITOR)
+            target_compile_options(SupersonicEngine PRIVATE -Werror)
+        endif()
+    endif()
 endif()
 
 # THE ARITHMETIC IS SPELLED OUT, not left to the compiler: no contraction.
@@ -493,9 +520,12 @@ endif()
 
 # Clang's -Wpedantic reports every _Nullable and _Nonnull in vk_mem_alloc.h,
 # which the renderer headers include - hundreds of lines per file about a
-# header this engine does not maintain. Android says the same below; Apple's
-# compiler is Clang as well.
-if (APPLE)
+# header this engine does not maintain. Android says the same below.
+#
+# By COMPILER, not by platform: this was `if (APPLE)`, on the reasoning that Apple's
+# compiler is Clang, and so a Clang build on Linux or Windows still printed the lot -
+# about 6,500 lines over 22 translation units, enough to bury anything real.
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(SupersonicCore PUBLIC -Wno-nullability-extension)
 endif()
 

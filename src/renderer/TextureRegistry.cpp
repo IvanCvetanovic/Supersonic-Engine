@@ -11,9 +11,8 @@
 #include <stdexcept>
 #include <vector>
 
-// stb_image was vendored in third_party/ but never included by anything.
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_FAILURE_USERMSG
+// The declarations only: the implementation is compiled once, in
+// core/StbImageImplementation.cpp, where its warnings are not the engine's.
 #include <stb_image.h>
 
 namespace Supersonic {

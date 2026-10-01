@@ -429,8 +429,8 @@ engine](#building-a-game-against-the-engine).
 
 Roughly 39,500 lines of engine source across 101 translation units, or 57,000
 lines counting headers — the desktop build, editor included, excluding
-vendored dependencies, the Android and iOS backends, and the three translation
-units that exist only to compile VMA, tinygltf and stb_vorbis.
+vendored dependencies, the Android and iOS backends, and the four translation
+units that exist only to compile VMA, tinygltf, stb_vorbis and stb_image.
 
 ---
 
@@ -528,7 +528,9 @@ comment on each one says which.
 
 ### Code standards
 
-- MSVC `/W4` and GCC/Clang `-Wall -Wextra -Wpedantic`, **zero warnings**
+- MSVC `/W4` and GCC/Clang `-Wall -Wextra -Wpedantic`, **zero warnings** - held by
+  `-DSUPERSONIC_WERROR=ON`, which `tools/check.sh build` sets (GCC 13 and Clang 18
+  measured clean on 1 October 2026; MSVC is the platform it is developed on)
 - Vendored sources are excluded from the warning level, never the project's own
 - Validation layers and synchronization validation clean before any commit that
   touches the renderer
