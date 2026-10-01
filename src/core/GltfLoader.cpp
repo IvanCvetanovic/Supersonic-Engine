@@ -1185,71 +1185,87 @@ struct NodeRig {
     }
 };
 
-// How deep the node walk goes. It recurses once per level, so a chain of tens of
-// thousands of nodes - each the only child of the last, from a file with nothing
-// malformed in it - was a stack overflow: a crash, not an error. The other walks
-// up the parent chain in this file stop at the same figure. No model that is
-// drawn has a hierarchy anywhere near it.
-constexpr int kMaxNodeDepth = 1024;
-
-void visitNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& parentMatrix,
+// Walks the node graph from `root`, handing each mesh to appendPrimitive with the
+// matrix that places it, in the order a depth-first recursion would.
+//
+// ITERATIVE, with an explicit stack. This used to recurse once per level, so a
+// chain of tens of thousands of nodes - each the only child of the last, from a
+// file with nothing malformed in it - overflowed the stack: a crash, not an error.
+// The first fix capped the depth at 1024, and the sanitizer build showed that was
+// not enough: an instrumented frame is large enough that 1024 of them overflow an
+// ordinary stack, and so does an MSVC Debug frame against Windows' one megabyte.
+// There is no depth at which a recursive walk is safe on every build, so there is
+// no recursion, and so no limit: a deep hierarchy is simply walked.
+//
+// The order is the recursion's. A node's children are pushed in reverse, so the
+// first is popped next and its whole subtree is finished before the second is
+// reached; and `visited` is checked when a node is POPPED, as it was when it was
+// entered, so a node reached twice (a cycle, or a child listed by two parents) is
+// taken by whichever path gets there first, exactly as before.
+void visitNode(const tinygltf::Model& model, int root, const glm::mat4& rootParent,
                const std::string& sourcePath, std::vector<GltfLoader::Submesh>& out,
                std::vector<bool>& visited, const NodeRig& rig,
-               const std::vector<int>& parents, int depth = 0) {
+               const std::vector<int>& parents) {
 
-    if (nodeIndex < 0 || nodeIndex >= static_cast<int>(model.nodes.size())) return;
+    struct Pending {
+        int node;
+        glm::mat4 parent;
+    };
+    std::vector<Pending> pending;
+    pending.push_back({root, rootParent});
 
-    if (depth >= kMaxNodeDepth) {
-        SUPERSONIC_LOG_ERROR("GltfLoader") << "Node hierarchy of '" << sourcePath
-            << "' is deeper than " << kMaxNodeDepth << " levels; the rest of this branch is ignored."
-            << std::endl;
-        return;
-    }
+    while (!pending.empty()) {
+        const Pending current = pending.back();
+        pending.pop_back();
+        const int nodeIndex = current.node;
 
-    // Defensive: a malformed file can describe a cycle, which would recurse
-    // until the stack runs out.
-    if (visited[static_cast<size_t>(nodeIndex)]) return;
-    visited[static_cast<size_t>(nodeIndex)] = true;
+        if (nodeIndex < 0 || nodeIndex >= static_cast<int>(model.nodes.size())) continue;
 
-    const tinygltf::Node& node = model.nodes[static_cast<size_t>(nodeIndex)];
-    const glm::mat4 world = parentMatrix * nodeLocalMatrix(node);
+        // Defensive: a malformed file can describe a cycle, which would walk
+        // forever.
+        if (visited[static_cast<size_t>(nodeIndex)]) continue;
+        visited[static_cast<size_t>(nodeIndex)] = true;
 
-    if (node.mesh >= 0 && node.mesh < static_cast<int>(model.meshes.size())) {
-        const tinygltf::Mesh& mesh = model.meshes[static_cast<size_t>(node.mesh)];
-        const std::string name = !node.name.empty() ? node.name
-                               : (!mesh.name.empty() ? mesh.name : "GltfMesh");
-        for (const auto& primitive : mesh.primitives) {
-            // THREE cases, and conflating any two of them is a mesh in the
-            // wrong place.
-            //
-            // A real skin is handed the IDENTITY, not its node's world matrix:
-            // the inverse bind matrices are authored in the skin's own space,
-            // and the glTF spec requires the skinned mesh node's own transform
-            // to be ignored. Baking it in transforms the mesh twice.
-            //
-            // A NODE RIG is the opposite: its inverse binds are the inverse of
-            // exactly these world matrices, so the bake is what they cancel.
-            // Handing it identity here - which is what reusing "is it skinned"
-            // as the test would do - collapses every animated prop onto the
-            // origin. So bake-or-not is its own question, asked separately from
-            // which skeleton the primitive belongs to.
-            //
-            // And a plain rigid primitive in a file with no animation at all is
-            // baked and unskinned, exactly as before any of this existed.
-            const int32_t skin = static_cast<int32_t>(node.skin);
-            const bool rigged = skin < 0 && rig.active();
+        const tinygltf::Node& node = model.nodes[static_cast<size_t>(nodeIndex)];
+        const glm::mat4 world = current.parent * nodeLocalMatrix(node);
 
-            const glm::mat4 primitiveMatrix = skin >= 0 ? glm::mat4(1.0f) : world;
-            const int32_t submeshSkin = rigged ? 0 : skin;
-            const int32_t rigidJoint = rigged ? rig.JointFor(nodeIndex, parents) : -1;
+        if (node.mesh >= 0 && node.mesh < static_cast<int>(model.meshes.size())) {
+            const tinygltf::Mesh& mesh = model.meshes[static_cast<size_t>(node.mesh)];
+            const std::string name = !node.name.empty() ? node.name
+                                   : (!mesh.name.empty() ? mesh.name : "GltfMesh");
+            for (const auto& primitive : mesh.primitives) {
+                // THREE cases, and conflating any two of them is a mesh in the
+                // wrong place.
+                //
+                // A real skin is handed the IDENTITY, not its node's world matrix:
+                // the inverse bind matrices are authored in the skin's own space,
+                // and the glTF spec requires the skinned mesh node's own transform
+                // to be ignored. Baking it in transforms the mesh twice.
+                //
+                // A NODE RIG is the opposite: its inverse binds are the inverse of
+                // exactly these world matrices, so the bake is what they cancel.
+                // Handing it identity here - which is what reusing "is it skinned"
+                // as the test would do - collapses every animated prop onto the
+                // origin. So bake-or-not is its own question, asked separately from
+                // which skeleton the primitive belongs to.
+                //
+                // And a plain rigid primitive in a file with no animation at all is
+                // baked and unskinned, exactly as before any of this existed.
+                const int32_t skin = static_cast<int32_t>(node.skin);
+                const bool rigged = skin < 0 && rig.active();
 
-            appendPrimitive(model, primitive, primitiveMatrix, sourcePath, name, out,
-                            submeshSkin, rigidJoint);
+                const glm::mat4 primitiveMatrix = skin >= 0 ? glm::mat4(1.0f) : world;
+                const int32_t submeshSkin = rigged ? 0 : skin;
+                const int32_t rigidJoint = rigged ? rig.JointFor(nodeIndex, parents) : -1;
+
+                appendPrimitive(model, primitive, primitiveMatrix, sourcePath, name, out,
+                                submeshSkin, rigidJoint);
+            }
         }
-    }
 
-    for (const int child : node.children) {
-        visitNode(model, child, world, sourcePath, out, visited, rig, parents, depth + 1);
+        for (auto child = node.children.rbegin(); child != node.children.rend(); ++child) {
+            pending.push_back({*child, world});
+        }
     }
 }
 

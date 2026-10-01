@@ -936,7 +936,9 @@ static void testAShortInverseBindArrayIsIgnored() {
 static void testAVeryDeepNodeChainDoesNotOverflowTheStack() {
     // Sixty thousand nodes, each the only child of the one before. The walk
     // recursed once per level, so this was a stack overflow - a crash, not an
-    // error - from a file with no malformed field in it.
+    // error - from a file with no malformed field in it. It is iterative now, and
+    // this is the test that keeps it so: under the sanitizers a recursive walk
+    // overflowed at a depth of 1024, which a depth cap had been thought to cover.
     constexpr int kDepth = 60000;
     std::string text = R"({
   "asset": { "version": "2.0" },
@@ -958,15 +960,17 @@ static void testAVeryDeepNodeChainDoesNotOverflowTheStack() {
     for (int i = 1; i < kDepth; ++i) {
         text += ",{ \"children\": [" + std::to_string(i + 1) + "] }";
     }
-    text += ",{}]\n}";
+    // A mesh at the very bottom as well as the top, so a walk that stopped early -
+    // as the first fix, a depth cap, did - would be seen losing it.
+    text += ",{ \"mesh\": 0 }]\n}";
 
     const std::string path = writeTempGltf("supersonic_hard_deep.gltf", text.c_str());
     const auto scene = GltfLoader::Load(path);
     std::filesystem::remove(path);
 
     CHECK_MSG(scene.ok, scene.error);
-    CHECK_MSG(!scene.submeshes.empty(),
-              "the mesh at the top of the chain is still imported; only the depth is cut");
+    CHECK_MSG(scene.submeshes.size() == 2,
+              "both meshes are imported: the walk has no depth at which it gives up");
 }
 
 static void runTests() {
