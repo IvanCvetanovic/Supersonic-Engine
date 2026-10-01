@@ -23,6 +23,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -695,6 +696,54 @@ static void testTheClipNameIsAStartingPointAndNotAnAuthority() {
               "and a chosen one is left alone");
 }
 
+// A clock that is not a number must sample somewhere that exists.
+//
+// findKey's two range checks (`time <= first`, `time >= last`) are both false for
+// NaN, so a NaN time fell through to a binary search whose comparison is false for
+// every key - and upper_bound answered "past the end", which the next line then
+// read as a key. One float past the vector. A time gets to NaN honestly: a looping
+// clip's fmod(infinity, duration) is NaN, and Speed or Time can be 1e999 in a scene.
+static void testANonNumberTimeSamplesTheFirstKeyAndReadsNothingElse() {
+    Skeleton skeleton;
+    skeleton.joints.resize(1);
+
+    AnimChannel channel;
+    channel.joint = 0;
+    channel.path = AnimPath::Translation;
+    channel.interpolation = AnimInterpolation::Linear;
+    channel.times = {0.0f, 1.0f, 2.0f};
+    channel.values = {glm::vec4(0, 0, 0, 0), glm::vec4(10, 0, 0, 0), glm::vec4(20, 0, 0, 0)};
+
+    AnimationClip clip;
+    clip.name = "walk";
+    clip.duration = 2.0f;
+    clip.channels.push_back(channel);
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+
+    std::vector<JointPose> pose;
+    AnimationSystem::SamplePose(skeleton, clip, nan, pose);
+    CHECK_EQ(static_cast<int>(pose.size()), 1);
+    if (pose.size() == 1) {
+        CHECK_MSG(std::isfinite(pose[0].translation.x), "a NaN time does not produce a NaN pose");
+        CHECK_NEAR(pose[0].translation.x, 0.0f);
+    }
+
+    // The two infinities already clamp to the ends, and must keep doing so.
+    AnimationSystem::SamplePose(skeleton, clip, -inf, pose);
+    if (pose.size() == 1) CHECK_NEAR(pose[0].translation.x, 0.0f);
+    AnimationSystem::SamplePose(skeleton, clip, inf, pose);
+    if (pose.size() == 1) CHECK_NEAR(pose[0].translation.x, 20.0f);
+
+    // And the middle of a clip is what it was: this is a guard on the edge, not a
+    // change to the interpolation.
+    AnimationSystem::SamplePose(skeleton, clip, 0.5f, pose);
+    if (pose.size() == 1) CHECK_NEAR(pose[0].translation.x, 5.0f);
+    AnimationSystem::SamplePose(skeleton, clip, 1.5f, pose);
+    if (pose.size() == 1) CHECK_NEAR(pose[0].translation.x, 15.0f);
+}
+
 static void runTests() {
     testAModelWithClipsIsGivenSomethingToPlayThemWith();
     testAMeshWithNoRigIsLeftAlone();
@@ -713,6 +762,7 @@ static void runTests() {
     testLibraryCachesHitsAndMisses();
     testSyncSkeletonsResolvesTheRig();
     testClockLoopsAndRunsBackwards();
+    testANonNumberTimeSamplesTheFirstKeyAndReadsNothingElse();
     testPoseBoundsCoverTheAnimation();
     testPoseBoundsNeverShrinkBelowTheBindBox();
     testPoseBoundsDoNotAccumulate();

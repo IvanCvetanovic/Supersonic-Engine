@@ -21,7 +21,11 @@ size_t findKey(const std::vector<float>& times, float time, float& outT) {
     outT = 0.0f;
     if (times.size() < 2) return 0;
 
-    if (time <= times.front()) return 0;
+    // `!(time > front)` and not `time <= front`: the same for every number, and
+    // for NaN - which is false against everything, so it used to fall through both
+    // range checks into a search that answers "past the end", and the read of
+    // times[next] below was one float off the vector. NaN lands on the first key.
+    if (!(time > times.front())) return 0;
     if (time >= times.back()) return times.size() - 1;
 
     // Binary search: a channel can hold thousands of keys and this runs per
