@@ -795,6 +795,32 @@ static void testAnAttributeShorterThanThePositionsIsIgnored() {
     }
 }
 
+static void testAZeroNormalIsNotNormalisedIntoNaN() {
+    // glm::normalize of a zero vector divides by zero, and a NaN normal is NaN
+    // lighting on every pixel of the triangle it belongs to. A zero normal is easy to
+    // find in the wild - an exporter that writes (0,0,0) for a degenerate vertex.
+    // Here the NORMAL accessor is the positions themselves, so the first vertex's
+    // "normal" is (0,0,0), the second (1,0,0) and the third (0,1,0).
+    Case c;
+    c.attributes = ", \"NORMAL\": 2";
+    c.accessors = R"(, { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3" })";
+    const auto scene = loadCase(c, "supersonic_hard_zeronormal.gltf");
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok || scene.submeshes.empty()) return;
+
+    const auto& vertices = scene.submeshes[0].mesh.vertices;
+    CHECK_EQ(static_cast<int>(vertices.size()), 3);
+    for (const auto& v : vertices) {
+        CHECK_MSG(std::isfinite(v.normal.x) && std::isfinite(v.normal.y) && std::isfinite(v.normal.z),
+                  "no normal is NaN");
+    }
+    if (vertices.size() == 3) {
+        CHECK_MSG(vertices[0].normal == kUp, "a zero normal becomes the one an absent normal gets");
+        CHECK_NEAR(vertices[1].normal.x, 1.0f);   // a real normal is untouched
+        CHECK_NEAR(vertices[2].normal.y, 1.0f);
+    }
+}
+
 static void testAnAttributeOfTheWrongShapeIsIgnored() {
     // Normals as normalised bytes (what KHR_mesh_quantization would write) were
     // read as if they were floats: three bytes an element, twelve bytes read.
@@ -984,6 +1010,7 @@ static void runTests() {
     testAnAttributeIndexOutsideTheFileIsIgnored();
     testAnAttributeShorterThanThePositionsIsIgnored();
     testAnAttributeOfTheWrongShapeIsIgnored();
+    testAZeroNormalIsNotNormalisedIntoNaN();
     testSkinningInfluencesOfTheWrongShapeAreIgnored();
     testAnIndexNoVertexAnswersToDropsItsWholeTriangle();
     testAnimationOutputsOfTheWrongShapeAreIgnored();

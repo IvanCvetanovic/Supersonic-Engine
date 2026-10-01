@@ -1,4 +1,5 @@
 #include "core/GltfLoader.hpp"
+#include "core/SafeNormalize.hpp"
 #include "core/Log.hpp"
 
 #include <algorithm>
@@ -526,7 +527,11 @@ void appendPrimitive(const tinygltf::Model& model,
         if (normals) {
             const auto* n = reinterpret_cast<const float*>(
                 reinterpret_cast<const uint8_t*>(normals) + i * normalStride);
-            v.normal = glm::normalize(normalMatrix * glm::vec3(n[0], n[1], n[2]));
+            // A zero normal (an exporter's marker for a degenerate vertex), or a
+            // node scaled to zero that makes the normal matrix singular, is NaN
+            // under glm::normalize. It gets what an absent normal gets.
+            v.normal = NormalizeOr(normalMatrix * glm::vec3(n[0], n[1], n[2]),
+                                   glm::vec3(0.0f, 1.0f, 0.0f));
         } else {
             v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
         }

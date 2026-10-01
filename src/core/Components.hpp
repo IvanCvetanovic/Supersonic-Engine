@@ -336,10 +336,17 @@ struct CameraComponent {
     }
 
     void updateCameraVectors() {
+        // An angle that is not a number gives NaN from sin and cos, and from there a
+        // NaN front, right, up and view matrix: a black screen with nothing in the
+        // log. A scene can say 1e999 (infinity) and a script can write NaN. It looks
+        // along the axis instead, which for every real angle changes nothing.
+        const float yawDegrees = std::isfinite(yaw) ? yaw : 0.0f;
+        const float pitchDegrees = std::isfinite(pitch) ? pitch : 0.0f;
+
         glm::vec3 newFront;
-        newFront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-        newFront.y = sin(glm::radians(pitch));
-        newFront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+        newFront.x = cos(glm::radians(yawDegrees)) * cos(glm::radians(pitchDegrees));
+        newFront.y = sin(glm::radians(pitchDegrees));
+        newFront.z = sin(glm::radians(yawDegrees)) * cos(glm::radians(pitchDegrees));
         front = glm::normalize(newFront);
         right = glm::normalize(glm::cross(front, worldUp));
         up = glm::normalize(glm::cross(right, front));

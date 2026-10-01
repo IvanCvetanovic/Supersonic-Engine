@@ -21,6 +21,7 @@
 #include "editor/EditorCamera.hpp"
 
 #include <cmath>
+#include <limits>
 #include <string>
 
 using namespace Supersonic;
@@ -80,6 +81,35 @@ void moveMouseTo(const glm::vec2& first, const glm::vec2& second) {
 }
 
 } // namespace
+
+static void testACameraAimedAtNothingStillHasAView() {
+    // A scene can say "Pitch": 1e999, which parses to infinity, and a script can write
+    // NaN. sin and cos of either are NaN, so front, right and up all were - a NaN view
+    // matrix, which is a black screen with nothing in the log. (Pitch of +-90 does
+    // NOT do this in float arithmetic: cos(radians(90)) is about -4e-8, not zero, and
+    // the vectors stay finite. Only a non-number does.)
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    for (const float bad : {nan, inf, -inf}) {
+        CameraComponent camera;
+        camera.pitch = bad;
+        camera.yaw = bad;
+        camera.updateCameraVectors();
+        const glm::vec3 all[] = {camera.front, camera.right, camera.up};
+        for (const glm::vec3& v : all) {
+            CHECK_MSG(std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z),
+                      "front, right and up are real vectors even when the angles are not numbers");
+        }
+    }
+
+    // And a camera that is fine is exactly what it was.
+    CameraComponent ordinary;
+    ordinary.yaw = -90.0f;
+    ordinary.pitch = 0.0f;
+    ordinary.updateCameraVectors();
+    CHECK_NEAR(ordinary.front.z, -1.0f);
+    CHECK_NEAR(ordinary.up.y, 1.0f);
+}
 
 static void testWasdFliesTheCameraByDefault() {
     // The behaviour every existing scene has and must keep. Also the control
@@ -464,6 +494,7 @@ static void testTheProjectionSaysWhichKindItIsInItsFourthDiagonal() {
 
 static void runTests() {
     testWasdFliesTheCameraByDefault();
+    testACameraAimedAtNothingStillHasAView();
     testTheSameKeyLeavesADisabledCameraExactlyWhereItWas();
     testACameraWithFlyControlsOffIsNotTurnedByTheMouse();
     testAMouseThatTurnsAnEnabledCameraIsTheSameMouse();

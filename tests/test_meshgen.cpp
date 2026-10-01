@@ -251,6 +251,34 @@ static void testObjParsesFaces() {
     }
 }
 
+static void testObjNormalsAreNeverNaN() {
+    // Flat normals are the cross product of two edges, and a triangle whose corners
+    // are in a line has none: glm::normalize of the zero vector is NaN, written onto
+    // all three of its vertices.
+    const std::string path = "test_degenerate_tmp.obj";
+    {
+        std::ofstream f(path);
+        f << "v 0 0 0\nv 1 0 0\nv 2 0 0\n";     // collinear: no area
+        f << "v 0 0 0\nv 1 0 0\nv 0 1 0\n";     // a real triangle beside it
+        f << "f 1 2 3\nf 4 5 6\n";
+    }
+    MeshData mesh;
+    const bool ok = ModelLoader::LoadOBJ(path, mesh);
+    std::remove(path.c_str());
+    CHECK(ok);
+    for (const auto& v : mesh.vertices) {
+        CHECK_MSG(std::isfinite(v.normal.x) && std::isfinite(v.normal.y) && std::isfinite(v.normal.z),
+                  "a degenerate triangle does not leave a NaN normal behind");
+        CHECK_MSG(std::fabs(glm::length(v.normal) - 1.0f) < 1e-4f, "and every normal is a unit vector");
+    }
+    // The good triangle's normal is the real one, +Z, not the fallback.
+    bool sawRealTriangle = false;
+    for (const auto& v : mesh.vertices) {
+        if (std::fabs(v.normal.z - 1.0f) < 1e-4f) sawRealTriangle = true;
+    }
+    CHECK_MSG(sawRealTriangle, "the sound triangle keeps its own normal");
+}
+
 static void testObjQuadIsTriangulated() {
     const std::string path = "test_quad_tmp.obj";
     {
@@ -737,6 +765,7 @@ static void runTests() {
     testTerrainSurvivesPast65kVertices();
     testLargeMeshIsIdenticalWithAndWithoutWorkers();
     testObjParsesFaces();
+    testObjNormalsAreNeverNaN();
     testObjQuadIsTriangulated();
     testObjWithoutFacesIsRejected();
     testObjTruncatedVertexIsSkipped();
