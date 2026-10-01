@@ -12,11 +12,14 @@
 #include "core/ComponentCodec.hpp"
 #include "core/AssetVersion.hpp"
 #include "core/AtomicFile.hpp"
+#include "core/FiniteNumbers.hpp"
 #include "core/Components.hpp"
 #include "core/PhysicsSettings.hpp"
 #include "core/RenderSettings.hpp"
 
 #include <array>
+#include <limits>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -1168,6 +1171,165 @@ static void testASaveToAnUnwritablePathFailsAndCreatesNothing() {
     CHECK(!exists("test_atomic_no_such_dir_tmp"));
 }
 
+// A file the reader cannot read must not be writable.
+//
+// `<< float` writes NaN as "nan" and infinity as "inf", Json::Parse rejects both,
+// and so a single non-finite number anywhere made the WHOLE scene unreadable:
+// Play/Stop could not restore it, undo dropped the snapshot, and a saved scene
+// could not be opened. ComponentCodec guards about thirty-five of its writes and
+// about a hundred more go straight to the stream.
+
+static void testTheFacetFormatsEveryFiniteNumberAsTheStandardOneDoes() {
+    // The property that makes it safe to install anywhere: for a number that is
+    // already fine the text is not merely equivalent but IDENTICAL, under every
+    // flag and precision a caller might have set, so no file that loaded
+    // changes by a byte.
+    const double values[] = {0.0, -0.0, 0.1, -0.1, 1.0, 3.14159265358979, 1e-30, 1e30, 123456789.0,
+                             16777216.0, 3.4028234663852886e38, 1.17549435e-38, 5e-324, 0.5, 100.0,
+                             static_cast<double>(0.1f), static_cast<double>(1.0f / 3.0f)};
+
+    for (const double v : values) {
+        for (int mode = 0; mode < 4; ++mode) {
+            std::ostringstream plain;
+            std::ostringstream guarded;
+            if (mode == 1) { plain << std::fixed; guarded << std::fixed; }
+            if (mode == 2) { plain.precision(12); guarded.precision(12); }
+            if (mode == 3) { plain << std::scientific; guarded << std::scientific; }
+
+            {
+                FiniteNumbersOnly only(guarded);
+                plain << v << " " << static_cast<float>(v) << " " << static_cast<long double>(v);
+                guarded << v << " " << static_cast<float>(v) << " " << static_cast<long double>(v);
+            }
+            CHECK_MSG(plain.str() == guarded.str(),
+                      "a finite number is written exactly as the standard facet writes it: " +
+                          plain.str() + " vs " + guarded.str());
+        }
+    }
+
+    // Integers and text are not the facet's business at all.
+    std::ostringstream guarded;
+    {
+        FiniteNumbersOnly only(guarded);
+        guarded << 42 << " " << -7 << " " << 18446744073709551615ull << " " << true << " abc";
+    }
+    CHECK(guarded.str() == "42 -7 18446744073709551615 1 abc");
+}
+
+static void testTheFacetWritesNothingAJsonReaderRefuses() {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+
+    std::ostringstream out;
+    {
+        FiniteNumbersOnly only(out);
+        out << nan << " " << inf << " " << -inf << " " << static_cast<double>(nan) << " "
+            << static_cast<long double>(-inf);
+    }
+    const std::string text = out.str();
+    CHECK_MSG(text.find("nan") == std::string::npos && text.find("inf") == std::string::npos,
+              "no 'nan' or 'inf' reaches the text: " + text);
+
+    // And what does reach it is a number that parses and means what it should:
+    // zero for NaN, and a huge number of the right sign for infinity, so "far
+    // away" is not silently "at the origin".
+    std::istringstream in(text);
+    double a = 1, b = 0, c = 0, d = 1, e = 0;
+    in >> a >> b >> c >> d >> e;
+    CHECK_MSG(a == 0.0 && d == 0.0, "NaN becomes zero");
+    CHECK_MSG(b > 1e38 && std::isfinite(b), "+infinity becomes the largest finite value");
+    CHECK_MSG(c < -1e38 && std::isfinite(c) && e < -1e38, "and -infinity the most negative");
+}
+
+static void testTheGuardLeavesTheStreamAsItFoundIt() {
+    std::ostringstream out;
+    const std::locale before = out.getloc();
+    {
+        FiniteNumbersOnly outer(out);
+        const std::locale during = out.getloc();
+        CHECK_MSG(during != before, "the facet is installed while the guard lives");
+
+        // A nested guard changes nothing and restores nothing: the outer one owns it.
+        {
+            FiniteNumbersOnly inner(out);
+            CHECK(out.getloc() == during);
+        }
+        CHECK_MSG(out.getloc() == during, "so leaving the inner one leaves the facet in place");
+    }
+    CHECK_MSG(out.getloc() == before, "the caller's locale is put back");
+
+    // Writing after the guard is the standard behaviour again.
+    out << std::numeric_limits<float>::infinity();
+    CHECK(out.str() == "inf");
+}
+
+static void testASceneWithANonFiniteNumberStillLoads() {
+    // Three fields the codec writes straight to the stream, in three different
+    // components, and the one scene-level setting that is not an entity's.
+    entt::registry registry;
+    registry.ctx().emplace<PhysicsSettings>().gravity =
+        glm::vec3(0.0f, -std::numeric_limits<float>::infinity(), 0.0f);
+
+    const entt::entity lamp = registry.create();
+    registry.emplace<TagComponent>(lamp, "lamp");
+    registry.emplace<TransformComponent>(lamp);
+    registry.emplace<LightComponent>(lamp).intensity = std::numeric_limits<float>::quiet_NaN();
+
+    const entt::entity crate = registry.create();
+    registry.emplace<TagComponent>(crate, "crate");
+    registry.emplace<TransformComponent>(crate);
+    registry.emplace<RigidBodyComponent>(crate).mass = std::numeric_limits<float>::infinity();
+
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("nan") == std::string::npos && text.find("inf") == std::string::npos,
+              "the scene text has no nan or inf in it");
+
+    entt::registry loaded;
+    const SerializationResult result = SceneSerializer::DeserializeFromString(loaded, text);
+    CHECK_MSG(result.ok, "a scene that held a NaN and two infinities loads: " + result.message);
+    if (!result.ok) return;
+
+    int lights = 0;
+    for (const entt::entity e : loaded.view<LightComponent>()) {
+        ++lights;
+        CHECK_MSG(loaded.get<LightComponent>(e).intensity == 0.0f, "NaN came back as zero");
+    }
+    CHECK_EQ(lights, 1);
+    for (const entt::entity e : loaded.view<RigidBodyComponent>()) {
+        const float mass = loaded.get<RigidBodyComponent>(e).mass;
+        CHECK_MSG(std::isfinite(mass) && mass > 1e38f, "infinity came back as the largest finite mass");
+    }
+    const PhysicsSettings* physics = loaded.ctx().find<PhysicsSettings>();
+    CHECK(physics != nullptr);
+    if (physics) {
+        CHECK_MSG(std::isfinite(physics->gravity.y) && physics->gravity.y < -1e38f,
+                  "and -infinity gravity the most negative finite value");
+    }
+}
+
+static void testAPrefabWithANonFiniteNumberIsStillReadable() {
+    const std::string path = "test_finite_prefab_tmp.prefab";
+    std::remove(path.c_str());
+
+    entt::registry registry;
+    const entt::entity lamp = registry.create();
+    registry.emplace<TagComponent>(lamp, "lamp");
+    registry.emplace<TransformComponent>(lamp);
+    registry.emplace<LightComponent>(lamp).range = std::numeric_limits<float>::infinity();
+
+    CHECK(PrefabSerializer::SavePrefab(registry, lamp, path).ok);
+    std::ifstream file(path);
+    std::ostringstream text;
+    text << file.rdbuf();
+    CHECK_MSG(text.str().find("inf") == std::string::npos && text.str().find("nan") == std::string::npos,
+              "the prefab text has no inf or nan in it");
+
+    Json::Value root;
+    std::string error;
+    CHECK_MSG(Json::Parse(text.str(), root, error), "the prefab parses: " + error);
+    std::remove(path.c_str());
+}
+
 static void testReadLayersOverAnEntityThatAlreadyHasComponents() {
     // ComponentCodec::Read is documented as applying onto an EXISTING entity,
     // leaving unmentioned components alone. Every branch used plain emplace,
@@ -2098,6 +2260,11 @@ static void runTests() {
     testSavedScenesCarryTheCurrentVersion();
     testReadLayersOverAnEntityThatAlreadyHasComponents();
     testASceneSaveThatFailsPartWayLeavesThePreviousScene();
+    testTheFacetFormatsEveryFiniteNumberAsTheStandardOneDoes();
+    testTheFacetWritesNothingAJsonReaderRefuses();
+    testTheGuardLeavesTheStreamAsItFoundIt();
+    testASceneWithANonFiniteNumberStillLoads();
+    testAPrefabWithANonFiniteNumberIsStillReadable();
     testAPrefabSaveThatFailsPartWayLeavesThePreviousPrefab();
     testAtomicFileReplacesTheTargetOnlyOnCommit();
     testASaveToAnUnwritablePathFailsAndCreatesNothing();

@@ -1,6 +1,7 @@
 #include "core/SceneSerializer.hpp"
 #include "core/AssetVersion.hpp"
 #include "core/AtomicFile.hpp"
+#include "core/FiniteNumbers.hpp"
 #include "core/Components.hpp"
 #include "core/Json.hpp"
 #include "core/AssetDatabase.hpp"
@@ -28,6 +29,12 @@ namespace {
 // One writer, used by both the on-disk save and the in-memory Play snapshot, so
 // the two formats cannot drift apart.
 size_t writeScene(entt::registry& registry, std::ostream& file) {
+    // Nothing that reaches this stream can be a NaN or an infinity, which Json::Parse
+    // refuses: one of either anywhere made the whole scene unreadable. See
+    // FiniteNumbersOnly. Held for the whole write, so every entity's components go
+    // through it and ComponentCodec::Write finds it already there.
+    FiniteNumbersOnly finiteOnly(file);
+
     // Collect first: the entity count must match what is actually written.
     // storage<entt::entity>().size() includes released entities under EnTT's
     // swap_only policy, which produced a trailing comma and invalid JSON.

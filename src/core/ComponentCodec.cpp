@@ -1,4 +1,5 @@
 #include "core/ComponentCodec.hpp"
+#include "core/FiniteNumbers.hpp"
 #include <vector>
 #include <sstream>
 #include "core/Log.hpp"
@@ -156,6 +157,11 @@ namespace ComponentCodec {
 
 void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
            const std::string& indent) {
+    // The backstop under jsonSafe: about a hundred fields below write straight to
+    // the stream, and a NaN or infinity in any of them made the file unreadable.
+    // A no-op when writeScene has already installed it.
+    FiniteNumbersOnly finiteOnly(out);
+
     if (const auto* tag = registry.try_get<TagComponent>(entity)) {
         out << indent << "\"Tag\": \"" << Json::Escape(tag->tag) << "\",\n";
     }
