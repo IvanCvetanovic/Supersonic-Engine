@@ -253,7 +253,7 @@ notarising a Mac build, the editor on iOS.
 
 | | |
 |---|---|
-| **Compiler** | C++20 — MSVC 2022, GCC 11+, or Clang 13+ |
+| **Compiler** | C++20 — MSVC 2022, GCC 11+, or Clang 13+ (built and tested: MSVC, GCC 13.3; Clang 18 compiles — [AGENTS.md](AGENTS.md#requirements)) |
 | **CMake** | 3.20 or newer |
 | **GPU** | Any Vulkan 1.2 capable driver |
 | **Vulkan SDK** | Strongly recommended — see below |

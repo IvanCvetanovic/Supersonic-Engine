@@ -29,7 +29,9 @@ than left as an aspiration the code quietly contradicts.
 - **Memory**: all GPU allocation goes through VMA. There are no raw
   `vkAllocateMemory` calls.
 - **Windowing**: GLFW with `GLFW_NO_API`.
-- **Validation layers**: requested on Debug builds. If the layer is missing the
+- **Validation layers**: requested on Debug builds by default
+  (`SUPERSONIC_ENABLE_VALIDATION=AUTO`; `ON` requests them in every
+  configuration, as CI's Release validation leg does). If the layer is missing the
   engine prints a prominent, unmissable warning and continues — see
   *Validation layers* below, because this matters more than it sounds.
 
@@ -102,7 +104,7 @@ why the demo's physics cube had already fallen before you could look at it.
 
 ```
 SupersonicApp
-├── AudioEngine        (XAudio2 on Windows, ALSA on Linux, AAudio on Android, no-op elsewhere)
+├── AudioEngine        (XAudio2 on Windows, ALSA on Linux, CoreAudio on macOS and iOS, AAudio on Android, no-op elsewhere)
 ├── HotReloadEngine    (watches the script plugin)
 ├── Window
 ├── VulkanContext      (instance, debug messenger)
@@ -3108,8 +3110,10 @@ arrives on the game thread.
 
 ## Validation layers
 
-`VK_LAYER_KHRONOS_validation` is requested on Debug builds. If it is not
-installed the engine prints a boxed warning and continues without it.
+`VK_LAYER_KHRONOS_validation` is requested on Debug builds by default, and in
+every configuration with `-DSUPERSONIC_ENABLE_VALIDATION=ON` (`OFF` turns it off
+everywhere). If it is not installed the engine prints a boxed warning and
+continues without it.
 
 This is worth stating plainly: **two showstopper bugs survived six commits
 because validation was silently unavailable.** A null sampler written into a
@@ -3151,7 +3155,7 @@ Listed rather than hidden.
 | Platform | State |
 |---|---|
 | Windows | Working. Primary development target. |
-| Linux | Should build and run; not verified on hardware. |
+| Linux | Builds, and every suite passes: GCC 13.3, Release, measured on 1 October 2026 (Clang 18 compiles). The engine itself has not been run on Linux hardware - that build had no GPU. |
 | macOS | **A game runs.** GLFW, MoltenVK linked directly (`SUPERSONIC_MOLTENVK_LIBRARY`) or through a loader, CoreAudio. Measured on GitHub's macos-15 arm64 runner (Apple Paravirtual GPU): Penumbra's suites pass and its app bundle renders a level. The README's Platforms section says what it took. |
 | Android | **A game runs** (not the editor). `src/platform/android/` implements the native-surface `Window` (`WindowBackend.hpp`), `InputPolling`, `NativeWindowControl` and `Gamepads` over NativeActivity, and owns `android_main`; the game builds as a SHARED library with a `SupersonicMain`, and its manifest names the engine's `SupersonicActivity` (`src/platform/android/java/`: immersive fullscreen, and the safe area behind `platform/SafeArea.hpp`). Measured on an API 33 x86_64 emulator (SwiftShader Vulkan 1.2): menu, taps, a level, suspend/resume with the surface rebuilt. The README's Platforms section lists what is not done. |
 | iOS | **Builds and starts a game; no frame drawn yet.** `src/platform/ios/` implements the native-surface `Window`, `InputPolling`, `NativeWindowControl` and `Gamepads` over UIKit and owns `main()`; the game defines `SupersonicMain`. In the iOS simulator the engine initialises and the game loads a level, then the first draw fails: the simulator's GPU (Metal family Apple 2) has no base-instance drawing, which `RenderSystem`'s instanced batches need. Builds for devices; not run on one (signing). |
