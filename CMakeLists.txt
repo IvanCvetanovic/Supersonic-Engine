@@ -234,6 +234,27 @@ endif()
 # Nor on iOS, which GLFW does not support either: its Apple backend is Cocoa,
 # and src/platform/ios/ stands where it does, as src/platform/android/ does.
 if (NOT ANDROID AND NOT IOS)
+    # GLFW 3.4 builds its Wayland backend by default on Linux and stops the
+    # configure with "Failed to find wayland-scanner" if the Wayland toolchain is
+    # not installed - which a plain `cmake -B build` hits on any machine with
+    # only the X11 headers. X11 is enough to run, so where the scanner is not
+    # there, default the backend off and say so.
+    #
+    # Only a default: NOT DEFINED lets an explicit -DGLFW_BUILD_WAYLAND=ON (or
+    # OFF), or a parent project that has already chosen, win. A machine that
+    # configures today still gets Wayland, because it has the scanner. If the
+    # toolchain is installed later, pass -DGLFW_BUILD_WAYLAND=ON once; this
+    # default is a cache entry and stays until then.
+    if (UNIX AND NOT APPLE AND NOT DEFINED GLFW_BUILD_WAYLAND)
+        find_program(SUPERSONIC_WAYLAND_SCANNER wayland-scanner)
+        if (NOT SUPERSONIC_WAYLAND_SCANNER)
+            set(GLFW_BUILD_WAYLAND OFF CACHE BOOL
+                "Build GLFW's Wayland backend (defaulted off: wayland-scanner not found)")
+            message(STATUS "wayland-scanner not found - building GLFW for X11 only "
+                           "(pass -DGLFW_BUILD_WAYLAND=ON to override)")
+        endif()
+    endif()
+
     set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
