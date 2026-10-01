@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-57%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-58%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT-0](https://img.shields.io/badge/license-MIT--0-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 [![Free to use](https://img.shields.io/badge/price-free-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#license)
@@ -407,6 +407,7 @@ assets/
 plugins/       Hot-reloadable C++ gameplay scripts
 platform/      Android and Apple target scaffolding
 tests/         Pure-logic regression suites
+tools/         tools/verify-replay.ps1: record, replay, and prove a corrupted checkpoint is caught
 docs/          Screenshots, and the planning records under docs/planning/
 cmake/         The suite rule and harness a game builds against, the Vulkan import library
 .github/       CI: manual-dispatch only (Actions -> CI -> Run workflow)
@@ -426,9 +427,10 @@ and its planning records:
 How they build against the engine: [Building a game against the
 engine](#building-a-game-against-the-engine).
 
-Roughly 19,200 lines of engine source across 73 translation units, or 26,700
-lines counting headers — excluding vendored dependencies and the two
-translation units that exist only to compile VMA and tinygltf.
+Roughly 39,500 lines of engine source across 101 translation units, or 57,000
+lines counting headers — the desktop build, editor included, excluding
+vendored dependencies, the Android and iOS backends, and the three translation
+units that exist only to compile VMA, tinygltf and stb_vorbis.
 
 ---
 
@@ -509,6 +511,13 @@ verified by a screenshot of geometry it never touched.
 | `test_layerstack` | The seam a game lives in: attach, detach, fixed and per-frame callbacks |
 | `test_codecextension` | Serialising a game's own components alongside the engine's |
 | `test_packaging` | That a packaged folder has a binary, a manifest, and the scene it was asked for |
+| `test_bitmapfont` | The BMFont reader and the glyph quads a string becomes, on fonts the suite writes itself so it runs on any machine, and the refusals a malformed descriptor gets |
+| `test_clustergrid` | The froxel grid that lifted the eight-light cap: that a light lands in every cluster it reaches, and where the depth slices fall |
+| `test_detmath` | The simulation's transcendental functions against a golden table any conforming platform must reproduce bit for bit |
+| `test_draworder` | Explicit draw order for surfaces depth cannot separate: that a scene setting no key records in exactly the order it always did, and one that does is re-ordered by it |
+| `test_uilayer` | When the HUD is drawn rather than where: the order the coloured rectangles appear in ImGui's vertex buffer, with no device |
+| `test_userdata` | Where a game writes what belongs to the player: the name sanitiser, and a per-user directory that is absolute, exists afterwards and does not collide |
+| `test_worldshapes` | The world-space shape buffer's tessellation and accumulation; the pixels need a device and are not covered here |
 
 Every suite is a regression test for a bug that actually happened. The header
 comment on each one says which.
