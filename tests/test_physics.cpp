@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/constants.hpp>
 #include <string>
@@ -1432,6 +1433,76 @@ static void testSweepAndPruneSkipsPairsSeparatedOffAxis() {
     std::vector<std::pair<size_t, size_t>> pairs;
     PhysicsSystem::SweepAndPrune(proxies, pairs);
     CHECK_MSG(pairs.empty(), "boxes apart on Y must not be reported as candidates");
+}
+
+static void testAProxyWithNoPositionDoesNotUnsortTheSweep() {
+    // A body at NaN reaches the broadphase - a transform nothing validated, a
+    // script that divided by zero. Its min.x is NaN, and the sort compared
+    // `lhs != rhs` and then `lhs < rhs`: false both ways against everything, so
+    // NaN is "equal" to every number while the numbers are not equal to each other.
+    // That is not a strict weak ordering, std::sort's behaviour on one is
+    // undefined, and in practice it leaves a finite proxy out of order.
+    //
+    // A is [0, 1] and B is [0.5, 1.5], so they overlap; C is far along at 5.
+    // Input order A, C, NaN, B: the NaN keeps B from being moved ahead of C, the
+    // sweep reaches C and stops ("C starts past A's end"), and A-B is never tested.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    std::vector<PhysicsSystem::Proxy> proxies;
+    proxies.push_back(makeProxy(1, 0, glm::vec3(0.0f), glm::vec3(1.0f), 1.0f));       // A
+    proxies.push_back(makeProxy(2, 1, glm::vec3(5.0f), glm::vec3(6.0f), 1.0f));       // C
+    proxies.push_back(makeProxy(3, 2, glm::vec3(nan), glm::vec3(nan), 1.0f));         // no position
+    proxies.push_back(makeProxy(4, 3, glm::vec3(0.5f), glm::vec3(1.5f), 1.0f));       // B
+
+    std::vector<std::pair<size_t, size_t>> pairs;
+    PhysicsSystem::SweepAndPrune(proxies, pairs);
+
+    // A pair's indices refer to the SORTED proxies, so map them back through
+    // Proxy::index. A NaN proxy is a candidate with its neighbours - every test
+    // against NaN is false, so it is "not separated" from anything - and that is
+    // harmless: the narrowphase decides. What matters is the finite bodies.
+    bool foundAB = false;
+    bool reportedAFalsePair = false;
+    for (const auto& pair : pairs) {
+        const size_t a = proxies[pair.first].index;
+        const size_t b = proxies[pair.second].index;
+        if (a == 2 || b == 2) continue;   // the NaN one
+        if ((a == 0 && b == 3) || (a == 3 && b == 0)) foundAB = true;
+        else reportedAFalsePair = true;   // A-C, B-C: they do not overlap in x
+    }
+    CHECK_MSG(foundAB, "A and B overlap and are found: the NaN proxy does not hide the pair");
+    CHECK_MSG(!reportedAFalsePair,
+              "and no finite pair is reported that does not overlap, which an unsorted list produces");
+}
+
+static void testAFiniteBroadphaseIsOrderedExactlyAsItWas() {
+    // The guard above must cost finite data nothing. Boxes on a grid share min.x -
+    // the case the index tie-break exists for - and the pair list has to come out
+    // in the order the old comparator gave, because the solver applies impulses in
+    // it and a different order is a different simulation.
+    std::vector<PhysicsSystem::Proxy> proxies;
+    size_t index = 0;
+    for (int x = 0; x < 6; ++x) {
+        for (int z = 0; z < 4; ++z) {
+            proxies.push_back(makeProxy(static_cast<uint32_t>(index + 1), index,
+                                        glm::vec3(static_cast<float>(x) * 0.9f, 0.0f, static_cast<float>(z) * 0.9f),
+                                        glm::vec3(static_cast<float>(x) * 0.9f + 1.0f, 1.0f, static_cast<float>(z) * 0.9f + 1.0f),
+                                        1.0f));
+            ++index;
+        }
+    }
+    std::vector<PhysicsSystem::Proxy> reference = proxies;
+    std::sort(reference.begin(), reference.end(), [](const PhysicsSystem::Proxy& lhs, const PhysicsSystem::Proxy& rhs) {
+        if (lhs.min.x != rhs.min.x) return lhs.min.x < rhs.min.x;   // the comparator as it was
+        return lhs.index < rhs.index;
+    });
+
+    std::vector<std::pair<size_t, size_t>> pairs;
+    PhysicsSystem::SweepAndPrune(proxies, pairs);
+
+    bool sameOrder = proxies.size() == reference.size();
+    for (size_t i = 0; sameOrder && i < proxies.size(); ++i) sameOrder = proxies[i].index == reference[i].index;
+    CHECK_MSG(sameOrder, "the proxies end up in exactly the order the old comparator gave them");
+    CHECK_MSG(!pairs.empty(), "and the grid, whose boxes overlap, still finds its pairs");
 }
 
 static void testProxiesStartingAtTheSameXKeepAStatedOrder() {
@@ -3484,6 +3555,8 @@ static void runTests() {
     testRaycastRespectsItsLayerMask();
     testSweepAndPruneFindsOverlappingPairs();
     testSweepAndPruneSkipsPairsSeparatedOffAxis();
+    testAProxyWithNoPositionDoesNotUnsortTheSweep();
+    testAFiniteBroadphaseIsOrderedExactlyAsItWas();
     testProxiesStartingAtTheSameXKeepAStatedOrder();
     testSweepAndPruneIgnoresTwoStatics();
     testBoxesSeparateInsteadOfOverlapping();

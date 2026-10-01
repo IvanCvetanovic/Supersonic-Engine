@@ -1,4 +1,5 @@
 #include "core/Log.hpp"
+#include "core/FloatOrdering.hpp"
 #include "core/RenderSystem.hpp"
 
 #include <algorithm>
@@ -161,7 +162,13 @@ void RenderSystem::SortTransparentDraws(std::vector<TransparentDraw>& draws) {
               [](const TransparentDraw& lhs, const TransparentDraw& rhs) {
                   // Back to front: the farthest along the view direction is
                   // drawn first, so nearer surfaces composite over it.
-                  if (lhs.viewDepth != rhs.viewDepth) return lhs.viewDepth > rhs.viewDepth;
+                  //
+                  // NaN last (FloatOrdering.hpp): an entity at NaN is culled as
+                  // visible, and a comparator that is false both ways against NaN is
+                  // not a strict weak ordering, so the draws around it came out of
+                  // order. For real depths this is the plain comparison.
+                  if (DescendingNaNLast(lhs.viewDepth, rhs.viewDepth)) return true;
+                  if (DescendingNaNLast(rhs.viewDepth, lhs.viewDepth)) return false;
 
                   // Ascending: a HIGHER sort key is drawn later, which is to say
                   // on top - matching what the opaque pass means by it and what
@@ -268,8 +275,10 @@ void RenderSystem::ApplySprite2D(const MaterialComponent& material, PushConstant
 void RenderSystem::SortParticleDraws(std::vector<ParticleDraw>& draws) {
     std::sort(draws.begin(), draws.end(),
               [](const ParticleDraw& lhs, const ParticleDraw& rhs) {
-                  // Back to front, exactly as the blended pass above.
-                  if (lhs.viewDepth != rhs.viewDepth) return lhs.viewDepth > rhs.viewDepth;
+                  // Back to front, exactly as the blended pass above - NaN last, for
+                  // the same reason.
+                  if (DescendingNaNLast(lhs.viewDepth, rhs.viewDepth)) return true;
+                  if (DescendingNaNLast(rhs.viewDepth, lhs.viewDepth)) return false;
 
                   // And gather order, which is what makes it total. See
                   // ParticleDraw::gathered: a burst of particles shares one

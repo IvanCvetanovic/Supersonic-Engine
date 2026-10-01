@@ -1,4 +1,5 @@
 #include "core/PhysicsSystem.hpp"
+#include "core/FloatOrdering.hpp"
 #include "core/CollisionSAT.hpp"
 #include "core/Heightfield.hpp"
 #include "core/CollisionHull.hpp"
@@ -404,8 +405,16 @@ void PhysicsSystem::SweepAndPrune(std::vector<Proxy>& proxies,
     // no amount of fixing the clock or the input would close, and which only
     // ever shows up as "the replay from my machine does not reproduce on
     // yours".
+    //
+    // And NaN-safe, with NaN last (FloatOrdering.hpp): `lhs != rhs` then `lhs < rhs`
+    // is not a strict weak ordering with a NaN in the data, and a body at NaN is
+    // a proxy. The sort then left finite proxies out of order, and the sweep below
+    // stops at the first proxy that starts past the current one's end, so a pair of
+    // healthy bodies could be silently skipped. For finite data the order is exactly
+    // what it was.
     std::sort(proxies.begin(), proxies.end(), [](const Proxy& lhs, const Proxy& rhs) {
-        if (lhs.min.x != rhs.min.x) return lhs.min.x < rhs.min.x;
+        if (AscendingNaNLast(lhs.min.x, rhs.min.x)) return true;
+        if (AscendingNaNLast(rhs.min.x, lhs.min.x)) return false;
         return lhs.index < rhs.index;
     });
 
