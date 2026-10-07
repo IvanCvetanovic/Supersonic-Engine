@@ -1,5 +1,6 @@
 #include "platform/InputPolling.hpp"
 
+#include <chrono>
 #include <vector>
 
 #include <GLFW/glfw3.h>
@@ -16,6 +17,9 @@ float g_pendingScroll = 0.0f;
 // callback, and the snapshot wants them all together.
 unsigned int g_pendingCharacters[Text::kMaxCharacters]{};
 int g_pendingCharacterCount = 0;
+
+// Whether the first poll, which makes GLFW look for game controllers, has happened.
+bool g_gamepadScanned = false;
 
 // What was last handed to GLFW. Compared rather than set every frame:
 // glfwSetInputMode is not free, and under GLFW_CURSOR_DISABLED re-setting the
@@ -208,7 +212,25 @@ void InputPolling::Poll(Window& window) {
     // The first gamepad only. Split-screen would want the rest, and the
     // snapshot has room for it, but a single pad is what one player needs.
     GLFWgamepadstate pad{};
-    if (glfwJoystickIsGamepad(GLFW_JOYSTICK_1) && glfwGetGamepadState(GLFW_JOYSTICK_1, &pad)) {
+    // The first joystick call of the process: GLFW finds every game controller
+    // the system knows - DirectInput and XInput, each device opened - inside it,
+    // on this thread, with the window already shown. Timed and logged once, so
+    // a start that is slow or stalls there says so.
+    const bool firstGamepadScan = !g_gamepadScanned;
+    std::chrono::steady_clock::time_point scanStart;
+    if (firstGamepadScan) {
+        g_gamepadScanned = true;
+        SUPERSONIC_LOG_INFO("Input") << "Looking for gamepads (the first poll)." << std::endl;
+        scanStart = std::chrono::steady_clock::now();
+    }
+    const bool isGamepad = glfwJoystickIsGamepad(GLFW_JOYSTICK_1) == GLFW_TRUE;
+    if (firstGamepadScan) {
+        const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - scanStart);
+        SUPERSONIC_LOG_INFO("Input") << "Gamepad scan done in " << took.count() << " ms; "
+                                     << (isGamepad ? "a gamepad is connected." : "no gamepad.") << std::endl;
+    }
+    if (isGamepad && glfwGetGamepadState(GLFW_JOYSTICK_1, &pad)) {
         state.padConnected = true;
         for (int button = 0; button < Pad::ButtonCount; ++button) {
             state.padButtons[button] = pad.buttons[button] == GLFW_PRESS;

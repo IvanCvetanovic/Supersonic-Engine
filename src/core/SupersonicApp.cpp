@@ -265,10 +265,21 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
         m_window->ResetResizedFlag();
     }
 
+    // The window is on screen from here, and nothing has read its messages yet:
+    // Vulkan, the pipelines and the game's attach all come before the first
+    // frame's poll. Read them between the stages (GameManifest::
+    // pumpEventsDuringStartup), so a slow stage cannot make Windows call the
+    // window "Not responding". What a pump raises before the swapchain exists
+    // is settled just before it is made (settleWindowForSwapchain).
+    pumpStartupEvents();
+
     auto requiredExtensions = m_window->GetRequiredExtensions();
     m_vulkanContext = std::make_unique<VulkanContext>(requiredExtensions);
+    pumpStartupEvents();
 
     m_vulkanDevice = std::make_unique<VulkanDevice>(m_vulkanContext->GetInstance(), *m_window);
+    pumpStartupEvents();
+    settleWindowForSwapchain();
     // Readable only for --screenshot-ui, the one thing that copies out of it.
     m_swapchain = std::make_unique<VulkanSwapchain>(*m_vulkanDevice, *m_window,
                                                     !m_options.screenshotUiPath.empty());
@@ -277,6 +288,7 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
             << "--screenshot-ui: this surface cannot be read back, so no UI capture will be "
                "written. The run goes on; --screenshot, if given, is unaffected.";
     }
+    pumpStartupEvents();
     // The editor's appearance, handed to the renderer rather than reached for
     // by it. This is the only line in the engine that decides what the UI looks
     // like, and it is in the application - which is where the editor is.
@@ -286,6 +298,11 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
             EditorFonts::Load(dpiScale);
             Theme::ApplyEngineDarkTheme(dpiScale);
         });
+    // The pipelines are compiled below, one by one, by the driver: the longest
+    // single wait of a cold start on a slow GPU. Cleared once they are built:
+    // the hook captures this, and startup is over.
+    if (m_manifest.pumpEventsDuringStartup) m_renderer->SetStartupPump([this] { pumpStartupEvents(); });
+    pumpStartupEvents();
 
 #if !SUPERSONIC_WINDOW_GLFW
     // The platform can take the window away at any time (WindowBackend.hpp),
@@ -319,6 +336,7 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     m_editorLayer->Init(*m_vulkanDevice,
                         m_swapchain->GetExtent().width,
                         m_swapchain->GetExtent().height);
+    pumpStartupEvents();
 
     // The scene pipeline targets the editor's offscreen render pass.
     // Before the first resize, so the bloom chain is rebuilt from the cache
@@ -329,6 +347,9 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
 
     m_renderer->SetOffscreenRenderPass(m_editorLayer->GetOffscreen().GetRenderPass(),
                                        m_editorLayer->GetOffscreen().GetSampleCount());
+    m_renderer->SetStartupPump({});
+    SUPERSONIC_LOG_INFO("SupersonicApp") << "Renderer ready.";
+    pumpStartupEvents();
 
     m_editorLayer->SetGameMode(m_manifest.isGame);
     m_editorLayer->SetSceneManager(&m_sceneManager);
@@ -491,6 +512,7 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
                 << "." << std::endl;
         }
     }
+    pumpStartupEvents();
 
     // The demo scene is the EDITOR's starting point, and a game has its own.
     // Building it for one meant a game opened with a camera, a sun and eleven
@@ -691,8 +713,57 @@ void SupersonicApp::applyPendingSceneLoad() {
 
 void SupersonicApp::PushLayer(std::unique_ptr<EngineLayer> layer) {
     if (!layer) return;
-    SUPERSONIC_LOG_INFO("SupersonicApp") << "Attached layer '" << layer->Name() << "'.";
+    const char* rawName = layer->Name();
+    const std::string name = rawName != nullptr ? rawName : "";
+    pumpStartupEvents();
+    // A close asked for while the start was being made, which the pumps are
+    // what let be heard: the game's world is not built for a window that is
+    // going, and Run, finding it closed, ends at once.
+    if (m_manifest.pumpEventsDuringStartup && !m_running && m_window && m_window->ShouldClose()) {
+        SUPERSONIC_LOG_INFO("SupersonicApp") << "The window was closed during startup; layer '" << name
+                                             << "' is not attached.";
+        return;
+    }
+    SUPERSONIC_LOG_INFO("SupersonicApp") << "Attached layer '" << name << "'.";
     m_layers.Push(std::move(layer), m_registry);
+    // After OnAttach, which the line above is logged before: with the times the
+    // log can carry (Log::SetElapsedTimestamps), the gap between the two is what
+    // the game spent building its world.
+    SUPERSONIC_LOG_INFO("SupersonicApp") << "Layer '" << name << "' is ready.";
+    pumpStartupEvents();
+}
+
+void SupersonicApp::pumpStartupEvents() {
+#if SUPERSONIC_WINDOW_GLFW
+    // Only a desktop window, only when the game asked, and only until Run
+    // begins: a phone's PollEvents blocks while the app is in the background
+    // (Window.hpp), which a stage of the start is not the place to wait in, and
+    // a layer pushed once the frame loop runs must not read events mid-frame.
+    if (m_manifest.pumpEventsDuringStartup && !m_running && m_window) m_window->PollEvents();
+#endif
+}
+
+// The pumps can deliver what the start never used to read before its
+// swapchain existed: a minimise, or the loss of focus that iconifies a
+// fullscreen window (GLFW_AUTO_ICONIFY). A swapchain cannot be made on a window
+// of no size, so wait it out as RecreateSwapchain does at run time; unless a
+// close was asked for, when the window is restored so that a swapchain can be
+// made and Run ends at once. And what the pumps raised on the resized flag is
+// not news to a swapchain not yet made (the reason for the resets above).
+void SupersonicApp::settleWindowForSwapchain() {
+#if SUPERSONIC_WINDOW_GLFW
+    if (!m_manifest.pumpEventsDuringStartup || !m_window) return;
+    GLFWwindow* native = m_window->GetNativeWindow();
+    int width = 0;
+    int height = 0;
+    glfwGetFramebufferSize(native, &width, &height);
+    while ((width == 0 || height == 0) && !m_window->ShouldClose()) {
+        glfwWaitEvents();
+        glfwGetFramebufferSize(native, &width, &height);
+    }
+    if (width == 0 || height == 0) glfwRestoreWindow(native);
+    m_window->ResetResizedFlag();
+#endif
 }
 
 SupersonicApp::~SupersonicApp() {
@@ -1011,6 +1082,11 @@ void SupersonicApp::initECS() {
 
 void SupersonicApp::Run() {
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Starting Main 3D Game Loop..." << std::endl;
+    // From here the frame loop reads the window's events itself.
+    m_running = true;
+    // For the log of a start that stalls: with the times SetElapsedTimestamps
+    // adds, the line below says when the first frame was handed to the GPU.
+    bool loggedFirstFrame = false;
 
 #if SUPERSONIC_WINDOW_GLFW
     double lastTime = glfwGetTime();
@@ -1925,6 +2001,10 @@ void SupersonicApp::Run() {
                               m_editorLayer->GetOffscreen(),
                               ImGui::GetDrawData(),
                               *renderCamera);
+        if (!loggedFirstFrame) {
+            loggedFirstFrame = true;
+            SUPERSONIC_LOG_INFO("SupersonicApp") << "First DrawFrame returned.";
+        }
     }
 
     finishRecording();

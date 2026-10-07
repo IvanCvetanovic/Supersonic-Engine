@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <utility>
 #include <memory>
 #include <string>
 #include <vector>
@@ -122,6 +123,13 @@ public:
     // out so the editor's offscreen chain can use it too rather than compiling
     // its pipelines from SPIR-V on every viewport resize.
     vk::PipelineCache GetPipelineCache() const;
+
+    // Called between the steps of the renderer's slow start - each pipeline the
+    // driver compiles from SPIR-V - so the application can keep its window's
+    // messages read while it is built (GameManifest::pumpEventsDuringStartup).
+    // The application clears it once the pipelines are built: it captures the
+    // application, and startup is over.
+    void SetStartupPump(std::function<void()> pump) { m_startupPump = std::move(pump); }
 
     // The renderer's transfer/graphics command pool, for one-off work like a
     // screenshot readback.
@@ -304,6 +312,8 @@ private:
     // means the scene is within the cap and the next overflow should report.
     mutable size_t m_lightCapReportedFor{0};
     std::unique_ptr<PipelineCache> m_pipelineCache;
+    std::function<void()> m_startupPump;
+    void pumpStartup() const { if (m_startupPump) m_startupPump(); }
 
     // Every skinned entity's joint matrices for the frame, back to back. The
     // per-draw push constant holds an index into this rather than the matrices

@@ -81,6 +81,15 @@ private:
 
     void applyPendingSceneLoad();
 
+    // Reads the window's events during the constructor and while a layer is
+    // attached, when the game asked (GameManifest::pumpEventsDuringStartup).
+    // A no-op otherwise, and on a platform whose window is not GLFW's.
+    void pumpStartupEvents();
+
+    // Before the swapchain is made: waits out a minimised window and clears the
+    // resized flag the pumps may have raised. A no-op unless the game opted in.
+    void settleWindowForSwapchain();
+
     // Open the file named by --record or --replay, once the scene is loaded.
     void setUpRecording(const std::string& startupScene);
 
@@ -188,6 +197,10 @@ private:
     // request. Once, because a game re-applying its settings every frame
     // would otherwise write the same line sixty times a second.
     bool m_droppedHiddenWindowRequest{false};
+
+    // Run has begun: the frame loop reads the window's events itself, and the
+    // startup pumps stop.
+    bool m_running{false};
 
     // Physics runs on a fixed step fed by this accumulator, so a stalled frame
     // cannot integrate a two-second delta in one go.

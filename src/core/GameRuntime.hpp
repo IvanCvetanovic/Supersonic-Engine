@@ -65,6 +65,18 @@ struct GameManifest {
     // read from or written to game.manifest's text.
     float fitWindowToMonitor{0.0f};
 
+    // Opt-in, for a game whose start takes seconds on a slow machine: the
+    // window is shown the moment it is created, and nothing reads its messages
+    // until the first frame - so a start of five seconds or more makes Windows
+    // call the window "Not responding" and offer to close it, and the player
+    // sees a blank window that looks like a crash. True pumps the window's
+    // events between the startup stages (the device, the swapchain, each
+    // pipeline compiled, the layer's attach), so the longest a window goes
+    // unread is the longest single stage. A desktop window only: a phone's is
+    // the platform's. False, the default, is the start as it always was. Set by
+    // a game's main; not read from or written to game.manifest's text.
+    bool pumpEventsDuringStartup{false};
+
     // What the engine opens at when nothing asks for anything, which is the
     // literal that used to be the only answer.
     static constexpr uint32_t kDefaultWidth = 1280;

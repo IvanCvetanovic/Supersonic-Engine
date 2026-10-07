@@ -380,6 +380,7 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/vert.spv",
         "assets/shaders/frag.spv",
         sceneOptions);
+    pumpStartup();
 
     // The same shaders, blended, for anything a material marks transparent.
     //
@@ -400,6 +401,7 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/vert.spv",
         "assets/shaders/frag.spv",
         blendOptions);
+    pumpStartup();
 
     // The blended pipeline once more, adding instead of mixing. Everything else
     // - no depth write, both faces - holds for a glow for the same reasons.
@@ -412,6 +414,7 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/vert.spv",
         "assets/shaders/frag.spv",
         additiveOptions);
+    pumpStartup();
 
     // And once more for a colour the shader has already multiplied by its
     // alpha (MaterialComponent::BlendMode::Premultiplied): One,
@@ -426,6 +429,7 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/vert.spv",
         "assets/shaders/frag.spv",
         premultipliedOptions);
+    pumpStartup();
 
     // Sky. No vertex input - the triangle comes from gl_VertexIndex - and no
     // depth write, because nothing is ever behind it. The depth TEST stays on:
@@ -445,6 +449,7 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/sky_vert.spv",
         "assets/shaders/sky_frag.spv",
         skyOptions);
+    pumpStartup();
 
     // Infinite ground grid: a full-screen triangle pair with no vertex input,
     // alpha blended, writing depth so scene geometry occludes it.
@@ -462,6 +467,7 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/grid_vert.spv",
         "assets/shaders/grid_frag.spv",
         gridOptions);
+    pumpStartup();
 
     // Depth-only pass from the light. No colour attachment, and depth bias to
     // stop surfaces shadowing themselves.
@@ -499,6 +505,7 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/shadow_vert.spv",
         "assets/shaders/shadow_frag.spv",
         shadowOptions);
+    pumpStartup();
 
     // The same pass for surfaces that are mostly holes, differing in the two
     // things a cut-out caster actually needs.
@@ -523,6 +530,7 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/shadow_vert.spv",
         "assets/shaders/shadow_cutout_frag.spv",
         cutoutOptions);
+    pumpStartup();
 
     // Persist whatever the driver just compiled, so the next launch starts warm.
     m_pipelineCache->Save();
@@ -567,6 +575,7 @@ void VulkanRenderer::createGraphicsPipeline() {
             "assets/shaders/world_shape_vert.spv",
             "assets/shaders/world_shape_frag.spv",
             shapeOptions);
+        pumpStartup();
     }
 
     // The screen overlay: no vertex input, blended, no depth, one sample - the
@@ -591,6 +600,7 @@ void VulkanRenderer::createGraphicsPipeline() {
             "assets/shaders/screen_overlay_vert.spv",
             "assets/shaders/screen_overlay_frag.spv",
             overlayOptions);
+        pumpStartup();
     }
 
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "Scene, grid, shape, overlay and shadow pipelines created." << std::endl;

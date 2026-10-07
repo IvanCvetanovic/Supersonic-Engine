@@ -54,6 +54,21 @@ void Clear();
 bool SetFileSink(const std::string& path);
 void CloseFileSink();
 
+// Opt-in: the file sink's lines then carry the seconds since the first line was
+// logged - "INFO +1.234s [Window] ..." instead of "INFO [Window] ...". Off by
+// default, so no log anyone reads or diffs changes unless its program asks.
+//
+// For a shipped game's log, which is what a player sends when a start stalls:
+// without times it cannot say a slow start from a stuck one, and the last line
+// is all it can name. The console and the in-memory buffer are not stamped; the
+// first is read live and the second is the editor's panel, which has its own
+// column for it.
+void SetElapsedTimestamps(bool enabled);
+
+// "+1.234s": the form the file sink writes. Split out so a suite can check it
+// without a clock.
+std::string FormatElapsed(double seconds);
+
 // Built into an ostringstream and submitted on destruction, so the existing
 // call sites keep their streaming form and their ordering.
 class Stream {

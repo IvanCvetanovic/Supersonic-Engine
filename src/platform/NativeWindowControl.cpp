@@ -253,6 +253,13 @@ void NativeWindowControl::enterFullscreen() {
     // GLFW_AUTO_ICONIFY is left at its default, which minimises the window
     // when it loses focus. GLFW keeps a fullscreen window topmost, so without
     // it an alt-tab would leave the game drawn over whatever was switched to.
+    //
+    // Logged BEFORE the call: it lists the monitor's video modes on its first
+    // use, and on some adapters asks the driver about each one, so a start that
+    // stalls here would otherwise end its log on the line above it.
+    SUPERSONIC_LOG_INFO("Window") << "Entering fullscreen on " << monitorName(monitor) << " ("
+                                  << mode->width << "x" << mode->height << " @ " << mode->refreshRate
+                                  << " Hz, the desktop's mode)." << std::endl;
     glfwSetWindowMonitor(native, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
 
     SUPERSONIC_LOG_INFO("Window") << "Fullscreen on " << monitorName(monitor) << " at "
@@ -317,6 +324,17 @@ void NativeWindowControl::enterFullscreenMode(glm::uvec2 size, uint32_t refreshR
     // monitor's new size in place; the framebuffer callback carries the new
     // size to the swapchain as it does for any resize. GLFW restores the
     // desktop's mode itself when the window leaves the monitor or is iconified.
+    //
+    // Logged BEFORE the call, when it will really switch the display: the
+    // screen goes dark while the monitor resynchronises, which takes seconds on
+    // some monitors and TVs, and the line below is written only after it.
+    if (!atMode) {
+        SUPERSONIC_LOG_INFO("Window") << "Switching " << monitorName(monitor) << " to " << mode.width << "x"
+                                      << mode.height << " @ " << mode.refreshRate << " Hz (it runs "
+                                      << current->width << "x" << current->height << " @ "
+                                      << current->refreshRate << " Hz); the screen may go dark for a moment."
+                                      << std::endl;
+    }
     const int glfwRate = mode.refreshRate > 0 ? static_cast<int>(mode.refreshRate) : GLFW_DONT_CARE;
     glfwSetWindowMonitor(native, monitor, 0, 0, static_cast<int>(mode.width),
                          static_cast<int>(mode.height), glfwRate);

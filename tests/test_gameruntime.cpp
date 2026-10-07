@@ -13,13 +13,21 @@
 #include "TestHarness.hpp"
 #include "core/GameRuntime.hpp"
 #include "core/Input.hpp"
+#include "core/Log.hpp"
 #include "core/WindowControl.hpp"
 #include "platform/ExecutablePath.hpp"
 
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
+#include <random>
+#include <regex>
+#include <sstream>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace Supersonic;
@@ -784,6 +792,108 @@ static void testAManifestFitsItsWindowOnlyWhenItAsks() {
     CHECK(GameRuntime::Serialize(fitted) == GameRuntime::Serialize(unfitted));
 }
 
+static void testTheStartupPumpIsOffByDefaultAndNeverInTheManifestsText() {
+    // Off by default, like every opt-in beside it: a game that never heard of it
+    // starts as it always did. And, as fitWindowToMonitor, a game's main sets
+    // it - the manifest's text neither carries nor reads it. (The pump itself
+    // needs a window and a device: it is exercised by the game's real start.)
+    const GameManifest plain;
+    CHECK(!plain.pumpEventsDuringStartup);
+    GameManifest pumping;
+    pumping.isGame = true;
+    pumping.pumpEventsDuringStartup = true;
+    GameManifest quiet = pumping;
+    quiet.pumpEventsDuringStartup = false;
+    CHECK_MSG(GameRuntime::Serialize(pumping) == GameRuntime::Serialize(quiet),
+              "the manifest's text must not carry the flag");
+    CHECK_MSG(!GameRuntime::Parse(GameRuntime::Serialize(pumping)).pumpEventsDuringStartup,
+              "nor read it back");
+}
+
+static std::string ReadWhole(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+// The lines of `text` that mention `needle`, without their line ends.
+static std::vector<std::string> LinesWith(const std::string& text, const std::string& needle) {
+    std::vector<std::string> lines;
+    std::istringstream in(text);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.find(needle) != std::string::npos) lines.push_back(line);
+    }
+    return lines;
+}
+
+static void testTheFileLogCarriesElapsedTimeOnlyWhenAsked() {
+    // The form: seconds with milliseconds, a plus sign, an s. A clock that ran
+    // backwards is not a negative time in a log.
+    CHECK(Log::FormatElapsed(0.0) == "+0.000s");
+    CHECK(Log::FormatElapsed(1.2345) == "+1.234s" || Log::FormatElapsed(1.2345) == "+1.235s");
+    CHECK(Log::FormatElapsed(12.0) == "+12.000s");
+    CHECK(Log::FormatElapsed(3725.5) == "+3725.500s");
+    CHECK(Log::FormatElapsed(-4.0) == "+0.000s");
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    // A name of its own: two runs of this suite at once must not share a sink.
+    std::random_device entropy;
+    const fs::path file = fs::temp_directory_path(ec) /
+                          ("supersonic_test_log_elapsed_" + std::to_string(entropy()) + ".txt");
+    CHECK(Log::SetFileSink(file.string()));
+
+    // Off, the default: the line is what it always was, byte for byte.
+    Log::SetElapsedTimestamps(false);
+    Log::Submit(Log::Level::Info, "Probe", "plain");
+    // On: the time sits between the level and the category, so the prefix a
+    // reader greps for ("INFO [Probe]") still finds a line by its category.
+    Log::SetElapsedTimestamps(true);
+    Log::Submit(Log::Level::Warning, "Probe", "stamped one");
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    Log::Submit(Log::Level::Warning, "Probe", "stamped two");
+    Log::SetElapsedTimestamps(false);
+    Log::Submit(Log::Level::Error, "Probe", "plain again");
+    Log::CloseFileSink();
+
+    const std::string text = ReadWhole(file);
+    fs::remove(file, ec);
+    const std::vector<std::string> lines = LinesWith(text, "[Probe]");
+    CHECK_MSG(lines.size() == 4, "four lines were logged, got " + std::to_string(lines.size()));
+    if (lines.size() == 4) {
+        CHECK_MSG(lines[0] == "INFO [Probe] plain", "off is the old form: " + lines[0]);
+        CHECK_MSG(lines[3] == "ERROR [Probe] plain again", "off again is the old form: " + lines[3]);
+
+        // On adds the elapsed time after the level; and it is the clock's: seconds,
+        // never negative, and later in the second line by about the time slept.
+        const std::regex stamped(R"(WARN \+([0-9]+\.[0-9]{3})s \[Probe\] (stamped (?:one|two)))");
+        std::smatch first;
+        std::smatch second;
+        CHECK_MSG(std::regex_match(lines[1], first, stamped), "on adds the elapsed time: " + lines[1]);
+        CHECK_MSG(std::regex_match(lines[2], second, stamped), "and on every line: " + lines[2]);
+        if (first.size() == 3 && second.size() == 3) {
+            const double t1 = std::stod(first[1]);
+            const double t2 = std::stod(second[1]);
+            CHECK_MSG(t1 >= 0.0, "a time since the first line is never negative");
+            CHECK_MSG(t2 - t1 >= 0.04, "80 ms apart is at least 40 ms apart in the log (lower bound only)");
+            CHECK_MSG(t2 < 3600.0, "and in seconds, not milliseconds or an epoch");
+        }
+    }
+
+    // The console and the in-memory buffer are not stamped: the editor's panel
+    // has a column of its own, and the console is read live.
+    const std::vector<Log::Entry> entries = Log::Snapshot();
+    bool sawStamped = false;
+    for (const Log::Entry& entry : entries) {
+        if (entry.category == "Probe" && entry.message == "stamped one") sawStamped = true;
+        if (entry.category == "Probe") {
+            CHECK_MSG(entry.message.empty() || entry.message[0] != '+', "a buffered message is stamped: " + entry.message);
+        }
+    }
+    CHECK_MSG(sawStamped, "the buffer holds the message as it was written, unstamped");
+}
+
 static void testHidingTheCursorIsTheSameRequestInputArbitrates() {
     // Through Input and nowhere else, so the editor's hold on the pointer and
     // a window without focus still veto it. And a locked pointer is left
@@ -1016,6 +1126,8 @@ static void runTests() {
     testAFitAndASizeAreOneRequestTheLaterWins();
     testAPreferredRateIsItsOwnRequest();
     testAManifestFitsItsWindowOnlyWhenItAsks();
+    testTheStartupPumpIsOffByDefaultAndNeverInTheManifestsText();
+    testTheFileLogCarriesElapsedTimeOnlyWhenAsked();
     testHidingTheCursorIsTheSameRequestInputArbitrates();
     testTheModesAMenuListsAreTheTrueColourOnesOnceEach();
     testAWindowGoesFullscreenOnTheMonitorHoldingMostOfIt();

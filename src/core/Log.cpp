@@ -1,5 +1,7 @@
 #include "core/Log.hpp"
 
+#include <chrono>
+#include <cstdio>
 #include <deque>
 #include <fstream>
 #include <iostream>
@@ -19,6 +21,10 @@ struct State {
     std::deque<Entry> entries;
     std::size_t dropped = 0;
     std::ofstream file;
+    bool elapsed = false;
+    // Taken when the state is first built, which is the first line logged: the
+    // zero of the times SetElapsedTimestamps writes.
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 };
 
 // Function-local so it is constructed on first use. A namespace-scope object
@@ -52,7 +58,12 @@ void Submit(Level level, std::string category, std::string message) {
     std::lock_guard<std::mutex> lock(s.mutex);
 
     if (s.file.is_open()) {
-        s.file << LevelName(level) << " [" << category << "] " << message << '\n';
+        s.file << LevelName(level);
+        if (s.elapsed) {
+            s.file << ' '
+                   << FormatElapsed(std::chrono::duration<double>(std::chrono::steady_clock::now() - s.start).count());
+        }
+        s.file << " [" << category << "] " << message << '\n';
         s.file.flush();  // a crash is exactly when the last line matters most
     }
 
@@ -95,6 +106,18 @@ void CloseFileSink() {
     State& s = state();
     std::lock_guard<std::mutex> lock(s.mutex);
     s.file.close();
+}
+
+void SetElapsedTimestamps(bool enabled) {
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    s.elapsed = enabled;
+}
+
+std::string FormatElapsed(double seconds) {
+    char text[32];
+    std::snprintf(text, sizeof(text), "+%.3fs", seconds < 0.0 ? 0.0 : seconds);
+    return text;
 }
 
 } // namespace Supersonic::Log
