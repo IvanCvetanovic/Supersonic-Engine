@@ -108,10 +108,18 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         vertShaderStageInfo.module = vertModule.get();
         vertShaderStageInfo.pName = "main";
 
+        // Constant 0 of the scene fragment shader (SPRITES_ONLY: every draw takes the unlit block). Only a pipeline that asks sets it; the other
+        // shaders this class builds declare no constant, and a specialisation for one that is not there is ignored
+        // by the driver but not worth passing.
+        const vk::Bool32 spritesOnly = options.spritesOnly ? VK_TRUE : VK_FALSE;
+        const vk::SpecializationMapEntry spritesOnlyEntry{0u, 0u, sizeof(vk::Bool32)};
+        const vk::SpecializationInfo specialization{1u, &spritesOnlyEntry, sizeof(vk::Bool32), &spritesOnly};
+
         vk::PipelineShaderStageCreateInfo fragShaderStageInfo{};
         fragShaderStageInfo.stage = vk::ShaderStageFlagBits::eFragment;
         fragShaderStageInfo.module = fragModule.get();
         fragShaderStageInfo.pName = "main";
+        if (options.spritesOnly) fragShaderStageInfo.pSpecializationInfo = &specialization;
 
         const vk::PipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 

@@ -47,6 +47,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <filesystem>
 #include <iostream>
@@ -333,10 +334,37 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
 
     // The editor's offscreen target registers a texture with the ImGui Vulkan
     // backend, so it must be created after the renderer has initialised it.
+    //
+    // The size it starts at comes first: the scene target's size chosen by how fast the GPU draws it (DynamicResolution.hpp)
+    // starts the run at the scale the game's budget allows, and the target is CREATED at that size, so the first frame is
+    // not a full-window one and no resize waits for the second. Never for a capture or a fixed-step run: their pictures must
+    // reproduce, and a scale that follows the machine's speed would not (nor for a recording, a replay or a UI screenshot).
+    // A FIXED scale (the floor equals the ceiling: a game's developer flag) is no controller at all, only a size, and
+    // applies to a capture as well.
+    float startScale = 1.0f;
+    const bool fixedScale = m_manifest.dynamicResolution.minScale >= m_manifest.dynamicResolution.maxScale;
+    const bool reproducibleRun = m_options.fixedDelta > 0.0f || m_options.maxFrames != 0 ||
+                                 !m_options.screenshotPath.empty() || !m_options.screenshotUiPath.empty() ||
+                                 m_options.screenshotEvery != 0 || !m_options.recordPath.empty() ||
+                                 !m_options.replayPath.empty();
+    if (m_manifest.dynamicResolution.enabled && (fixedScale || !reproducibleRun)) {
+        DynamicResolutionConfig resolution = m_manifest.dynamicResolution;
+        const double windowPixels = static_cast<double>(m_swapchain->GetExtent().width) * m_swapchain->GetExtent().height;
+        if (resolution.startMaxPixels > 0 && windowPixels > resolution.startMaxPixels) {
+            resolution.startScale = std::min(
+                resolution.startScale, static_cast<float>(std::sqrt(resolution.startMaxPixels / windowPixels)));
+        }
+        m_dynamicResolution = std::make_unique<DynamicResolution>(resolution);
+        startScale = m_dynamicResolution->Scale();
+        SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: starts at " << startScale
+                                             << " of the window (target " << m_manifest.dynamicResolution.targetFps
+                                             << " fps).";
+    }
     m_editorLayer = std::make_unique<EditorLayer>();
     m_editorLayer->Init(*m_vulkanDevice,
-                        m_swapchain->GetExtent().width,
-                        m_swapchain->GetExtent().height);
+                        EditorLayer::ScaledExtent(static_cast<float>(m_swapchain->GetExtent().width), startScale),
+                        EditorLayer::ScaledExtent(static_cast<float>(m_swapchain->GetExtent().height), startScale));
+    m_editorLayer->SetRenderScale(startScale);
     pumpStartupEvents();
 
     // The scene pipeline targets the editor's offscreen render pass.
@@ -346,6 +374,7 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     // disk each time, while the renderer's own cache sat unused.
     m_editorLayer->GetOffscreen().SetPipelineCache(m_renderer->GetPipelineCache());
 
+    m_renderer->SetSpritesOnlyScenePipelines(m_manifest.spritesOnlyScenePipelines);
     m_renderer->SetOffscreenRenderPass(m_editorLayer->GetOffscreen().GetRenderPass(),
                                        m_editorLayer->GetOffscreen().GetSampleCount());
     m_renderer->SetStartupPump({});
@@ -1511,6 +1540,18 @@ void SupersonicApp::Run() {
         // ImGui::Image has recorded that texture ID into the frame's draw data,
         // freeing it leaves the draw call pointing at a released descriptor.
         // Nothing is recording and no draw data is live at this point.
+        // The scene target's scale, from the speed of the frames so far (the whole of the controller is
+        // DynamicResolution.hpp); a change is applied by the resize just below.
+        if (m_dynamicResolution && m_dynamicResolution->Observe(rawDelta)) {
+            m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
+            SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: scale " << m_dynamicResolution->Scale()
+                                                 << " (median frame " << m_dynamicResolution->LastMedianMilliseconds()
+                                                 << " ms)"
+                                                 << (m_dynamicResolution->LastChangeWasARevert()
+                                                         ? ": the last step down did not speed the frame up, taken back."
+                                                         : ".");
+        }
+
         m_editorLayer->ApplyPendingResize();
 
         // NewFrame computes WantCaptureMouse/Keyboard for THIS frame, which is

@@ -453,6 +453,50 @@ static void letTheClockMove() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
 }
 
+// THE SPRITE-ONLY SPECIALISATION (VulkanPipelineOptions::spritesOnly): constant 0 of the scene fragment shader, which a
+// pipeline sets to fold in "every draw is unlit". It must be spelled the way the pipeline's specialisation entry says
+// (constant id 0, a bool), default false (the shader as it always was), and it must widen only the unlit test: the
+// unlit block it leads into is the code a sprite, a particle, a halo and a shadow blob always took.
+static void testTheSpriteOnlySpecialisationIsConstantZeroAndOnlyWidensTheUnlitTest() {
+    std::ifstream file("assets/shaders/shader.frag");
+    CHECK_MSG(file.good(), "shader.frag must be readable from the working directory");
+    if (!file.good()) return;
+    const std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    const auto squeezed = [](std::string text) {
+        text.erase(std::remove_if(text.begin(), text.end(),
+                                  [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }),
+                   text.end());
+        return text;
+    };
+    // The code, without its comments: a comment may name the constant as it likes.
+    std::string code;
+    for (size_t i = 0; i < source.size();) {
+        if (source.compare(i, 2, "//") == 0) {
+            while (i < source.size() && source[i] != '\n') ++i;
+        } else {
+            code += source[i++];
+        }
+    }
+    const std::string flat = squeezed(code);
+    CHECK_MSG(flat.find("layout(constant_id=0)constboolSPRITES_ONLY=false;") != std::string::npos,
+              "constant 0 must be a bool named SPRITES_ONLY whose default is false");
+    CHECK_MSG(flat.find("if(SPRITES_ONLY||(instances[fragInstance].flags&FLAG_UNLIT)!=0){") != std::string::npos,
+              "the constant must only widen the unlit test");
+    // Nowhere else is it read: a second use would be a second behaviour behind one switch.
+    size_t uses = 0;
+    for (size_t at = flat.find("SPRITES_ONLY"); at != std::string::npos; at = flat.find("SPRITES_ONLY", at + 1)) ++uses;
+    CHECK_EQ(uses, size_t{2});
+
+    // And the committed blob is the one this source makes: it names the constant (SPIR-V keeps the name of a specialisation
+    // constant), so a source edited without recompiling frag.spv is caught here.
+    std::ifstream blobFile("assets/shaders/frag.spv", std::ios::binary);
+    CHECK_MSG(blobFile.good(), "frag.spv must be readable from the working directory");
+    if (blobFile.good()) {
+        const std::string blob((std::istreambuf_iterator<char>(blobFile)), std::istreambuf_iterator<char>());
+        CHECK_MSG(blob.find("SPRITES_ONLY") != std::string::npos, "frag.spv must carry the specialisation constant (recompile it)");
+    }
+}
+
 static void testReloadKeepsTheIdAndPicksUpTheNewValues() {
     cleanup();
     MaterialLibrary library;
@@ -2207,6 +2251,7 @@ static void runTests() {
     testFixingABrokenMaterialClearsTheCachedMiss();
     testSavingFromTheEditorDoesNotFireTheWatcher();
     testRenamingTheMaterialItselfKeepsItsIdAndItsEdits();
+    testTheSpriteOnlySpecialisationIsConstantZeroAndOnlyWidensTheUnlitTest();
     cleanup();
 }
 

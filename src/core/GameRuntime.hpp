@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 
+#include "core/DynamicResolution.hpp"
 #include "core/LaunchOptions.hpp"
 
 namespace Supersonic {
@@ -86,6 +87,21 @@ struct GameManifest {
     // its first frame. Anything else is clamped into 1 to 2 (ResolveVulkanMinor).
     // Set by a game's main; not read from or written to game.manifest's text.
     uint32_t minimumVulkanMinor{2};
+
+    // Every draw this game puts through the scene pipelines is UNLIT - a 2D sprite, or a plain unlit quad such as a particle,
+    // a halo or a shadow blob (a draw flagged kUnlit) - so those pipelines are built from the scene fragment shader with
+    // "every draw is unlit" folded in (specialisation constant 0): the driver compiles away the physically based surface, the
+    // clustered lights, the cascades and the probes, none of which an unlit draw reaches. The result of every such draw is the
+    // same bytes; the shader the GPU schedules is much smaller (on an Adreno 640 a lit 2D menu drew in 75 ms instead of 117,
+    // and a level in 25 ms instead of 33). False, the default, is the pipelines as they were: a game that draws a lit mesh, a
+    // tilemap, a skinned model or an engine particle emitter through them must not set it, for it would come out unlit. Set by
+    // a game's main; not read from or written to game.manifest's text.
+    bool spritesOnlyScenePipelines{false};
+
+    // The scene target's size chosen by how fast the GPU draws it (DynamicResolution.hpp). Off, the
+    // default, is the engine as it was. Never in effect for a capture or a fixed-step run, whose
+    // pictures must reproduce. Set by a game's main; not read from or written to game.manifest's text.
+    DynamicResolutionConfig dynamicResolution;
 
     // What the engine opens at when nothing asks for anything, which is the
     // literal that used to be the only answer.

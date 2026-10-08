@@ -52,6 +52,20 @@ public:
     // filling the window and nothing else: no menu bar, no dockspace, no
     // panels, no editor shortcuts.
     void SetGameMode(bool gameMode) { m_gameMode = gameMode; }
+    // The scene target's size against the window's, in a game (DynamicResolution): the picture is drawn
+    // at this fraction of the window's width and height and stretched to the window, which is how it was
+    // shown at 1. Clamped into 0.1 to 1; what the player touches and sees of the HUD is placed by the
+    // window's size, never this one.
+    void SetRenderScale(float scale) { m_renderScale = scale < 0.1f ? 0.1f : (scale > 1.0f ? 1.0f : scale); }
+    float RenderScale() const { return m_renderScale; }
+    // One extent of the scene target for a window extent and a scale: the window's own at 1, else the scaled one, even, at
+    // least 64. The start (SupersonicApp creates the target at it) and every frame (BuildUI) use this one function, so they can
+    // never differ by a pixel.
+    static uint32_t ScaledExtent(float extent, float scale) {
+        if (scale >= 1.0f) return static_cast<uint32_t>(extent);
+        const uint32_t evened = static_cast<uint32_t>(extent * scale) & ~1u;
+        return evened < 64u ? 64u : evened;
+    }
 
     // Applies any viewport resize requested during BuildUI. Call at the top of
     // the frame, before the renderer starts recording.
@@ -132,6 +146,7 @@ private:
     ContentBrowserPanel m_contentBrowserPanel;
 
     bool m_gameMode{false};
+    float m_renderScale{1.0f};
     bool m_showDemoWindow{false};
 
     std::string m_statusMessage;

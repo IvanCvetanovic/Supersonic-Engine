@@ -380,6 +380,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     VulkanPipeline::Options sceneOptions{};
     sceneOptions.cache = m_pipelineCache->Get();
     sceneOptions.samples = m_offscreenSamples;
+    sceneOptions.spritesOnly = m_spritesOnlyScene;
 
     m_pipeline = std::make_unique<VulkanPipeline>(
         m_deviceRef.GetDevice(),

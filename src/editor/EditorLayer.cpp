@@ -371,8 +371,10 @@ void EditorLayer::buildGameView(entt::registry& registry) {
 
     const ImVec2 size = viewport->Size;
     if (m_offscreenPass && size.x >= 1.0f && size.y >= 1.0f) {
-        m_desiredViewportWidth = static_cast<uint32_t>(size.x);
-        m_desiredViewportHeight = static_cast<uint32_t>(size.y);
+        // The target is the window's size times the render scale (1 unless a game's DynamicResolution says otherwise): see
+        // ScaledExtent. ImGui::Image below stretches it to the window.
+        m_desiredViewportWidth = ScaledExtent(size.x, m_renderScale);
+        m_desiredViewportHeight = ScaledExtent(size.y, m_renderScale);
 
         // The render target is the window now, not a panel inside it, so the
         // camera's aspect comes from the window.

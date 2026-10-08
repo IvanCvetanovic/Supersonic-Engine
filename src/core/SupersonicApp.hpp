@@ -6,6 +6,7 @@
 
 #include <entt/entt.hpp>
 
+#include "core/DynamicResolution.hpp"
 #include "core/WorldShapes.hpp"
 #include "core/ScreenOverlay.hpp"
 
@@ -156,6 +157,7 @@ private:
     // The editor owns the offscreen viewport target and is driven by Run(),
     // not by the renderer. See EditorLayer for why that ordering matters.
     std::unique_ptr<EditorLayer> m_editorLayer;
+    std::unique_ptr<DynamicResolution> m_dynamicResolution;
 
     // Real output device. Degrades to a documented no-op where no backend is
     // compiled, instead of silently discarding every computed volume.

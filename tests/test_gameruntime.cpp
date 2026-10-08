@@ -11,6 +11,7 @@
 // tick that made them.
 
 #include "TestHarness.hpp"
+#include "core/DynamicResolution.hpp"
 #include "core/GameRuntime.hpp"
 #include "core/Input.hpp"
 #include "core/Log.hpp"
@@ -810,6 +811,191 @@ static void testTheStartupPumpIsOffByDefaultAndNeverInTheManifestsText() {
               "nor read it back");
 }
 
+// DYNAMIC RESOLUTION and the sprite-only scene pipelines: two opt-ins of a game's main, off by default and never in
+// the manifest's text (the controller's own arithmetic is below; the resize it asks for needs a device and is
+// exercised by a game's real run).
+static void testTheScenePerformanceOptInsAreOffByDefaultAndNeverInTheManifestsText() {
+    const GameManifest plain;
+    CHECK(!plain.dynamicResolution.enabled);
+    CHECK(!plain.spritesOnlyScenePipelines);
+
+    GameManifest asking;
+    asking.isGame = true;
+    asking.spritesOnlyScenePipelines = true;
+    asking.dynamicResolution.enabled = true;
+    asking.dynamicResolution.startScale = 0.5f;
+    GameManifest quiet;
+    quiet.isGame = true;
+    CHECK_MSG(GameRuntime::Serialize(asking) == GameRuntime::Serialize(quiet), "the manifest's text must carry neither");
+    const GameManifest reparsed = GameRuntime::Parse(GameRuntime::Serialize(asking));
+    CHECK_MSG(!reparsed.spritesOnlyScenePipelines && !reparsed.dynamicResolution.enabled, "nor read either back");
+}
+
+// The scene target's size follows the GPU's speed: a stand-in GPU whose frame costs `baseSeconds` at full size and
+// follows the pixel count, which follows the square of the scale.
+static int driveAStandInGpu(DynamicResolution& controller, double baseSeconds, int frames) {
+    int changes = 0;
+    for (int i = 0; i < frames; ++i) {
+        const float scale = controller.Scale();
+        if (controller.Observe(static_cast<float>(baseSeconds * scale * scale))) ++changes;
+    }
+    return changes;
+}
+
+static void testDynamicResolutionFindsTheLargestSizeAGpuKeepsUpWith() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+
+    // A GPU that draws full size in 117 ms (the Xiaomi Pad 5's menu before E41): the scale falls until the
+    // frame meets the target, in a few steps, and stays there.
+    DynamicResolution slow(config);
+    const int steps = driveAStandInGpu(slow, 0.117, 2000);
+    CHECK_MSG(steps >= 1 && steps <= 6, "a few steps, not a hunt");
+    CHECK(slow.Scale() >= config.minScale);
+    CHECK_MSG(0.117 * slow.Scale() * slow.Scale() <= 1.0 / config.targetFps + 1e-6, "the frame meets the target");
+    const float settled = slow.Scale();
+    CHECK_MSG(driveAStandInGpu(slow, 0.117, 600) == 0, "and then it holds");
+    CHECK_NEAR(slow.Scale(), settled);
+
+    // A GPU that is fast at full size is never touched, however long it runs.
+    DynamicResolution fast(config);
+    CHECK_EQ(driveAStandInGpu(fast, 0.004, 3000), 0);
+    CHECK_NEAR(fast.Scale(), 1.0f);
+
+    // One that cannot meet the target even at the floor stops at the floor and says nothing more. (A frame longer
+    // than DynamicResolution::kIgnoreAboveSeconds is a pause, not a speed: this one draws full size in 0.9 s.)
+    DynamicResolution hopeless(config);
+    driveAStandInGpu(hopeless, 0.9, 400);
+    CHECK_NEAR(hopeless.Scale(), config.minScale);
+    CHECK_EQ(driveAStandInGpu(hopeless, 0.9, 400), 0);
+
+    // Started low on a GPU with room, the scale rises, slowly, to the largest size that still keeps the target
+    // with 20% to spare - here a GPU that draws full size in 30 ms, so a little under 0.7 - and no further.
+    DynamicResolutionConfig low = config;
+    low.startScale = 0.4f;
+    DynamicResolution rising(low);
+    driveAStandInGpu(rising, 0.03, 150000);
+    CHECK_MSG(rising.Scale() > 0.55f && rising.Scale() < 0.76f, "it rose, and stopped where the GPU still has room");
+    CHECK(0.03 * rising.Scale() * rising.Scale() <= 1.0 / config.targetFps + 1e-6);
+    CHECK_EQ(driveAStandInGpu(rising, 0.03, 20000), 0);
+}
+
+static void testDynamicResolutionIgnoresPausesLoadsAndOneSlowFrame() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    DynamicResolution controller(config);
+
+    // 17 ms frames with a 300 ms hitch among them: the median decides, and it is fine.
+    for (int i = 0; i < 400; ++i) {
+        const float frame = (i % 25 == 0) ? 0.3f : 0.017f;
+        CHECK(!controller.Observe(frame));
+    }
+    CHECK_NEAR(controller.Scale(), 1.0f);
+
+    // A pause (two seconds) and a nonsense value count for nothing, and the frames after a pause are given a moment.
+    CHECK(!controller.Observe(2.0f));
+    CHECK(!controller.Observe(0.0f));
+    CHECK(!controller.Observe(-1.0f));
+    for (int i = 0; i < 200; ++i) CHECK(!controller.Observe(0.017f));
+    CHECK_NEAR(controller.Scale(), 1.0f);
+
+    // Disabled, the controller does nothing at all.
+    DynamicResolutionConfig off;
+    DynamicResolution idle(off);
+    for (int i = 0; i < 300; ++i) CHECK(!idle.Observe(0.2f));
+    CHECK_NEAR(idle.Scale(), 1.0f);
+}
+
+static void testDynamicResolutionRulesAndMendedConfigs() {
+    // The rules in numbers. Half the target speed: cost follows the pixel count, so the scale falls by the square
+    // root of the ratio, less 3%.
+    CHECK_NEAR(DynamicResolution::ScaleAfterShortfall(1.0f, 29.0f, 58.0f, 0.3f), 0.69f);
+    CHECK_NEAR(DynamicResolution::ScaleAfterShortfall(1.0f, 58.0f, 58.0f, 0.3f), 1.0f);   // at the target: unchanged
+    CHECK_NEAR(DynamicResolution::ScaleAfterShortfall(1.0f, 0.5f, 58.0f, 0.3f), 0.5f);    // never below half in one step
+    CHECK_NEAR(DynamicResolution::ScaleAfterShortfall(0.4f, 5.0f, 58.0f, 0.3f), 0.3f);    // nor below the floor
+    // And the way up: a quarter at most, never past the ceiling.
+    CHECK_NEAR(DynamicResolution::ScaleAfterHeadroom(0.5f, 240.0f, 58.0f, 1.0f), 0.63f);
+    CHECK_NEAR(DynamicResolution::ScaleAfterHeadroom(0.9f, 240.0f, 58.0f, 1.0f), 1.0f);
+    CHECK_NEAR(DynamicResolution::ScaleAfterHeadroom(0.5f, 60.0f, 58.0f, 1.0f), 0.5f);    // no room: unchanged
+
+    // A config that contradicts itself is mended: a floor above the ceiling, a start outside both.
+    DynamicResolutionConfig odd;
+    odd.enabled = true;
+    odd.minScale = 0.8f;
+    odd.maxScale = 0.4f;
+    odd.startScale = 5.0f;
+    DynamicResolution mended(odd);
+    CHECK(mended.Scale() >= 0.8f && mended.Scale() <= 1.0f);
+}
+
+// A stand-in whose frame is a part that ignores the picture's size (the CPU, the driver, a display's pacing) plus a part
+// that follows the pixel count. Runs for `seconds` of simulated time; reports the changes, the reverts among them, and the
+// share of the time the scale spent below where it started.
+struct MixedRun {
+    int changes{0};
+    int reverts{0};
+    double secondsBelowStart{0.0};
+    double seconds{0.0};
+};
+
+static MixedRun driveAMixedGpu(DynamicResolution& controller, double fixedSeconds, double pixelSeconds, double seconds) {
+    MixedRun run;
+    const float start = controller.Scale();
+    while (run.seconds < seconds) {
+        const float scale = controller.Scale();
+        const double frame = fixedSeconds + pixelSeconds * scale * scale;
+        if (scale < start - 0.005f) run.secondsBelowStart += frame;
+        run.seconds += frame;
+        if (controller.Observe(static_cast<float>(frame))) {
+            ++run.changes;
+            if (controller.LastChangeWasARevert()) ++run.reverts;
+        }
+    }
+    return run;
+}
+
+static void testAStepThatDoesNotPayForItselfIsTakenBackAndNotRepeatedForAWhile() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.startScale = 0.8f;
+
+    // A frame the CPU decides (25 ms whatever the picture's size): a smaller picture buys nothing, so the controller tries
+    // once, sees that nothing arrived, takes the step back, and then leaves the picture alone for half a minute, then a
+    // minute, then two: over five simulated minutes it spends almost no time below its start.
+    DynamicResolution cpuBound(config);
+    const MixedRun cpu = driveAMixedGpu(cpuBound, 0.025, 0.0, 300.0);
+    CHECK_MSG(cpu.reverts >= 2, "each try is taken back");
+    CHECK_MSG(cpu.changes <= 12, "and the tries get rarer");
+    CHECK_MSG(cpu.secondsBelowStart < 0.1 * cpu.seconds, "so the picture is almost never smaller for nothing");
+
+    // A frame that is part fixed cost and part pixels - the tablet's menu fits 10 ms + 81 ms x scale squared - gains less
+    // than the pixel count predicts but plenty: no step is taken back, and the target is met.
+    config.startScale = 0.73f;
+    DynamicResolution tablet(config);
+    const MixedRun mixed = driveAMixedGpu(tablet, 0.010, 0.081, 120.0);
+    CHECK_EQ(mixed.reverts, 0);
+    CHECK_MSG(mixed.changes >= 2 && mixed.changes <= 8, "a few steps");
+    CHECK_MSG(0.010 + 0.081 * tablet.Scale() * tablet.Scale() <= 1.0 / (config.targetFps * DynamicResolution::kShortfallTolerance) + 1e-6,
+              "it settled on a size that meets the target");
+
+    // A much heavier scene ends the hold early: after the revert the frames get three times slower, and the controller tries
+    // again within seconds instead of waiting out the half minute.
+    DynamicResolutionConfig again = config;
+    again.startScale = 0.8f;
+    DynamicResolution held(again);
+    int guard = 0;
+    while (guard++ < 4000) {
+        if (held.Observe(0.025f) && held.LastChangeWasARevert()) break;
+    }
+    CHECK_MSG(held.LastChangeWasARevert(), "the first try was taken back");
+    const float before = held.Scale();
+    int changesAfterHeavier = 0;
+    for (int i = 0; i < 400 && changesAfterHeavier == 0; ++i) {   // 400 frames of 80 ms: 32 s, about one hold
+        if (held.Observe(0.08f)) ++changesAfterHeavier;
+    }
+    CHECK_MSG(changesAfterHeavier == 1 && held.Scale() < before, "a scene three times slower is tried at once");
+}
+
 static void testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo() {
     // Off the shelf the engine takes a Vulkan 1.2 GPU and nothing less: a game
     // that never heard of the setting behaves as it always did. A game that says
@@ -1162,6 +1348,11 @@ static void runTests() {
     testAPreferredRateIsItsOwnRequest();
     testAManifestFitsItsWindowOnlyWhenItAsks();
     testTheStartupPumpIsOffByDefaultAndNeverInTheManifestsText();
+    testTheScenePerformanceOptInsAreOffByDefaultAndNeverInTheManifestsText();
+    testDynamicResolutionFindsTheLargestSizeAGpuKeepsUpWith();
+    testDynamicResolutionIgnoresPausesLoadsAndOneSlowFrame();
+    testDynamicResolutionRulesAndMendedConfigs();
+    testAStepThatDoesNotPayForItselfIsTakenBackAndNotRepeatedForAWhile();
     testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo();
     testTheFileLogCarriesElapsedTimeOnlyWhenAsked();
     testHidingTheCursorIsTheSameRequestInputArbitrates();

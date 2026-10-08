@@ -131,6 +131,10 @@ public:
     // application, and startup is over.
     void SetStartupPump(std::function<void()> pump) { m_startupPump = std::move(pump); }
 
+    // The scene pipelines specialised to the sprite path (GameManifest::spritesOnlyScenePipelines). Read when
+    // they are built, by SetOffscreenRenderPass: so before it.
+    void SetSpritesOnlyScenePipelines(bool spritesOnly) { m_spritesOnlyScene = spritesOnly; }
+
     // The renderer's transfer/graphics command pool, for one-off work like a
     // screenshot readback.
     vk::CommandPool GetCommandPool() const { return m_commandPool; }
@@ -313,6 +317,7 @@ private:
     mutable size_t m_lightCapReportedFor{0};
     std::unique_ptr<PipelineCache> m_pipelineCache;
     std::function<void()> m_startupPump;
+    bool m_spritesOnlyScene{false};
     void pumpStartup() const { if (m_startupPump) m_startupPump(); }
 
     // Every skinned entity's joint matrices for the frame, back to back. The

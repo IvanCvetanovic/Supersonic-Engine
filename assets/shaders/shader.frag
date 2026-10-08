@@ -699,6 +699,16 @@ vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
     return vec4(base + lit, alpha);
 }
 
+// SPECIALISATION CONSTANT 0: a pipeline built for a game whose every scene draw is UNLIT - a 2D sprite, or
+// the plain unlit exit that a particle, a halo or a shadow blob takes (VulkanPipelineOptions::spritesOnly).
+// The driver compiles this shader with the value folded in, so every draw takes the unlit block below, which
+// is the same code it took before, and everything after that block - the physically based surface, the
+// clustered lights, the cascades, the probes - is dead code it removes, which leaves a small shader for the
+// GPU to schedule instead of the largest path of a general one. A draw that is NOT flagged unlit (a lit mesh)
+// would be drawn unlit by such a pipeline, so a game that draws one through it must not ask. false (the
+// default) is the shader as it was.
+layout(constant_id = 0) const bool SPRITES_ONLY = false;
+
 void main() {
     // Every map on this material samples through the same transform. See
     // transformedUV above for why it is computed once rather than three times.
@@ -743,7 +753,7 @@ void main() {
     // not clamped here, so a value above 1.0 comes out above 1.0 and blooms.
     // That is not an oversight - it is Godot's `modulate` past white, which is
     // how this game flashes a unit that has been hit.
-    if ((instances[fragInstance].flags & FLAG_UNLIT) != 0) {
+    if (SPRITES_ONLY || (instances[fragInstance].flags & FLAG_UNLIT) != 0) {
         // A 2D sprite gives the record's unused fields a meaning of their own,
         // so it leaves here rather than share the plain exit below.
         if ((instances[fragInstance].flags & FLAG_SPRITE2D) != 0) {

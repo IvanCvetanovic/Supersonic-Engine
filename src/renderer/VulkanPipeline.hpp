@@ -390,6 +390,12 @@ struct VulkanPipelineOptions {
     // depth pass declares vertex only because shadow.frag has no push block.
     vk::ShaderStageFlags pushConstantStages{
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment};
+
+    // Every draw this pipeline serves is UNLIT (a 2D sprite, or a plain unlit quad such as a particle, a halo or a shadow blob):
+    // the scene fragment shader is specialised so that every draw takes its unlit block (specialisation constant 0 of shader.frag),
+    // which the driver then compiles without the rest. A lit mesh drawn through it would come out unlit. Last, so that no positional
+    // initialiser of this struct written before it existed changes meaning.
+    bool spritesOnly{false};
 };
 
 // The colour attachment's blend state the options above ask for.
