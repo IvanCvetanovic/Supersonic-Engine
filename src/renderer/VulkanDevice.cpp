@@ -1,4 +1,5 @@
 #include "renderer/VulkanDevice.hpp"
+#include "core/GameRuntime.hpp"
 #include "core/Log.hpp"
 
 #include <iostream>
@@ -8,19 +9,32 @@
 
 namespace Supersonic {
 
-VulkanDevice::VulkanDevice(vk::Instance instance, Window& window)
-    : m_instance(instance) {
+// The same value, spelled two ways: the allocator is given VK_MAKE_API_VERSION(0, 1, minor, 0).
+static_assert(VK_MAKE_API_VERSION(0, 1, 2, 0) == VK_API_VERSION_1_2, "the allocator's 1.2 is the engine's");
+
+VulkanDevice::VulkanDevice(vk::Instance instance, Window& window, uint32_t minimumMinor)
+    : m_requiredApiVersion(VK_MAKE_API_VERSION(0, 1, minimumMinor < 1u ? 1u : minimumMinor > 2u ? 2u : minimumMinor, 0)),
+      m_instance(instance) {
     if (!m_instance) {
         throw std::runtime_error("Cannot create VulkanDevice with null Vulkan Instance!");
     }
 
     createSurface(window);
-    pickPhysicalDevice();
-    createLogicalDevice();
-    initVMA();
+    try {
+        pickPhysicalDevice();
+        createLogicalDevice();
+        initVMA();
+    } catch (...) {
+        release();
+        throw;
+    }
 }
 
 VulkanDevice::~VulkanDevice() {
+    release();
+}
+
+void VulkanDevice::release() {
     if (m_allocator != VK_NULL_HANDLE) {
         vmaDestroyAllocator(m_allocator);
         m_allocator = VK_NULL_HANDLE;
@@ -110,7 +124,11 @@ void VulkanDevice::pickPhysicalDevice() {
     }
 
     if (!selectedGPU) {
-        throw std::runtime_error("Failed to find a suitable Vulkan physical GPU!");
+        // With the reasons: this is the message a player on a phone is shown, and
+        // "no suitable GPU" alone cannot say that the phone's was one version short.
+        std::string reasons = m_rejections;
+        while (!reasons.empty() && reasons.back() == ' ') reasons.pop_back();
+        throw std::runtime_error("Failed to find a suitable Vulkan physical GPU! " + reasons);
     }
 
     m_physicalDevice = selectedGPU;
@@ -123,20 +141,27 @@ void VulkanDevice::pickPhysicalDevice() {
 }
 
 bool VulkanDevice::isDeviceSuitable(vk::PhysicalDevice device) {
-    // VMA is configured for Vulkan 1.2 and statically binds the 1.1 core entry
-    // points on that basis, asserting they are non-null. A 1.2 loader in front
-    // of a 1.0/1.1-only physical device (real on older iGPUs, and on the Android
-    // target this project advertises) would satisfy vkCreateInstance and then
-    // fail inside VMA, so the device's own apiVersion has to be checked.
+    // VMA statically binds the 1.1 core entry points (asserting they are
+    // non-null), so a Vulkan 1.0 device would satisfy vkCreateInstance and then
+    // fail inside VMA: the device's own apiVersion has to be checked. The
+    // version in force is 1.2 unless the game said 1.1 would do
+    // (GameManifest::minimumVulkanMinor): the engine uses nothing newer than 1.1
+    // core, and the stock Android 11 and 12 drivers of most phones report 1.1.
     const vk::PhysicalDeviceProperties properties = device.getProperties();
-    if (properties.apiVersion < kRequiredApiVersion) {
+    if (properties.apiVersion < m_requiredApiVersion) {
         SUPERSONIC_LOG_INFO("VulkanDevice") << "Skipping " << properties.deviceName
                   << ": reports Vulkan "
                   << VK_API_VERSION_MAJOR(properties.apiVersion) << "."
                   << VK_API_VERSION_MINOR(properties.apiVersion)
                   << ", engine requires "
-                  << VK_API_VERSION_MAJOR(kRequiredApiVersion) << "."
-                  << VK_API_VERSION_MINOR(kRequiredApiVersion) << "." << std::endl;
+                  << VK_API_VERSION_MAJOR(m_requiredApiVersion) << "."
+                  << VK_API_VERSION_MINOR(m_requiredApiVersion) << "." << std::endl;
+        rejectDevice(properties.deviceName, "reports Vulkan " + std::to_string(VK_API_VERSION_MAJOR(properties.apiVersion)) +
+                                                "." + std::to_string(VK_API_VERSION_MINOR(properties.apiVersion)) +
+                                                ", the game needs " +
+                                                std::to_string(VK_API_VERSION_MAJOR(m_requiredApiVersion)) + "." +
+                                                std::to_string(VK_API_VERSION_MINOR(m_requiredApiVersion)) +
+                                                " or newer");
         return false;
     }
 
@@ -149,7 +174,18 @@ bool VulkanDevice::isDeviceSuitable(vk::PhysicalDevice device) {
         swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
     }
 
-    return indices.isComplete() && extensionsSupported && swapChainAdequate;
+    const bool suitable = indices.isComplete() && extensionsSupported && swapChainAdequate;
+    if (!suitable) {
+        rejectDevice(properties.deviceName,
+                     !indices.isComplete() ? "has no graphics queue, or none that can present to the window"
+                     : !extensionsSupported ? "does not offer VK_KHR_swapchain"
+                                            : "offers no surface format or present mode for the window");
+    }
+    return suitable;
+}
+
+void VulkanDevice::rejectDevice(const char* name, const std::string& reason) {
+    m_rejections += std::string(name) + ": " + reason + ". ";
 }
 
 bool VulkanDevice::checkDeviceExtensionSupport(vk::PhysicalDevice device) {
@@ -291,8 +327,21 @@ void VulkanDevice::createLogicalDevice() {
 
 void VulkanDevice::initVMA() {
     VmaAllocatorCreateInfo allocatorCreateInfo{};
-    // Guaranteed safe: isDeviceSuitable rejected anything below this version.
-    allocatorCreateInfo.vulkanApiVersion = kRequiredApiVersion;
+    // Guaranteed safe: isDeviceSuitable rejected anything below the version in
+    // force, so the allocator is given the version the selected device really
+    // has, as far as the one it was written for: 1.2 on a device that reports it
+    // (as ever), 1.1 on one that reports only that (its 1.1 core entry points
+    // are all the allocator binds).
+    const vk::PhysicalDeviceProperties reported = m_physicalDevice.getProperties();
+    const uint32_t allocatorMinor = GameRuntime::AllocatorVulkanMinor(VK_API_VERSION_MINOR(reported.apiVersion));
+    allocatorCreateInfo.vulkanApiVersion = VK_MAKE_API_VERSION(0, 1, allocatorMinor, 0);
+    // The version the GPU really reports, which "Selected Physical GPU" does not say, and what the
+    // allocator is told: the first thing a log from a phone with a 1.1 driver must show.
+    SUPERSONIC_LOG_INFO("VulkanDevice") << "The GPU reports Vulkan " << VK_API_VERSION_MAJOR(reported.apiVersion) << "."
+                                        << VK_API_VERSION_MINOR(reported.apiVersion) << "."
+                                        << VK_API_VERSION_PATCH(reported.apiVersion) << " (driver "
+                                        << reported.driverVersion << "); the allocator is told 1." << allocatorMinor
+                                        << "." << std::endl;
     allocatorCreateInfo.instance = static_cast<VkInstance>(m_instance);
     allocatorCreateInfo.physicalDevice = static_cast<VkPhysicalDevice>(m_physicalDevice);
     allocatorCreateInfo.device = static_cast<VkDevice>(m_device);

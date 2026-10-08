@@ -113,6 +113,14 @@ void ResolveWindowSize(const GameManifest& manifest, uint32_t optionWidth,
     }
 }
 
+uint32_t ResolveVulkanMinor(const GameManifest& manifest) {
+    return manifest.minimumVulkanMinor < 1u ? 1u : manifest.minimumVulkanMinor > 2u ? 2u : manifest.minimumVulkanMinor;
+}
+
+uint32_t AllocatorVulkanMinor(uint32_t deviceMinor) {
+    return deviceMinor > 2u ? 2u : deviceMinor;
+}
+
 bool ResolveFullscreen(const GameManifest& manifest, bool optionFullscreen, bool optionWindowed) {
     if (optionWindowed) return false;
     if (optionFullscreen) return true;

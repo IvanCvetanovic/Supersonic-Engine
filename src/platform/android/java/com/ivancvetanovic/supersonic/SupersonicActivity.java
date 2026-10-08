@@ -1,11 +1,14 @@
 package com.ivancvetanovic.supersonic;
 
+import android.app.AlertDialog;
 import android.app.NativeActivity;
+import android.content.DialogInterface;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Insets;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.util.Linkify;
 import android.util.Log;
 import android.view.Display;
 import android.view.DisplayCutout;
@@ -14,6 +17,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.widget.TextView;
 
 /**
  * The engine's activity on Android: NativeActivity, plus the two things only
@@ -32,6 +36,9 @@ import android.view.WindowManager;
  * the display mode of that rate at the current resolution, made the window's
  * preferred one. Asked by the engine through JNI, not by a native callback:
  * requestRefreshRate below.</li>
+ * <li>A MESSAGE for the player, for a game that cannot start and has no window
+ * to draw it in: showMessage and isMessageOpen below, asked and polled by the
+ * engine through JNI (Android::ShowMessage).</li>
  * </ul>
  *
  * A game names this class in its manifest instead of android.app.NativeActivity,
@@ -44,6 +51,10 @@ public class SupersonicActivity extends NativeActivity {
     private static native void nativeSetSafeArea(int left, int top, int right, int bottom);
 
     private boolean mLibraryLoaded;
+
+    // Whether the dialog showMessage made is still on the screen. Read by the
+    // engine's thread, set on the UI thread.
+    private volatile boolean mMessageOpen;
 
     @Override
     @SuppressWarnings("deprecation")
@@ -148,6 +159,57 @@ public class SupersonicActivity extends NativeActivity {
                 + (offered.length() > 0 ? offered : "nothing asked") + "; preferred mode " + modeId
                 + (chosen != null ? " at " + chosen.getRefreshRate() + " Hz." : ", the system's choice."));
         return chosen != null ? chosen.getRefreshRate() : 0f;
+    }
+
+    /**
+     * A dialog with {@code text} under {@code title} and an OK button, shown on the UI
+     * thread; returns at once, and isMessageOpen says when the dialog is gone (closed by
+     * the player, or never shown because the window is going). Asked by the engine from
+     * its own thread (src/platform/android/AndroidApp.cpp, ShowMessage).
+     */
+    public void showMessage(final String title, final String text) {
+        mMessageOpen = true;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    AlertDialog dialog = new AlertDialog.Builder(SupersonicActivity.this)
+                            .setTitle(title)
+                            .setMessage(text)
+                            .setPositiveButton(android.R.string.ok, null)
+                            .create();
+                    dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+                        @Override
+                        public void onDismiss(DialogInterface shown) {
+                            mMessageOpen = false;
+                        }
+                    });
+                    // Only OK closes it. A player who sees a black screen taps it and presses
+                    // Back, and the message must still be there when the dialog appears: a tap
+                    // outside it or Back would end the game with nothing read.
+                    dialog.setCancelable(false);
+                    dialog.setCanceledOnTouchOutside(false);
+                    dialog.show();
+                    // The text can be copied (a long press), and an address in it can be tapped:
+                    // a tester has to send the details line and the phone's model on.
+                    TextView message = dialog.findViewById(android.R.id.message);
+                    if (message != null) {
+                        Linkify.addLinks(message, Linkify.WEB_URLS);
+                        message.setTextIsSelectable(true);
+                    }
+                } catch (RuntimeException e) {
+                    // The window is already going (a bad window token): there is
+                    // nothing to show it on, and nothing to wait for.
+                    Log.w("Supersonic", "[Android] Message: could not be shown: " + e);
+                    mMessageOpen = false;
+                }
+            }
+        });
+    }
+
+    /** Whether the dialog showMessage made is still up. */
+    public boolean isMessageOpen() {
+        return mMessageOpen;
     }
 
     @SuppressWarnings("deprecation")

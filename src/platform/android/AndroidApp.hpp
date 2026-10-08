@@ -52,6 +52,21 @@ std::string ExternalDataPath();
 // to finish.
 bool PumpEvents();
 
+// Shows `utf8Text` under `title` in a dialog of the activity and returns when the
+// player has closed it, the app has been asked to finish, or five minutes have
+// passed - handling the platform's events meanwhile, so the activity stays
+// answering. For a game that cannot start: with no window to draw an error into,
+// a phone otherwise shows a black screen and the launcher, and the player cannot
+// tell a game that is broken from one their phone cannot run. Call it from the
+// game's own thread (SupersonicMain), before it returns: android_main finishes
+// the activity as soon as it does. The dialog closes only with its OK button (a
+// tap outside it or Back does not, which is what a player does to a black
+// screen). True when the message was handed to the activity (it may be gone at
+// once if the window was going); false when the activity is not a
+// SupersonicActivity (a plain NativeActivity has no such dialog) or Java
+// refused, and then the text is only in the log.
+bool ShowMessage(const std::string& title, const std::string& utf8Text);
+
 // ---- For the platform classes beside this file ------------------------------
 
 ANativeWindow* CurrentWindow();

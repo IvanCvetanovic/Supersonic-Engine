@@ -699,6 +699,97 @@ bool PumpEvents() {
     return g.app->destroyRequested == 0;
 }
 
+// JNI's NewStringUTF takes MODIFIED UTF-8: a standard four-byte sequence (outside the
+// BMP) or an embedded NUL is not valid in it, and CheckJNI - on for every debuggable
+// app and every emulator - aborts the process on them. Device names and exception
+// texts are ASCII in practice; anything else of that kind becomes '?'.
+static std::string forNewStringUTF(const std::string& utf8) {
+    std::string out;
+    out.reserve(utf8.size());
+    for (std::size_t i = 0; i < utf8.size();) {
+        const unsigned char c = static_cast<unsigned char>(utf8[i]);
+        if (c == 0) {
+            out += '?';
+            ++i;
+        } else if (c >= 0xF0) {
+            out += '?';
+            ++i;
+            for (int skipped = 0; skipped < 3 && i < utf8.size() && (static_cast<unsigned char>(utf8[i]) & 0xC0) == 0x80;
+                 ++skipped) {
+                ++i;
+            }
+        } else {
+            out += static_cast<char>(c);
+            ++i;
+        }
+    }
+    return out;
+}
+
+bool ShowMessage(const std::string& title, const std::string& utf8Text) {
+    SUPERSONIC_LOG_INFO("Android") << "Message for the player: " << title << ": " << utf8Text;
+    if (!g.app || !g.app->activity || !g.app->activity->vm || !g.app->activity->clazz) return false;
+    JavaVM* vm = g.app->activity->vm;
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    const jint state = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+    if (state == JNI_EDETACHED) {
+        if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return false;
+        attached = true;
+    } else if (state != JNI_OK) {
+        return false;
+    }
+
+    bool shown = false;
+    jobject activity = g.app->activity->clazz;
+    jclass type = env->GetObjectClass(activity);
+    // Each lookup on its own, the exception of a missing one cleared before the next call:
+    // CheckJNI aborts on any JNI call made with an exception pending.
+    jmethodID show = type ? env->GetMethodID(type, "showMessage", "(Ljava/lang/String;Ljava/lang/String;)V") : nullptr;
+    env->ExceptionClear();
+    jmethodID isOpen = type ? env->GetMethodID(type, "isMessageOpen", "()Z") : nullptr;
+    env->ExceptionClear();
+    if (!show || !isOpen) {
+        // A plain NativeActivity: no such methods.
+        SUPERSONIC_LOG_INFO("Android") << "Message: the activity is not SupersonicActivity; nothing is shown.";
+    } else {
+        jstring jTitle = env->NewStringUTF(forNewStringUTF(title).c_str());
+        jstring jText = env->NewStringUTF(forNewStringUTF(utf8Text).c_str());
+        bool threw = jTitle == nullptr || jText == nullptr;   // out of memory: nothing to pass on
+        if (threw) {
+            env->ExceptionClear();
+        } else {
+            env->CallVoidMethod(activity, show, jTitle, jText);
+            threw = env->ExceptionCheck();
+            if (threw) {
+                env->ExceptionDescribe();
+                env->ExceptionClear();
+            }
+        }
+        if (jTitle) env->DeleteLocalRef(jTitle);
+        if (jText) env->DeleteLocalRef(jText);
+        if (!threw) {
+            shown = true;
+            // The dialog is the UI thread's; this thread only has to keep
+            // reading its own looper (an activity that stops reading for five
+            // seconds is "not responding") until the player closes it.
+            const auto start = std::chrono::steady_clock::now();
+            while (PumpEvents() && std::chrono::steady_clock::now() - start < std::chrono::minutes(5)) {
+                const jboolean open = env->CallBooleanMethod(activity, isOpen);
+                if (env->ExceptionCheck()) {
+                    env->ExceptionClear();
+                    break;
+                }
+                if (open == JNI_FALSE) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+        }
+    }
+    if (type) env->DeleteLocalRef(type);
+    if (attached) vm->DetachCurrentThread();
+    return shown;
+}
+
 ANativeWindow* CurrentWindow() { return g.window; }
 
 bool DestroyRequested() { return !g.app || g.app->destroyRequested != 0; }

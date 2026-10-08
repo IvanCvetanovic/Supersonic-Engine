@@ -31,12 +31,17 @@ struct SwapChainSupportDetails {
 
 class VulkanDevice {
 public:
-    // The instance requests this version and VMA is configured for it, so a
-    // physical device below it is rejected during selection rather than
-    // failing later inside VMA's statically bound 1.1 entry points.
+    // The instance requests this version, and it is what a physical device must
+    // report unless the game asks for less (the constructor's minimumMinor): a
+    // device below the version in force is rejected during selection rather than
+    // failing later inside VMA's statically bound 1.1 entry points. VMA is given
+    // the selected device's own version, capped at this.
     static constexpr uint32_t kRequiredApiVersion = VK_API_VERSION_1_2;
 
-    VulkanDevice(vk::Instance instance, Window& window);
+    // `minimumMinor` is the lowest Vulkan 1.x minor version a GPU may report
+    // (GameManifest::minimumVulkanMinor, through GameRuntime::ResolveVulkanMinor):
+    // 2, the default, is kRequiredApiVersion; 1 also takes a Vulkan 1.1 GPU.
+    VulkanDevice(vk::Instance instance, Window& window, uint32_t minimumMinor = 2);
     ~VulkanDevice();
 
     VulkanDevice(const VulkanDevice&) = delete;
@@ -122,14 +127,26 @@ public:
 
 private:
     void createSurface(Window& window);
+    // What the destructor does, also run when the constructor throws after the
+    // surface exists (a throwing constructor skips the destructor, and an
+    // instance destroyed with a live surface is a validation error).
+    void release();
     void pickPhysicalDevice();
     void createLogicalDevice();
     void initVMA();
 
     bool isDeviceSuitable(vk::PhysicalDevice device);
+    // Notes why a GPU was passed over, for the message of the throw when none is
+    // left: "Adreno (TM) 619: reports Vulkan 1.1, the game needs 1.2 or newer. ".
+    void rejectDevice(const char* name, const std::string& reason);
     bool checkDeviceExtensionSupport(vk::PhysicalDevice device);
     QueueFamilyIndices findQueueFamilies(vk::PhysicalDevice device) const;
     SwapChainSupportDetails querySwapChainSupport(vk::PhysicalDevice device) const;
+
+    // What a GPU must report (kRequiredApiVersion, or 1.1 when the game asked),
+    // and the reasons GPUs were passed over.
+    uint32_t m_requiredApiVersion{kRequiredApiVersion};
+    std::string m_rejections;
 
     vk::Instance m_instance{nullptr};
     vk::SurfaceKHR m_surface{nullptr};

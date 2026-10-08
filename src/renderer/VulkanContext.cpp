@@ -245,7 +245,8 @@ void VulkanContext::createInstance(const std::vector<const char*>& windowExtensi
     VkInstance rawInstance = VK_NULL_HANDLE;
     VkResult result = vkCreateInstance(&createInfo, nullptr, &rawInstance);
     if (result != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create Vulkan Instance! VkResult: " + std::to_string(static_cast<int>(result)));
+        throw std::runtime_error("Failed to create Vulkan Instance! VkResult: " + std::to_string(static_cast<int>(result)) +
+                                 " (" + vk::to_string(static_cast<vk::Result>(result)) + ")");
     }
 
     m_instance = rawInstance;

@@ -277,7 +277,8 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     m_vulkanContext = std::make_unique<VulkanContext>(requiredExtensions);
     pumpStartupEvents();
 
-    m_vulkanDevice = std::make_unique<VulkanDevice>(m_vulkanContext->GetInstance(), *m_window);
+    m_vulkanDevice = std::make_unique<VulkanDevice>(m_vulkanContext->GetInstance(), *m_window,
+                                                    GameRuntime::ResolveVulkanMinor(m_manifest));
     pumpStartupEvents();
     settleWindowForSwapchain();
     // Readable only for --screenshot-ui, the one thing that copies out of it.

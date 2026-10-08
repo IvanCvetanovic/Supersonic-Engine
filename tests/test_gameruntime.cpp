@@ -810,6 +810,41 @@ static void testTheStartupPumpIsOffByDefaultAndNeverInTheManifestsText() {
               "nor read it back");
 }
 
+static void testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo() {
+    // Off the shelf the engine takes a Vulkan 1.2 GPU and nothing less: a game
+    // that never heard of the setting behaves as it always did. A game that says
+    // 1 gets 1.1 GPUs too, and a number outside 1 to 2 is clamped rather than
+    // trusted (1.0 lacks the core functions the allocator binds; nothing asks
+    // for 1.3). Never in the manifest's text.
+    const GameManifest plain;
+    CHECK_EQ(plain.minimumVulkanMinor, 2u);
+    CHECK_EQ(GameRuntime::ResolveVulkanMinor(plain), 2u);
+    GameManifest wants11;
+    wants11.minimumVulkanMinor = 1;
+    CHECK_EQ(GameRuntime::ResolveVulkanMinor(wants11), 1u);
+    wants11.minimumVulkanMinor = 0;
+    CHECK_EQ(GameRuntime::ResolveVulkanMinor(wants11), 1u);
+    wants11.minimumVulkanMinor = 3;
+    CHECK_EQ(GameRuntime::ResolveVulkanMinor(wants11), 2u);
+    wants11.minimumVulkanMinor = 4000000000u;
+    CHECK_EQ(GameRuntime::ResolveVulkanMinor(wants11), 2u);
+
+    // The allocator is told the device's own minor, capped at 2: a 1.2 or newer device gets what it always
+    // got, a 1.1 device its own.
+    CHECK_EQ(GameRuntime::AllocatorVulkanMinor(1), 1u);
+    CHECK_EQ(GameRuntime::AllocatorVulkanMinor(2), 2u);
+    CHECK_EQ(GameRuntime::AllocatorVulkanMinor(3), 2u);
+    CHECK_EQ(GameRuntime::AllocatorVulkanMinor(4), 2u);
+
+    GameManifest one;
+    one.isGame = true;
+    one.minimumVulkanMinor = 1;
+    GameManifest two = one;
+    two.minimumVulkanMinor = 2;
+    CHECK_MSG(GameRuntime::Serialize(one) == GameRuntime::Serialize(two), "the manifest's text must not carry it");
+    CHECK_MSG(GameRuntime::Parse(GameRuntime::Serialize(one)).minimumVulkanMinor == 2u, "nor read it back");
+}
+
 static std::string ReadWhole(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
@@ -1127,6 +1162,7 @@ static void runTests() {
     testAPreferredRateIsItsOwnRequest();
     testAManifestFitsItsWindowOnlyWhenItAsks();
     testTheStartupPumpIsOffByDefaultAndNeverInTheManifestsText();
+    testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo();
     testTheFileLogCarriesElapsedTimeOnlyWhenAsked();
     testHidingTheCursorIsTheSameRequestInputArbitrates();
     testTheModesAMenuListsAreTheTrueColourOnesOnceEach();

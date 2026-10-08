@@ -77,6 +77,16 @@ struct GameManifest {
     // a game's main; not read from or written to game.manifest's text.
     bool pumpEventsDuringStartup{false};
 
+    // The lowest Vulkan 1.x minor version a GPU must report to be used: 2, the
+    // default, is Vulkan 1.2 as the engine has always required; 1 accepts a GPU
+    // that reports Vulkan 1.1. The engine's own renderer and shaders use nothing
+    // newer than Vulkan 1.1 core (and its allocator needs only that), and the
+    // stock drivers of most phones on Android 11 and 12 report 1.1: with the
+    // default they have no GPU the engine will take, and the start ends before
+    // its first frame. Anything else is clamped into 1 to 2 (ResolveVulkanMinor).
+    // Set by a game's main; not read from or written to game.manifest's text.
+    uint32_t minimumVulkanMinor{2};
+
     // What the engine opens at when nothing asks for anything, which is the
     // literal that used to be the only answer.
     static constexpr uint32_t kDefaultWidth = 1280;
@@ -169,6 +179,17 @@ struct StartWindow {
 // decision for its own bookkeeping (a menu that must start from the mode the
 // window really has) asks this, and gets the same answer under every flag.
 StartWindow ResolveStartWindow(const GameManifest& manifest, const LaunchOptions& options);
+
+// The Vulkan 1.x minor version SupersonicApp hands the device selection:
+// GameManifest::minimumVulkanMinor clamped into 1 to 2 (Vulkan 1.0 lacks the
+// core functions the allocator binds; nothing in the engine asks for 1.3).
+uint32_t ResolveVulkanMinor(const GameManifest& manifest);
+
+// The Vulkan 1.x minor version the memory allocator (VMA) is told it may use on a
+// device that reports `deviceMinor`: the device's own, capped at 2, the version
+// the allocator was written and tested for. A 1.2 or newer device gets 2, as it
+// always did; a 1.1 device gets 1, whose core entry points are all VMA binds.
+uint32_t AllocatorVulkanMinor(uint32_t deviceMinor);
 
 } // namespace GameRuntime
 
