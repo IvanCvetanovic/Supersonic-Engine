@@ -3,9 +3,11 @@ package com.ivancvetanovic.supersonic;
 import android.app.AlertDialog;
 import android.app.NativeActivity;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Insets;
+import android.graphics.Typeface;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.util.Linkify;
@@ -17,7 +19,10 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.widget.Button;
 import android.widget.TextView;
+
+import java.io.File;
 
 /**
  * The engine's activity on Android: NativeActivity, plus the two things only
@@ -39,6 +44,12 @@ import android.widget.TextView;
  * <li>A MESSAGE for the player, for a game that cannot start and has no window
  * to draw it in: showMessage and isMessageOpen below, asked and polled by the
  * engine through JNI (Android::ShowMessage).</li>
+ * <li>A REPORT of how the last run ended, for a game that opts in (manifest meta-data
+ * {@code supersonic.reportUnexpectedExit}, and {@code supersonic.reportLog}, the game's
+ * log relative to the files directory): when the system's record says the game's last
+ * process crashed, was stopped while on the screen or ended itself with an error, the
+ * next start shows what is known (PostMortem.java) and holds the native side's start until
+ * the player closes it, so a start that fails again cannot take it off the screen.</li>
  * </ul>
  *
  * A game names this class in its manifest instead of android.app.NativeActivity,
@@ -50,7 +61,18 @@ public class SupersonicActivity extends NativeActivity {
     // Implemented in src/platform/android/AndroidApp.cpp.
     private static native void nativeSetSafeArea(int left, int top, int right, int bottom);
 
+    // Implemented in src/platform/android/AndroidApp.cpp: while true, android_main waits (reading
+    // its events) before it enters the game.
+    private static native void nativeSetHoldStart(boolean hold);
+
     private boolean mLibraryLoaded;
+
+    // The game's opt-in to the report of an unexpected end (see the class comment).
+    private boolean mReportEnabled;
+    private String mReportLog = "";
+    // A file whose presence in the files directory marks a scripted run (the game leaves one for it): its
+    // start never meets the report, which nobody would close (supersonic.reportSkipWhenFile).
+    private String mReportSkipFile = "";
 
     // Whether the dialog showMessage made is still on the screen. Read by the
     // engine's thread, set on the UI thread.
@@ -63,6 +85,10 @@ public class SupersonicActivity extends NativeActivity {
         // above resolves in it. NativeActivity then opens the same file itself
         // and is handed the same library.
         loadGameLibrary();
+        // The report reads the last run's log, which the native side opens (and so overwrites) once
+        // it starts: so before super.onCreate, which starts it. The hold keeps the game back until
+        // the report is closed.
+        final PostMortem.Report report = collectReport();
         super.onCreate(savedInstanceState);
 
         Window window = getWindow();
@@ -92,6 +118,15 @@ public class SupersonicActivity extends NativeActivity {
             }
         });
         hideSystemBars();
+        if (report != null) {
+            // After the decor view is attached: a dialog needs its window.
+            window.getDecorView().post(new Runnable() {
+                @Override
+                public void run() {
+                    showReport(report);
+                }
+            });
+        }
     }
 
     @Override
@@ -191,11 +226,17 @@ public class SupersonicActivity extends NativeActivity {
                     dialog.setCanceledOnTouchOutside(false);
                     dialog.show();
                     // The text can be copied (a long press), and an address in it can be tapped:
-                    // a tester has to send the details line and the phone's model on.
-                    TextView message = dialog.findViewById(android.R.id.message);
-                    if (message != null) {
-                        Linkify.addLinks(message, Linkify.WEB_URLS);
-                        message.setTextIsSelectable(true);
+                    // a tester has to send the details line and the phone's model on. Apart from
+                    // show(), so that a failure of this garnish cannot be mistaken for a dialog
+                    // that never appeared (which ends the wait for it: mMessageOpen).
+                    try {
+                        TextView message = dialog.findViewById(android.R.id.message);
+                        if (message != null) {
+                            Linkify.addLinks(message, Linkify.WEB_URLS);
+                            message.setTextIsSelectable(true);
+                        }
+                    } catch (RuntimeException e) {
+                        Log.w("Supersonic", "[Android] Message: its text could not be made selectable: " + e);
                     }
                 } catch (RuntimeException e) {
                     // The window is already going (a bad window token): there is
@@ -212,6 +253,107 @@ public class SupersonicActivity extends NativeActivity {
         return mMessageOpen;
     }
 
+
+    /**
+     * The report of the last run's unexpected end, or null; when there is one, the native start
+     * is held (nativeSetHoldStart) until showReport's dialog has gone.
+     */
+    private PostMortem.Report collectReport() {
+        if (!mReportEnabled || !mLibraryLoaded) return null;
+        try {
+            PostMortem.Report report = PostMortem.collect(this, mReportLog);
+            if (report == null) return null;
+            if (scriptedStart()) {
+                // Automation never meets a dialog nobody closes: the end is let go as seen.
+                PostMortem.markShown(this, report.endedAt);
+                return null;
+            }
+            nativeSetHoldStart(true);
+            return report;
+        } catch (Throwable t) {
+            Log.w("Supersonic", "[Android] Report: could not be made: " + t);
+            return null;
+        }
+    }
+
+    private boolean scriptedStart() {
+        if (mReportSkipFile.isEmpty()) return false;
+        try {
+            if (new File(getFilesDir(), mReportSkipFile).isFile()) return true;
+            File external = getExternalFilesDir(null);
+            return external != null && new File(external, mReportSkipFile).isFile();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private void releaseStart() {
+        try {
+            nativeSetHoldStart(false);
+        } catch (Throwable t) {
+            Log.w("Supersonic", "[Android] Report: could not release the start: " + t);
+        }
+    }
+
+    /**
+     * The report in a dialog with OK (which lets the game start) and Share (the longer text, to
+     * any app). Like showMessage it closes only with a button: a tap outside it or Back must not
+     * lose it.
+     */
+    private void showReport(final PostMortem.Report report) {
+        try {
+            final AlertDialog dialog = new AlertDialog.Builder(this)
+                    .setTitle(report.title)
+                    .setMessage(report.shown)
+                    .setPositiveButton(android.R.string.ok, null)
+                    .setNeutralButton(report.shareLabel, null)
+                    .create();
+            dialog.setCancelable(false);
+            dialog.setCanceledOnTouchOutside(false);
+            dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+                @Override
+                public void onDismiss(DialogInterface shown) {
+                    releaseStart();
+                }
+            });
+            dialog.show();
+            // On the screen: this end is not offered again.
+            PostMortem.markShown(this, report.endedAt);
+            try {
+                // Set after show(): a button's listener given earlier closes the dialog.
+                Button share = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+                if (share != null) {
+                    share.setOnClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View view) {
+                            try {
+                                Intent send = new Intent(Intent.ACTION_SEND);
+                                send.setType("text/plain");
+                                send.putExtra(Intent.EXTRA_SUBJECT, report.title);
+                                send.putExtra(Intent.EXTRA_TEXT, report.shared);
+                                startActivity(Intent.createChooser(send, report.shareLabel));
+                            } catch (RuntimeException e) {
+                                Log.w("Supersonic", "[Android] Report: could not be shared: " + e);
+                            }
+                        }
+                    });
+                }
+                TextView message = dialog.findViewById(android.R.id.message);
+                if (message != null) {
+                    message.setTextIsSelectable(true);
+                    message.setTypeface(Typeface.MONOSPACE);
+                    message.setTextSize(10f);
+                }
+            } catch (RuntimeException e) {
+                Log.w("Supersonic", "[Android] Report: its buttons or text could not be set up: " + e);
+            }
+        } catch (RuntimeException e) {
+            // The window is going: nothing to show it on, and nobody to wait for.
+            Log.w("Supersonic", "[Android] Report: could not be shown: " + e);
+            releaseStart();
+        }
+    }
+
     @SuppressWarnings("deprecation")
     private Display currentDisplay() {
         if (Build.VERSION.SDK_INT >= 30) return getDisplay();
@@ -226,6 +368,11 @@ public class SupersonicActivity extends NativeActivity {
             if (info.metaData != null) {
                 String declared = info.metaData.getString("android.app.lib_name");
                 if (declared != null) name = declared;
+                mReportEnabled = info.metaData.getBoolean("supersonic.reportUnexpectedExit", false);
+                String reportLog = info.metaData.getString("supersonic.reportLog");
+                if (reportLog != null) mReportLog = reportLog;
+                String skipFile = info.metaData.getString("supersonic.reportSkipWhenFile");
+                if (skipFile != null) mReportSkipFile = skipFile;
             }
         } catch (PackageManager.NameNotFoundException e) {
             // NativeActivity's own default, which it will look for anyway.

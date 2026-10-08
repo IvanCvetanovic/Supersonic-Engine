@@ -214,7 +214,14 @@ void VulkanRenderer::RecreateSwapchain() {
 
 #if !SUPERSONIC_WINDOW_GLFW
 void VulkanRenderer::ReleaseSurface() {
-    m_deviceRef.GetDevice().waitIdle();
+    // Called while the platform takes the window away (APP_CMD_TERM_WINDOW, in the middle of the event
+    // pump): a throw out of it would leave the glue half way through a command.
+    try {
+        m_deviceRef.GetDevice().waitIdle();
+    } catch (const std::exception& error) {
+        SUPERSONIC_LOG_ERROR("VulkanRenderer") << "Waiting for the GPU to idle failed as the surface was released: "
+                                               << error.what();
+    }
     cleanupSwapchain();
     m_swapchainRef.Cleanup();
     m_deviceRef.DestroySurface();
@@ -1317,6 +1324,14 @@ void VulkanRenderer::initImGui() {
     initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     initInfo.PipelineInfoMain.RenderPass = static_cast<VkRenderPass>(m_renderPass);
 
+    // Named before the driver is asked, as the engine's own pipelines are: the backend compiles one here, and a
+    // result it cannot use is otherwise dropped without a word (it asks for a check function, and had none).
+    initInfo.CheckVkResultFn = [](VkResult result) {
+        if (result != VK_SUCCESS) {
+            SUPERSONIC_LOG_ERROR("ImGui") << "Vulkan call returned " << static_cast<int>(result);
+        }
+    };
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Initialising the ImGui Vulkan backend (it compiles its own pipeline)..." << std::endl;
     ImGui_ImplVulkan_Init(&initInfo);
 
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "ImGui Docking & Vulkan backend initialized successfully." << std::endl;

@@ -1,4 +1,5 @@
 #include "renderer/BloomPass.hpp"
+#include "core/Log.hpp"
 
 #include <array>
 #include <fstream>
@@ -360,6 +361,9 @@ vk::Pipeline BloomPass::buildPipeline(const std::string& fragmentPath, vk::Rende
     info.renderPass = pass;
     info.subpass = 0;
 
+    // Named before the driver is asked, as VulkanPipeline names its own: the line a log ends on if the
+    // driver dies compiling it.
+    SUPERSONIC_LOG_INFO("BloomPass") << "Creating pipeline: " << fragmentPath << "..." << std::endl;
     const auto result = device.createGraphicsPipeline(m_pipelineCache, info);
 
     device.destroyShaderModule(vertModule);

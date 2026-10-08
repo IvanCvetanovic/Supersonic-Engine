@@ -10,6 +10,7 @@
 #include <android_native_app_glue.h>
 #include <dlfcn.h>
 #include <jni.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -693,6 +694,19 @@ std::string ExternalDataPath() {
     return g.app->activity->externalDataPath;
 }
 
+std::string DeviceSummary() {
+    const auto property = [](const char* name) {
+        char value[PROP_VALUE_MAX] = {0};
+        const int length = __system_property_get(name, value);
+        return length > 0 ? std::string(value) : std::string("?");
+    };
+    return property("ro.product.manufacturer") + " " + property("ro.product.model") + " (device " +
+           property("ro.product.device") + ", hardware " + property("ro.hardware") + ", platform " +
+           property("ro.board.platform") + ", SoC " + property("ro.soc.model") + "), Android " +
+           property("ro.build.version.release") + " (API " + property("ro.build.version.sdk") + "), build " +
+           property("ro.build.display.id");
+}
+
 bool PumpEvents() {
     if (!g.app) return false;
     drainPending();
@@ -992,6 +1006,20 @@ extern "C" JNIEXPORT void JNICALL Java_com_ivancvetanovic_supersonic_SupersonicA
                                    << " (window pixels).";
 }
 
+// ---- A report open on the screen ------------------------------------------------
+
+namespace {
+// Set by SupersonicActivity (java/, collectReport and releaseStart) from the UI thread: true
+// from before the native thread exists until the player has closed the report of the last
+// run's unexpected end. android_main reads it before it enters the game.
+std::atomic<bool> g_holdStart{false};
+} // namespace
+
+extern "C" JNIEXPORT void JNICALL Java_com_ivancvetanovic_supersonic_SupersonicActivity_nativeSetHoldStart(
+    JNIEnv* /*env*/, jclass /*type*/, jboolean hold) {
+    g_holdStart.store(hold != JNI_FALSE);
+}
+
 // ---- The process's entry ------------------------------------------------------
 
 extern "C" void android_main(android_app* app) {
@@ -1015,6 +1043,20 @@ extern "C" void android_main(android_app* app) {
     // The game is entered with a window to draw on: the first thing the
     // renderer does is make a surface from it.
     while (!app->destroyRequested && !(g.resumed && g.window)) pollOnce(-1);
+
+    // The report of the last run's unexpected end may be open (SupersonicActivity.showReport): the
+    // game is held back until it is closed, so a start that fails again cannot take it off the
+    // screen before it was read. Events are read meanwhile (an activity that stops reading for five
+    // seconds is "not responding"), and ten minutes is the most it can hold.
+    if (!app->destroyRequested && g_holdStart.load()) {
+        SUPERSONIC_LOG_INFO("Android") << "android_main: holding the start while the report of the last run is open.";
+        const double heldSince = Now();
+        while (!app->destroyRequested && g_holdStart.load() && Now() - heldSince < 600.0) pollOnce(100);
+        SUPERSONIC_LOG_INFO("Android") << "android_main: the start is released.";
+        // The hold read the events, so the activity may have been paused or lost its window meanwhile (the
+        // player went to another app with Share): the game's entry is documented to be called with both.
+        while (!app->destroyRequested && !(g.resumed && g.window)) pollOnce(-1);
+    }
 
     int status = EXIT_SUCCESS;
     if (!app->destroyRequested) {

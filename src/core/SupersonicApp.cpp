@@ -775,8 +775,16 @@ SupersonicApp::~SupersonicApp() {
 
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Shutting down Engine Subsystems in reverse order..." << std::endl;
 
+    // Not allowed to throw: this runs after a throw from PushLayer, OnAttach or Run has unwound to here (a
+    // throw from the constructor skips it), and a device that was lost (the likeliest reason for a failure
+    // that late) makes waitIdle throw - out of a destructor during unwinding that is std::terminate, a
+    // crash before the game's message about the failure is shown.
     if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
-        m_vulkanDevice->GetDevice().waitIdle();
+        try {
+            m_vulkanDevice->GetDevice().waitIdle();
+        } catch (const std::exception& error) {
+            SUPERSONIC_LOG_ERROR("SupersonicApp") << "Waiting for the GPU to idle failed at shutdown: " << error.what();
+        }
     }
 
     // Clearing fires the destruction hook, which stops any voice still playing.
@@ -2012,7 +2020,14 @@ void SupersonicApp::Run() {
 
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Window close requested. Waiting for GPU idle..." << std::endl;
     if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
-        m_vulkanDevice->GetDevice().waitIdle();
+        // Named in the log, and thrown on as before: a lost device at the close is a failure, which the
+        // game's own handler reports.
+        try {
+            m_vulkanDevice->GetDevice().waitIdle();
+        } catch (const std::exception& error) {
+            SUPERSONIC_LOG_ERROR("SupersonicApp") << "Waiting for the GPU to idle failed: " << error.what();
+            throw;
+        }
     }
 }
 

@@ -44,6 +44,11 @@ android_app* App();
 std::string InternalDataPath();
 std::string ExternalDataPath();
 
+// The phone in one line from the system's build properties: manufacturer, model, device, hardware
+// and SoC, the Android release and API level, and the vendor's build id (ColorOS reports its version
+// there). For the first lines of a game's log: a log sent by a player says what it ran on.
+std::string DeviceSummary();
+
 // Handles whatever the platform has delivered, without waiting. For a game
 // doing long work before its app exists (unpacking its files on first run):
 // the glue holds the UI thread in onStart, onResume and window changes until

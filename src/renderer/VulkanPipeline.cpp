@@ -1,7 +1,9 @@
 #include "renderer/VulkanPipeline.hpp"
 #include "core/Components.hpp"
+#include "core/Log.hpp"
 
 #include <array>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -85,6 +87,13 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
 
     // Anything acquired past this point must survive a throw, so every failure
     // path runs destroy() before rethrowing.
+    //
+    // Named before the driver is asked: a driver that dies compiling a shader dies inside the call, and
+    // the last line of the log is then the pipeline it died on (a mobile driver compiles each of these
+    // from SPIR-V on the first run, which can take seconds; the second line says how long it took).
+    SUPERSONIC_LOG_INFO("VulkanPipeline") << "Creating pipeline: " << vertPath << " + " << fragPath << " ("
+              << static_cast<uint32_t>(options.samples) << "x samples)..." << std::endl;
+    const auto started = std::chrono::steady_clock::now();
     try {
         createDescriptorSetLayout();
 
@@ -255,6 +264,9 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
                                      + std::to_string(static_cast<int>(result.result)));
         }
         m_graphicsPipeline = result.value;
+        SUPERSONIC_LOG_INFO("VulkanPipeline") << "Pipeline created: " << fragPath << " in "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()
+                  << " ms." << std::endl;
     } catch (...) {
         destroy();
         throw;

@@ -14,6 +14,11 @@ VulkanOffscreen::VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t 
     // pipeline drawing into this target all have to agree on it.
     m_samples = m_deviceRef.GetMaxUsableSampleCount(vk::SampleCountFlagBits::e4);
 
+    // Before the driver is asked for the render pass and the images (RGBA16F colour and depth at this
+    // sample count, the largest allocation of the start): the line a log ends on if it dies there.
+    SUPERSONIC_LOG_INFO("VulkanOffscreen") << "Creating Offscreen Render Target (" << m_width << "x" << m_height
+              << ", " << static_cast<uint32_t>(m_samples) << "x MSAA)..." << std::endl;
+
     createRenderPass();
     createResources();
     createFramebuffer();

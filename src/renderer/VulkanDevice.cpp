@@ -110,6 +110,17 @@ void VulkanDevice::pickPhysicalDevice() {
     vk::PhysicalDevice selectedGPU = nullptr;
     bool foundDiscreteGPU = false;
 
+    // Before any of them is asked anything else: the first line a log from a phone must hold about its
+    // graphics, and the last one if the driver dies in the questions that follow.
+    for (const auto& device : devices) {
+        const vk::PhysicalDeviceProperties offered = device.getProperties();
+        SUPERSONIC_LOG_INFO("VulkanDevice") << "GPU offered: " << offered.deviceName << ", Vulkan "
+                  << VK_API_VERSION_MAJOR(offered.apiVersion) << "." << VK_API_VERSION_MINOR(offered.apiVersion) << "."
+                  << VK_API_VERSION_PATCH(offered.apiVersion) << ", vendor 0x" << std::hex << offered.vendorID
+                  << ", device 0x" << offered.deviceID << ", driver 0x" << offered.driverVersion << std::dec
+                  << std::endl;
+    }
+
     for (const auto& device : devices) {
         if (isDeviceSuitable(device)) {
             auto properties = device.getProperties();
@@ -137,6 +148,24 @@ void VulkanDevice::pickPhysicalDevice() {
     auto properties = m_physicalDevice.getProperties();
     SUPERSONIC_LOG_INFO("VulkanDevice") << "Selected Physical GPU: " << properties.deviceName
               << " (Type: " << (foundDiscreteGPU ? "Discrete GPU" : "Integrated/Other GPU") << ")"
+              << std::endl;
+
+    // What the renderer leans on, as THIS driver reports it: a log from a phone that dies later shows
+    // whether a limit is tight (the scene's fragment stage uses seven storage buffers and one colour
+    // output; the pipeline layouts, push constants and 4x multisampling are the others).
+    const vk::PhysicalDeviceLimits& limits = properties.limits;
+    SUPERSONIC_LOG_INFO("VulkanDevice") << "Limits: image 2D " << limits.maxImageDimension2D << ", framebuffer "
+              << limits.maxFramebufferWidth << "x" << limits.maxFramebufferHeight << ", colour attachments "
+              << limits.maxColorAttachments << ", descriptor sets " << limits.maxBoundDescriptorSets
+              << ", per-stage uniform/storage/sampled/samplers "
+              << limits.maxPerStageDescriptorUniformBuffers << "/" << limits.maxPerStageDescriptorStorageBuffers << "/"
+              << limits.maxPerStageDescriptorSampledImages << "/" << limits.maxPerStageDescriptorSamplers
+              << ", per-stage resources " << limits.maxPerStageResources << ", fragment combined output "
+              << limits.maxFragmentCombinedOutputResources << ", push constants " << limits.maxPushConstantsSize
+              << ", uniform range " << limits.maxUniformBufferRange << ", storage range "
+              << limits.maxStorageBufferRange << ", anisotropy " << limits.maxSamplerAnisotropy
+              << ", framebuffer samples (colour 0x" << std::hex << static_cast<uint32_t>(limits.framebufferColorSampleCounts)
+              << ", depth 0x" << static_cast<uint32_t>(limits.framebufferDepthSampleCounts) << ")" << std::dec
               << std::endl;
 }
 

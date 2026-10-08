@@ -167,6 +167,26 @@ as clicks and loads its first level. What that took, all of it under
   emulator's tall-cutout overlay, the window became 1184x720 beside a 96 px
   letterbox and the insets stayed zero. (Laid into the cutout instead, the
   insets read 96 px on the left.)
+- **A report of how the last run ended**, opt-in: a game that sets the
+  manifest meta-data `supersonic.reportUnexpectedExit` (and `supersonic.reportLog`,
+  its log relative to the files directory, and optionally
+  `supersonic.reportSkipWhenFile`, a file whose presence marks a scripted run)
+  gets `PostMortem.java`. On Android 11 and later `SupersonicActivity` reads the
+  system's `ApplicationExitInfo` records of the game's last processes and the
+  end of its log before the native thread exists (which is what overwrites the
+  log); when the newest unseen end was a crash, an ANR, a start that ended
+  itself with an error status, or a kill of a process that was on the screen
+  (`FOREGROUND_AT_MOST`), it shows a dialog - the build, how the process ended,
+  the last log lines, a Share button for the longer text - and holds
+  `android_main` back (`nativeSetHoldStart`, at most ten minutes, events still
+  read) until it is closed, so a start that fails again cannot take it away. An
+  end is marked seen once its dialog is up, and given up after three offers.
+  Measured on an API 30 emulator with a released APK: a native crash of the
+  foreground game goes to the launcher with no message of its own, and its record
+  reads `APP CRASH(NATIVE)`, status 11, importance 100, `trace=null` (Android 11
+  keeps no stack for it, so the log's last line is what names the stage); a
+  force-stop, a normal start and a kill of a cached process show nothing. No
+  real phone has run it.
 
 Not done: the editor (it needs GLFW), text entry from a soft keyboard, and
 a gamepad or multi-touch run on real hardware - `adb shell input` injects
