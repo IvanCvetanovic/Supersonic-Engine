@@ -19,6 +19,12 @@ float Rounded(float scale) {
 } // namespace
 
 DynamicResolution::DynamicResolution(const DynamicResolutionConfig& config) : m_config(config) {
+    Mend();
+    m_scale = Rounded(Clamp(m_config.startScale, m_config.minScale, m_config.maxScale));
+    m_samples.reserve(256);
+}
+
+void DynamicResolution::Mend() {
     // A config that contradicts itself is mended, never trusted: a floor above the ceiling, or a start outside both, would
     // otherwise make the first window change the scale for no reason.
     m_config.minScale = Clamp(m_config.minScale, 0.05f, 1.0f);
@@ -26,8 +32,20 @@ DynamicResolution::DynamicResolution(const DynamicResolutionConfig& config) : m_
     m_config.targetFps = std::max(m_config.targetFps, 1.0f);
     m_config.headroomFps = std::max(m_config.headroomFps, m_config.targetFps);
     m_config.windowSeconds = std::max(m_config.windowSeconds, 0.2f);
-    m_scale = Rounded(Clamp(m_config.startScale, m_config.minScale, m_config.maxScale));
-    m_samples.reserve(256);
+}
+
+void DynamicResolution::Reconfigure(const DynamicResolutionConfig& config) {
+    m_config = config;
+    Mend();
+    m_scale = Rounded(Clamp(m_scale, m_config.minScale, m_config.maxScale));
+    // What was learned about the old configuration is not evidence about the new one.
+    m_samples.clear();
+    m_windowSeconds = 0.0;
+    m_calmSeconds = 0.0;
+    m_judging = false;
+    m_holdSeconds = 0.0;
+    m_nextHoldSeconds = kFirstHoldSeconds;
+    m_settle = kSettleFrames;
 }
 
 float DynamicResolution::ScaleAfterShortfall(float scale, float fps, float target, float minScale) {
@@ -79,6 +97,8 @@ bool DynamicResolution::Observe(float frameSeconds) {
     m_windowSeconds = 0.0;
 
     const bool shortfall = fps < m_config.targetFps * kShortfallTolerance;
+    m_windowMedianMs = median * 1000.0f;
+    m_windowMissed = shortfall;
 
     // The hold after a step that did not pay runs out with time, or ends at once when the frames get much slower (a heavier
     // scene: worth another try).
@@ -97,12 +117,15 @@ bool DynamicResolution::Observe(float frameSeconds) {
         m_judging = false;
         const float predicted = (m_stepFromScale / m_scale) * (m_stepFromScale / m_scale) - 1.0f;
         const float gain = m_stepFps > 0.0f ? fps / m_stepFps - 1.0f : 0.0f;
-        if (shortfall && predicted > 0.0f && gain < kMinimumBenefit * predicted) {
+        if (shortfall && predicted > 0.0f && gain < std::min(kMinimumBenefit * predicted, kEnoughBenefit)) {
             revert = true;
             next = m_stepFromScale;
             m_holdSeconds = m_nextHoldSeconds;
             m_nextHoldSeconds = std::min(m_nextHoldSeconds * 2.0, kLongestHoldSeconds);
-            m_revertFps = fps;
+            // The speed at the size we are going back to, from before the step: "a much heavier scene" is judged against
+            // like with like. The faster window just measured (at the smaller size) was used once, and a step that had
+            // bought 43% or more cancelled its own hold in the next window and oscillated, a resize every second or two.
+            m_revertFps = m_stepFps;
             m_calmSeconds = 0.0;
         } else {
             // It paid (or the target is met now): the next failure starts the holds from the shortest again.

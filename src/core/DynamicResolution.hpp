@@ -22,8 +22,9 @@
 // cheap way:
 //   - A step down that does not pay for itself. A frame the CPU or the driver limits does not follow the pixel count, so a
 //     smaller picture changes nothing: the controller judges every step down by the next window and, when less than a
-//     quarter of the gain the pixel count predicted arrived (and the target is still missed), takes the step back and holds
-//     off for half a minute, doubling the hold after each repeat. A phone that is not GPU-bound keeps its picture.
+//     quarter of the gain the pixel count predicted arrived - and, for a large step, less than a sixth in all - (and the
+//     target is still missed), takes the step back and holds off for half a minute, doubling the hold after each repeat. A
+//     phone that is not GPU-bound keeps its picture.
 //   - A rise needs proof of room, and a loop paced by the display's refresh rate cannot give it: only frames far above the
 //     target (110 fps for eight seconds on end) prove the GPU has room, so on a paced loop the scale only ever falls, and the
 //     size it starts at (startMaxPixels) is the most it will have. The engine's mailbox present, which Android and most
@@ -69,9 +70,20 @@ public:
     // measurement - zero or negative, or longer than kIgnoreAboveSeconds (a scene load, a long hitch) - counts for nothing.
     bool Observe(float frameSeconds);
 
+    // Takes a new configuration while running (a graphics-quality pick): mended like the constructor's, the judgement and
+    // the hold forgotten, the current scale kept when it still fits the new range and moved into it when it does not. The
+    // caller compares Scale() before and after to know whether to resize.
+    void Reconfigure(const DynamicResolutionConfig& config);
+
     float Scale() const { return m_scale; }
     // The median frame time, in milliseconds, of the window that changed the scale last; 0 before one.
     float LastMedianMilliseconds() const { return m_lastMedianMs; }
+    // The median of the window that ended last, whether or not it changed anything (for a log line); 0 before one. And
+    // whether that window was a shortfall (below 94% of the target): at the floor, true means the picture cannot get
+    // smaller and the target is still missed.
+    float WindowMedianMilliseconds() const { return m_windowMedianMs; }
+    bool WindowMissedTheTarget() const { return m_windowMissed; }
+    bool AtTheFloor() const { return m_scale <= m_config.minScale + 0.005f; }
     // Whether the last change took back a step down that did not pay for itself (for the log).
     bool LastChangeWasARevert() const { return m_lastWasRevert; }
 
@@ -80,6 +92,10 @@ public:
     static constexpr float kShortfallTolerance = 0.94f;
     // A step down must bring at least this share of the speed-up the pixel count predicts, or it is taken back.
     static constexpr float kMinimumBenefit = 0.25f;
+    // ... but a step that bought at least this much is kept, however large the prediction was: the prediction is quadratic,
+    // so a halving "needs" a 75% speed-up, and a frame with a fixed share (a memory-bound pass, a window-sized pass) that
+    // got 40% faster was being thrown away and the player held at the slower size.
+    static constexpr float kEnoughBenefit = 0.15f;
     // After a step that did not pay: no step down for this long, doubling after each repeat up to the longest. A heavier scene
     // (the frame rate falling below kReleaseBelow of what it was at the revert) ends the hold early.
     static constexpr double kFirstHoldSeconds = 30.0;
@@ -100,9 +116,13 @@ public:
     static float ScaleAfterHeadroom(float scale, float fps, float target, float maxScale);
 
 private:
+    void Mend();
+
     DynamicResolutionConfig m_config;
     float m_scale;
     float m_lastMedianMs{0.0f};
+    float m_windowMedianMs{0.0f};
+    bool m_windowMissed{false};
     bool m_lastWasRevert{false};
     int m_settle{0};
     double m_windowSeconds{0.0};

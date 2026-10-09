@@ -760,15 +760,27 @@ uint64_t RenderSystem::ShadowPassSignature(const std::vector<ShadowCaster>& cast
                                            const glm::mat4& lightViewProj,
                                            const Frustum& lightFrustum,
                                            uint64_t seed) {
-    uint64_t signature = MixSignature(seed, &lightViewProj, sizeof(lightViewProj));
-
     // Mixed in even when nothing is visible, so an empty pass and a pass whose
     // casters all left are not confused with a pass that has not run.
     uint32_t visible = 0;
+    for (const ShadowCaster& caster : casters) {
+        if (lightFrustum.IntersectsAABB(caster.worldMin, caster.worldMax)) ++visible;
+    }
+
+    // A pass nothing is visible in is a clear to the far depth, whatever the light
+    // matrix is: the matrix decides where a caster would land, and there is none.
+    // Mixing it anyway re-recorded a camera-following cascade (four 2048x2048
+    // depth targets, cleared and stored, drawing nothing) on every frame a
+    // scrolling camera moved by a shadow texel - 64 MB of writes a frame in a
+    // game that has no shadow casters at all, which a slow memory bus pays for.
+    // The first frame still records (a new signature), and so does the frame a
+    // last caster leaves (it differs from the one with the caster in it).
+    if (visible == 0) return MixSignature(seed, &visible, sizeof(visible));
+
+    uint64_t signature = MixSignature(seed, &lightViewProj, sizeof(lightViewProj));
 
     for (const ShadowCaster& caster : casters) {
         if (!lightFrustum.IntersectsAABB(caster.worldMin, caster.worldMax)) continue;
-        ++visible;
 
         signature = MixSignature(signature, &caster.model, sizeof(caster.model));
         signature = MixSignature(signature, &caster.worldMin, sizeof(caster.worldMin));

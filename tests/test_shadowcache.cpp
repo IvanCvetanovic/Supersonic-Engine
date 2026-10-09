@@ -194,6 +194,34 @@ static void testMovingTheLightChangesTheSignature() {
               "moving the light must dirty its own shadow map");
 }
 
+static void testAPassNothingIsVisibleInIgnoresTheLightMatrix() {
+    // Nothing visible is a clear to the far depth, whichever way the light faces:
+    // a camera-following cascade must not be re-recorded for a scene with no
+    // casters just because the camera scrolled.
+    const std::vector<RenderSystem::ShadowCaster> none;
+    CHECK_MSG(signatureOf(none, lightMatrix(glm::vec3(0.0f, 0.0f, 10.0f))) ==
+                  signatureOf(none, lightMatrix(glm::vec3(0.5f, 0.0f, 10.0f))),
+              "an empty pass must stay cached while the light moves");
+
+    // A caster the light cannot see is the same as none.
+    const glm::mat4 light = lightMatrix(glm::vec3(0.0f, 0.0f, 10.0f));
+    std::vector<RenderSystem::ShadowCaster> offscreen{ makeCaster(glm::vec3(500.0f, 0.0f, 0.0f)) };
+    CHECK_MSG(!Frustum::FromMatrix(light).IntersectsAABB(offscreen[0].worldMin, offscreen[0].worldMax),
+              "the caster must really be outside the light's view");
+    CHECK_MSG(signatureOf(offscreen, light) == signatureOf(none, light),
+              "an unseen caster must not dirty the pass");
+
+    // The seed still separates it from a pass that has not run (a new shadow map).
+    CHECK_MSG(signatureOf(none, light, 1ull) != signatureOf(none, light, 2ull),
+              "a new shadow map must still record its clear");
+
+    // And the moment a caster is visible, the matrix matters again.
+    std::vector<RenderSystem::ShadowCaster> one{ makeCaster(glm::vec3(0.0f, 0.0f, 0.0f)) };
+    CHECK_MSG(signatureOf(one, lightMatrix(glm::vec3(0.0f, 0.0f, 10.0f))) !=
+                  signatureOf(one, lightMatrix(glm::vec3(0.5f, 0.0f, 10.0f))),
+              "a visible caster must follow the light again");
+}
+
 static void testAppearingAndDisappearingCastersChangeTheSignature() {
     const glm::mat4 light = lightMatrix(glm::vec3(0.0f, 0.0f, 10.0f));
 
@@ -452,6 +480,7 @@ static void runTests() {
     testMovingAVisibleCasterChangesTheSignature();
     testMovingACasterTheLightCannotSeeChangesNothing();
     testMovingTheLightChangesTheSignature();
+    testAPassNothingIsVisibleInIgnoresTheLightMatrix();
     testAppearingAndDisappearingCastersChangeTheSignature();
     testTwoDifferentShapesTradingPlacesChangesTheSignature();
     testTheSkinningInputsAreInTheSignature();
@@ -463,4 +492,4 @@ static void runTests() {
     testAnOpaqueMaterialsAlphaNeverReachesTheDepthPass();
 }
 
-TEST_MAIN("test_shadowcache", 70)
+TEST_MAIN("test_shadowcache", 75)

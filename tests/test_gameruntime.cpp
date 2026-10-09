@@ -996,6 +996,74 @@ static void testAStepThatDoesNotPayForItselfIsTakenBackAndNotRepeatedForAWhile()
     CHECK_MSG(changesAfterHeavier == 1 && held.Scale() < before, "a scene three times slower is tried at once");
 }
 
+static void testAStepThatBoughtARealShareIsKeptAndNeverOscillates() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+
+    // A frame that is half fixed cost and half pixels (100 ms + 100 ms x scale squared): halving the picture buys +60%,
+    // far under the 300% the pixel count predicts and the 75% a quarter of that asks for. It used to be taken back and the
+    // hold cancelled in the very next window (the speed it was released against was the smaller size's), so the picture
+    // hunted between two sizes with a resize every second or two. Now the gain is kept and the run settles.
+    DynamicResolution hunting(config);
+    const MixedRun half = driveAMixedGpu(hunting, 0.100, 0.100, 120.0);
+    // (It still probes the floor, which buys 14.6% here, just under the 15% bar: after 30 s, then after 60 s. That is 7
+    // changes in two minutes; the old rules made 62.)
+    CHECK_MSG(half.changes <= 8, "it settles instead of hunting");
+    CHECK_MSG(half.reverts <= 3, "and takes back only the rare probe");
+    CHECK_MSG(hunting.Scale() <= 0.5f, "on a size that bought the speed");
+
+    // A frame with a fixed share of 40 ms and 100 ms of pixels: 0.5 gives 15 fps, 0.3 gives 20. Both steps buy over 15%,
+    // so both are kept and it ends at the floor, where it used to be held at 0.5 for no reason.
+    DynamicResolution partial(config);
+    const MixedRun mixed = driveAMixedGpu(partial, 0.040, 0.100, 120.0);
+    CHECK_EQ(mixed.reverts, 0);
+    CHECK_NEAR(partial.Scale(), config.minScale);
+
+    // The window's own speed is there for a log line, whether or not it changed anything, and says when the target is
+    // still missed at the floor.
+    CHECK_MSG(partial.AtTheFloor() && partial.WindowMissedTheTarget(), "at the floor and still short of the target");
+    CHECK_MSG(partial.WindowMedianMilliseconds() > 40.0f && partial.WindowMedianMilliseconds() < 60.0f, "with its median");
+
+    // A CPU-bound frame still gets nothing from a smaller picture and is still taken back (see the test before this one):
+    // the lower bar is a share of a gain that arrived, not a licence to keep a step that bought nothing.
+    DynamicResolutionConfig cpu = config;
+    cpu.startScale = 0.8f;
+    DynamicResolution cpuBound(cpu);
+    const MixedRun flat = driveAMixedGpu(cpuBound, 0.025, 0.0, 120.0);
+    CHECK_MSG(flat.reverts >= 1 && cpuBound.Scale() >= 0.79f, "a step that buys nothing is still taken back");
+}
+
+static void testDynamicResolutionTakesANewConfigWhileRunning() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.startScale = 0.6f;
+    DynamicResolution controller(config);
+    driveAStandInGpu(controller, 0.117, 600);   // it has stepped down and learned something
+    const float before = controller.Scale();
+    CHECK(before < 0.6f);
+
+    // A tighter floor moves the scale into the new range, and the new rules apply from the next window.
+    DynamicResolutionConfig tighter = config;
+    tighter.minScale = 0.7f;
+    tighter.maxScale = 0.9f;
+    controller.Reconfigure(tighter);
+    CHECK_NEAR(controller.Scale(), 0.7f);
+
+    // A contradictory config is mended exactly as the constructor mends it.
+    DynamicResolutionConfig odd = config;
+    odd.minScale = 0.8f;
+    odd.maxScale = 0.4f;
+    controller.Reconfigure(odd);
+    CHECK(controller.Scale() >= 0.8f && controller.Scale() <= 1.0f);
+
+    // Turned off, it does nothing more.
+    DynamicResolutionConfig off;
+    controller.Reconfigure(off);
+    int changes = 0;
+    for (int i = 0; i < 300; ++i) changes += controller.Observe(0.2f) ? 1 : 0;
+    CHECK_EQ(changes, 0);
+}
+
 static void testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo() {
     // Off the shelf the engine takes a Vulkan 1.2 GPU and nothing less: a game
     // that never heard of the setting behaves as it always did. A game that says
@@ -1353,6 +1421,8 @@ static void runTests() {
     testDynamicResolutionIgnoresPausesLoadsAndOneSlowFrame();
     testDynamicResolutionRulesAndMendedConfigs();
     testAStepThatDoesNotPayForItselfIsTakenBackAndNotRepeatedForAWhile();
+    testAStepThatBoughtARealShareIsKeptAndNeverOscillates();
+    testDynamicResolutionTakesANewConfigWhileRunning();
     testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo();
     testTheFileLogCarriesElapsedTimeOnlyWhenAsked();
     testHidingTheCursorIsTheSameRequestInputArbitrates();
