@@ -381,7 +381,8 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     m_editorLayer = std::make_unique<EditorLayer>();
     m_editorLayer->Init(*m_vulkanDevice,
                         EditorLayer::ScaledExtent(static_cast<float>(m_swapchain->GetExtent().width), startScale),
-                        EditorLayer::ScaledExtent(static_cast<float>(m_swapchain->GetExtent().height), startScale));
+                        EditorLayer::ScaledExtent(static_cast<float>(m_swapchain->GetExtent().height), startScale),
+                        static_cast<vk::SampleCountFlagBits>(GameRuntime::ResolveSceneSamples(m_manifest)));
     m_editorLayer->SetRenderScale(startScale);
     pumpStartupEvents();
 

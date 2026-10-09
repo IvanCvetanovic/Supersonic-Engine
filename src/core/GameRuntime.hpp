@@ -118,6 +118,13 @@ struct GameManifest {
     // read from or written to game.manifest's text.
     bool assetWatching{true};
 
+    // The most samples per pixel the scene target may use: 0, the default, is the engine as it was (the device's best, at most
+    // 4); 1, 2 and 4 cap it there (ResolveSceneSamples). Multisampling smooths the edges of geometry, which a sprite game of
+    // axis-aligned quads and alpha-tested edges has almost none of, while a 4x target of RGBA16F colour and depth is 55 MB at
+    // 1600x720 on a tile-based mobile GPU, whose tiles shrink as the sample count rises. Fixed when the target is made, so a
+    // change applies at the next start. Set by a game's main; not read from or written to game.manifest's text.
+    uint32_t sceneSamples{0};
+
     // What the engine opens at when nothing asks for anything, which is the
     // literal that used to be the only answer.
     static constexpr uint32_t kDefaultWidth = 1280;
@@ -215,6 +222,10 @@ StartWindow ResolveStartWindow(const GameManifest& manifest, const LaunchOptions
 // GameManifest::minimumVulkanMinor clamped into 1 to 2 (Vulkan 1.0 lacks the
 // core functions the allocator binds; nothing in the engine asks for 1.3).
 uint32_t ResolveVulkanMinor(const GameManifest& manifest);
+
+// The sample count SupersonicApp caps the scene target at: GameManifest::sceneSamples 0 is 4 (as the engine always took),
+// 1 and 2 are themselves, 3 is 2, and anything above 4 is 4.
+uint32_t ResolveSceneSamples(const GameManifest& manifest);
 
 // The Vulkan 1.x minor version the memory allocator (VMA) is told it may use on a
 // device that reports `deviceMinor`: the device's own, capped at 2, the version

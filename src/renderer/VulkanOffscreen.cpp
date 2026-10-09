@@ -8,12 +8,12 @@
 
 namespace Supersonic {
 
-VulkanOffscreen::VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t height)
+VulkanOffscreen::VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t height, vk::SampleCountFlagBits maxSamples)
     : m_deviceRef(device), m_width(width > 0 ? width : 1), m_height(height > 0 ? height : 1) {
     
     // Chosen before anything else: the render pass, the images and every
     // pipeline drawing into this target all have to agree on it.
-    m_samples = m_deviceRef.GetMaxUsableSampleCount(vk::SampleCountFlagBits::e4);
+    m_samples = m_deviceRef.GetMaxUsableSampleCount(maxSamples);
 
     // Before the driver is asked for the render pass and the images (RGBA16F colour and depth at this
     // sample count, the largest allocation of the start): the line a log ends on if it dies there.

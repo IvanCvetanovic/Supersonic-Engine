@@ -24,7 +24,9 @@ public:
     // been built, which is why every caller has to check.
     BloomPass* GetBloom() { return m_bloom.get(); }
 
-    VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t height);
+    // `maxSamples` caps the multisampling: the device's best up to it (4, the default, is the engine as it was).
+    VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t height,
+                    vk::SampleCountFlagBits maxSamples = vk::SampleCountFlagBits::e4);
     ~VulkanOffscreen();
 
     // The renderer's persistent pipeline cache, handed down so the bloom chain

@@ -1193,6 +1193,25 @@ static void testTheProfilerCountsAndTimesQueueDrains() {
     CHECK_MSG(Profiler::QueueDrains() == 0 && Profiler::Milliseconds(ProfileZone::QueueDrain) == 0.0, "a frame starts at zero");
 }
 
+static void testTheSceneSampleCapIsOffByDefaultAndClampedToOneTwoOrFour() {
+    GameManifest manifest;
+    CHECK_EQ(manifest.sceneSamples, 0u);
+    CHECK_MSG(GameRuntime::ResolveSceneSamples(manifest) == 4u, "off, the engine takes the device's best up to 4 as ever");
+    const struct { uint32_t asked, got; } table[] = {{1u, 1u}, {2u, 2u}, {3u, 2u}, {4u, 4u}, {8u, 4u}, {4000000000u, 4u}};
+    for (const auto& row : table) {
+        manifest.sceneSamples = row.asked;
+        CHECK_EQ(GameRuntime::ResolveSceneSamples(manifest), row.got);
+    }
+    // Never in the manifest's text.
+    GameManifest asking;
+    asking.isGame = true;
+    asking.sceneSamples = 1;
+    GameManifest quiet;
+    quiet.isGame = true;
+    CHECK_MSG(GameRuntime::Serialize(asking) == GameRuntime::Serialize(quiet), "the manifest's text carries no sample cap");
+    CHECK_EQ(GameRuntime::Parse(GameRuntime::Serialize(asking)).sceneSamples, 0u);
+}
+
 static void testThePerfAndWatcherFieldsAreOffByDefaultAndNeverInTheManifestText() {
     GameManifest plain;
     CHECK_MSG(!plain.perfOverlay && plain.perfLogSeconds == 0.0f && plain.assetWatching, "a game that never heard of them is unchanged");
@@ -1572,6 +1591,7 @@ static void runTests() {
     testThePerfOverlayKeepsAReportOfEachSizeMeasured();
     testTheProfilerCountsAndTimesQueueDrains();
     testThePerfAndWatcherFieldsAreOffByDefaultAndNeverInTheManifestText();
+    testTheSceneSampleCapIsOffByDefaultAndClampedToOneTwoOrFour();
     testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo();
     testTheFileLogCarriesElapsedTimeOnlyWhenAsked();
     testHidingTheCursorIsTheSameRequestInputArbitrates();

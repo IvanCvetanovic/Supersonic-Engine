@@ -33,8 +33,9 @@ namespace {
 constexpr float kStatusVisibleSeconds = 6.0f;
 } // namespace
 
-void EditorLayer::Init(VulkanDevice& device, uint32_t initialWidth, uint32_t initialHeight) {
-    m_offscreenPass = std::make_unique<VulkanOffscreen>(device, initialWidth, initialHeight);
+void EditorLayer::Init(VulkanDevice& device, uint32_t initialWidth, uint32_t initialHeight,
+                       vk::SampleCountFlagBits maxSamples) {
+    m_offscreenPass = std::make_unique<VulkanOffscreen>(device, initialWidth, initialHeight, maxSamples);
     m_thumbnails = std::make_unique<ThumbnailCache>(device);
     m_contentBrowserPanel.SetThumbnails(m_thumbnails.get());
     SUPERSONIC_LOG_INFO("EditorLayer") << "Dockable Editor Layer & Offscreen Viewport initialized." << std::endl;

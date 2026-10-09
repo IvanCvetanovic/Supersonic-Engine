@@ -38,7 +38,8 @@ public:
 
     // Must be called after the ImGui Vulkan backend is initialised, because the
     // offscreen target registers a descriptor set with it.
-    void Init(VulkanDevice& device, uint32_t initialWidth, uint32_t initialHeight);
+    void Init(VulkanDevice& device, uint32_t initialWidth, uint32_t initialHeight,
+              vk::SampleCountFlagBits maxSamples = vk::SampleCountFlagBits::e4);
 
     // Must be called before ImGui_ImplVulkan_Shutdown.
     void Shutdown();
