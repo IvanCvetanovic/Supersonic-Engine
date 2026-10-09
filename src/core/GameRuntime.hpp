@@ -125,6 +125,14 @@ struct GameManifest {
     // change applies at the next start. Set by a game's main; not read from or written to game.manifest's text.
     uint32_t sceneSamples{0};
 
+    // The resolution of the shadow maps the renderer allocates whatever a game draws: 0, the default, is the engine as it was
+    // (the cascades 2048x2048 x4 layers, the point lights' cubes 1024 and the spot lights' 1024, all D32: 120 MiB); any other
+    // number sets all three to it, clamped (ResolveShadowMapResolution). A game that casts no shadow - every draw unlit, as the
+    // sprite pipelines of spritesOnlyScenePipelines are - never samples them, and on a phone, whose GPU memory is the system's,
+    // 120 MiB is a tenth of what a low-memory manager looks at. Set by a game's main; not read from or written to game.manifest's
+    // text.
+    uint32_t shadowMapResolution{0};
+
     // What the engine opens at when nothing asks for anything, which is the
     // literal that used to be the only answer.
     static constexpr uint32_t kDefaultWidth = 1280;
@@ -226,6 +234,10 @@ uint32_t ResolveVulkanMinor(const GameManifest& manifest);
 // The sample count SupersonicApp caps the scene target at: GameManifest::sceneSamples 0 is 4 (as the engine always took),
 // 1 and 2 are themselves, 3 is 2, and anything above 4 is 4.
 uint32_t ResolveSceneSamples(const GameManifest& manifest);
+
+// The resolution SupersonicApp hands the renderer for its shadow maps: GameManifest::shadowMapResolution 0 stays 0 (the default
+// sizes), anything else is clamped into 16 to 4096.
+uint32_t ResolveShadowMapResolution(const GameManifest& manifest);
 
 // The Vulkan 1.x minor version the memory allocator (VMA) is told it may use on a
 // device that reports `deviceMinor`: the device's own, capped at 2, the version

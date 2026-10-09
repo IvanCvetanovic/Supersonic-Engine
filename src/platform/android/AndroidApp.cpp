@@ -87,6 +87,7 @@ struct State {
     bool sizeChanged{false};
     bool resumedFromSuspend{false};
     double leavingUntil{0.0};   // Now() before which a paused app keeps running frames
+    double lastTouchEvent{0.0};   // Now() of the last touch event of any kind (0: none yet)
 
     std::function<void()> surfaceLost;
     std::function<void(bool)> audioSuspend;
@@ -430,6 +431,7 @@ void feedImGuiPointer(bool buttonDown) {
 }
 
 int32_t handlePointerMotion(const AInputEvent* event) {
+    g.lastTouchEvent = Now();
     const int32_t action = AMotionEvent_getAction(event);
     const int32_t masked = action & AMOTION_EVENT_ACTION_MASK;
     const auto index = static_cast<size_t>((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
@@ -449,6 +451,21 @@ int32_t handlePointerMotion(const AInputEvent* event) {
         g.mousePosition = positionOf(0);
         pointerDown(id, positionOf(0));
         feedImGuiPointer(true);
+        // A finger on the game is proof that it has the input: Android delivers a touch to the window that is being
+        // touched. The focus flag is set by GAINED_FOCUS and cleared by LOST_FOCUS and by PAUSE, and a RESUME does not
+        // restore it, so a phone that resumes the activity without a focus-gain callback (a system overlay that never
+        // returns the focus, a launcher or a vendor's game mode that does) would leave the game reading every key and click
+        // as released while its picture keeps animating: "my touchscreen completely stops working". Healed here, and said once
+        // in a while so a log shows that it happened.
+        if (g.resumed && g.window && !g.focused) {
+            g.focused = true;
+            static double lastWarning = -1.0e9;
+            if (Now() - lastWarning > 10.0) {
+                lastWarning = Now();
+                SUPERSONIC_LOG_WARN("Android") << "A finger landed on a window the game believed unfocused (no GAINED_FOCUS "
+                                                  "after the last pause or loss of focus): focus restored.";
+            }
+        }
         break;
     }
     case AMOTION_EVENT_ACTION_POINTER_DOWN:
@@ -852,6 +869,15 @@ ANativeWindow* CurrentWindow() { return g.window; }
 bool DestroyRequested() { return !g.app || g.app->destroyRequested != 0; }
 
 bool IsFocused() { return g.focused; }
+
+InputDiagnostics GetInputDiagnostics() {
+    InputDiagnostics diagnostics;
+    diagnostics.touches = static_cast<int>(g.touches.size());
+    diagnostics.secondsSinceTouchEvent = g.lastTouchEvent > 0.0 ? Now() - g.lastTouchEvent : -1.0;
+    diagnostics.focused = g.focused;
+    diagnostics.resumed = g.resumed;
+    return diagnostics;
+}
 
 void WaitUntilDrawable() {
     if (!g.app) return;

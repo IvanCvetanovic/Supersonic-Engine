@@ -64,8 +64,10 @@ public:
     // valid and means ImGui's built-in style.
     using UiStyleCallback = std::function<void(float dpiScale)>;
 
+    // `shadowResolution` 0 is the shadow maps at their default sizes (cascades 2048, point and spot 1024); another number sets
+    // all three to it.
     VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain, Window& window,
-                   UiStyleCallback styleUi = {});
+                   UiStyleCallback styleUi = {}, uint32_t shadowResolution = 0);
     ~VulkanRenderer();
 
     VulkanRenderer(const VulkanRenderer&) = delete;

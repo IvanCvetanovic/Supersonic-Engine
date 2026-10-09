@@ -303,7 +303,8 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
         [](float dpiScale) {
             EditorFonts::Load(dpiScale);
             Theme::ApplyEngineDarkTheme(dpiScale);
-        });
+        },
+        GameRuntime::ResolveShadowMapResolution(m_manifest));
     // The pipelines are compiled below, one by one, by the driver: the longest
     // single wait of a cold start on a slow GPU. Cleared once they are built:
     // the hook captures this, and startup is over.
@@ -1157,6 +1158,14 @@ void SupersonicApp::RefreshPerfEnvironment() {
     const SafeAreaInsets safe = SafeArea::Get();
     env.safeLeft = safe.left;
     env.safeTop = safe.top;
+#if defined(__ANDROID__)
+    const Android::InputDiagnostics input = Android::GetInputDiagnostics();
+    env.hasInput = true;
+    env.touches = input.touches;
+    env.secondsSinceTouch = input.secondsSinceTouchEvent;
+    env.focused = input.focused;
+    env.resumed = input.resumed;
+#endif
 }
 
 void SupersonicApp::Run() {

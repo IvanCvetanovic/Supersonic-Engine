@@ -49,6 +49,18 @@ std::string ExternalDataPath();
 // there). For the first lines of a game's log: a log sent by a player says what it ran on.
 std::string DeviceSummary();
 
+// What the touch layer knows, for a game's own diagnostics (the performance overlay shows it, so a screenshot taken while a
+// phone's touch seems dead says whether touches still arrive and whether the game thinks it has the input): fingers the
+// game is tracking, seconds since the last touch event of any kind was delivered (-1: none yet), and the window's focus and
+// resume flags as the activity's callbacks left them.
+struct InputDiagnostics {
+    int touches{0};
+    double secondsSinceTouchEvent{-1.0};
+    bool focused{false};
+    bool resumed{false};
+};
+InputDiagnostics GetInputDiagnostics();
+
 // Handles whatever the platform has delivered, without waiting. For a game
 // doing long work before its app exists (unpacking its files on first run):
 // the glue holds the UI thread in onStart, onResume and window changes until

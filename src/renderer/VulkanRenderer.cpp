@@ -32,7 +32,7 @@
 namespace Supersonic {
 
 VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain, Window& window,
-                               UiStyleCallback styleUi)
+                               UiStyleCallback styleUi, uint32_t shadowResolution)
     : m_styleUi(std::move(styleUi)), m_deviceRef(device), m_swapchainRef(swapchain),
       m_windowRef(window) {
 
@@ -49,10 +49,19 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     createSyncObjects();
 
     m_meshRegistry = std::make_unique<MeshRegistry>(m_deviceRef, m_commandPool);
-    m_shadowMap = std::make_unique<ShadowMap>(m_deviceRef);
-    m_pointShadowMap = std::make_unique<PointShadowMap>(m_deviceRef);
-    m_spotShadowMap = std::make_unique<ShadowMap>(m_deviceRef, 1024,
-                                                 SpotLight::kMaxShadowCasters);
+    if (shadowResolution == 0) {
+        m_shadowMap = std::make_unique<ShadowMap>(m_deviceRef);
+        m_pointShadowMap = std::make_unique<PointShadowMap>(m_deviceRef);
+        m_spotShadowMap = std::make_unique<ShadowMap>(m_deviceRef, 1024,
+                                                     SpotLight::kMaxShadowCasters);
+    } else {
+        SUPERSONIC_LOG_INFO("VulkanRenderer") << "Shadow maps at " << shadowResolution << "x" << shadowResolution
+                                              << " (the game asked for small ones: it casts no shadow).";
+        m_shadowMap = std::make_unique<ShadowMap>(m_deviceRef, shadowResolution);
+        m_pointShadowMap = std::make_unique<PointShadowMap>(m_deviceRef, shadowResolution);
+        m_spotShadowMap = std::make_unique<ShadowMap>(m_deviceRef, shadowResolution,
+                                                     SpotLight::kMaxShadowCasters);
+    }
 
     // Before the descriptor sets, because they bind it. It starts as a black
     // cube the shader is told to ignore, so a scene that names no environment

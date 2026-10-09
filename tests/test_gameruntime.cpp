@@ -1165,7 +1165,19 @@ static void testThePerfOverlayKeepsAReportOfEachSizeMeasured() {
     CHECK(report.find("Test phone") != std::string::npos && report.find("Test GPU, Vulkan 1.1.0") != std::string::npos);
     CHECK(report.find("scenes/level1.esc") != std::string::npos && report.find("4x MSAA") != std::string::npos);
     CHECK_MSG(report.find("GPU or display bound") != std::string::npos, "and what limited it");
+    CHECK_MSG(report.find("Input:") == std::string::npos, "no input line where the platform has no touch layer to ask");
     CHECK_MSG(report.find("Perf: ") != std::string::npos, "with the lines it logged");
+
+    // Where it has one, the touch layer's state is in the report and in the log lines, and a lost focus is shouted.
+    environment.hasInput = true;
+    environment.touches = 2;
+    environment.secondsSinceTouch = 3.25;
+    environment.focused = false;
+    report = overlay.BuildReport(environment);
+    CHECK_MSG(report.find("Input: touch 2 fingers, last event 3.2 s ago, focus NO, resumed yes") != std::string::npos
+                  || report.find("Input: touch 2 fingers, last event 3.3 s ago, focus NO, resumed yes") != std::string::npos,
+              "the report says what the touch layer knows");
+    environment.hasInput = false;
 
     // Switching to another size keeps what the others measured, starts the new one empty and settles again.
     overlay.SetActivePreset(2);
@@ -1210,6 +1222,24 @@ static void testTheSceneSampleCapIsOffByDefaultAndClampedToOneTwoOrFour() {
     quiet.isGame = true;
     CHECK_MSG(GameRuntime::Serialize(asking) == GameRuntime::Serialize(quiet), "the manifest's text carries no sample cap");
     CHECK_EQ(GameRuntime::Parse(GameRuntime::Serialize(asking)).sceneSamples, 0u);
+}
+
+static void testTheShadowMapResolutionIsOffByDefaultClampedAndNeverInTheManifestText() {
+    GameManifest manifest;
+    CHECK_EQ(manifest.shadowMapResolution, 0u);
+    CHECK_MSG(GameRuntime::ResolveShadowMapResolution(manifest) == 0u, "off, the renderer keeps its default sizes");
+    const struct { uint32_t asked, got; } table[] = {{1u, 16u}, {16u, 16u}, {64u, 64u}, {4096u, 4096u}, {8192u, 4096u}, {4000000000u, 4096u}};
+    for (const auto& row : table) {
+        manifest.shadowMapResolution = row.asked;
+        CHECK_EQ(GameRuntime::ResolveShadowMapResolution(manifest), row.got);
+    }
+    GameManifest asking;
+    asking.isGame = true;
+    asking.shadowMapResolution = 16;
+    GameManifest quiet;
+    quiet.isGame = true;
+    CHECK_MSG(GameRuntime::Serialize(asking) == GameRuntime::Serialize(quiet), "the manifest's text carries no shadow resolution");
+    CHECK_EQ(GameRuntime::Parse(GameRuntime::Serialize(asking)).shadowMapResolution, 0u);
 }
 
 static void testThePerfAndWatcherFieldsAreOffByDefaultAndNeverInTheManifestText() {
@@ -1592,6 +1622,7 @@ static void runTests() {
     testTheProfilerCountsAndTimesQueueDrains();
     testThePerfAndWatcherFieldsAreOffByDefaultAndNeverInTheManifestText();
     testTheSceneSampleCapIsOffByDefaultAndClampedToOneTwoOrFour();
+    testTheShadowMapResolutionIsOffByDefaultClampedAndNeverInTheManifestText();
     testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo();
     testTheFileLogCarriesElapsedTimeOnlyWhenAsked();
     testHidingTheCursorIsTheSameRequestInputArbitrates();

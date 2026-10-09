@@ -117,6 +117,12 @@ uint32_t ResolveVulkanMinor(const GameManifest& manifest) {
     return manifest.minimumVulkanMinor < 1u ? 1u : manifest.minimumVulkanMinor > 2u ? 2u : manifest.minimumVulkanMinor;
 }
 
+uint32_t ResolveShadowMapResolution(const GameManifest& manifest) {
+    const uint32_t asked = manifest.shadowMapResolution;
+    if (asked == 0u) return 0u;
+    return asked < 16u ? 16u : asked > 4096u ? 4096u : asked;
+}
+
 uint32_t ResolveSceneSamples(const GameManifest& manifest) {
     const uint32_t asked = manifest.sceneSamples;
     if (asked == 0u || asked >= 4u) return 4u;

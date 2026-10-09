@@ -51,6 +51,15 @@ public:
         // The part of the window a notch or a gesture bar covers, in pixels, so the panel is not drawn under it.
         float safeLeft{0.0f};
         float safeTop{0.0f};
+        // What the platform's touch layer knows (Android only: hasInput false elsewhere): fingers tracked, seconds since the
+        // last touch event of any kind (-1: none yet), and the window's focus and resume flags. A screenshot taken while touch
+        // seems dead then says whether touches still arrive (the number stays small) and whether the game thinks it has the
+        // input (focus).
+        bool hasInput{false};
+        int touches{0};
+        double secondsSinceTouch{-1.0};
+        bool focused{true};
+        bool resumed{true};
     };
 
     explicit PerfOverlay(const Settings& settings);

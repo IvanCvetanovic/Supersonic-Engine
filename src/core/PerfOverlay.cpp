@@ -46,6 +46,14 @@ std::string Describe(const PerfOverlay::Environment& environment) {
            environment.presentMode;
 }
 
+// The touch layer's state in one short line ("touch 0 fingers, last event 3.2 s ago, focus yes, resumed yes").
+std::string DescribeInput(const PerfOverlay::Environment& environment) {
+    const std::string last = environment.secondsSinceTouch < 0.0 ? std::string("never")
+                                                                 : Fixed(environment.secondsSinceTouch, 1) + " s ago";
+    return "touch " + std::to_string(environment.touches) + " fingers, last event " + last + ", focus " +
+           (environment.focused ? "yes" : "NO") + ", resumed " + (environment.resumed ? "yes" : "NO");
+}
+
 } // namespace
 
 PerfOverlay::PerfOverlay(const Settings& settings) : m_settings(settings) {}
@@ -97,7 +105,8 @@ void PerfOverlay::Observe(const FramePerfSample& sample, const Environment& envi
         result.scene = environment.scene;
     }
     if (m_settings.logSeconds > 0.0f && m_logWindow.Ready(m_settings.logSeconds)) {
-        const std::string line = FormatPerfLine(m_logWindow.Take(), Describe(environment));
+        const std::string line = FormatPerfLine(
+            m_logWindow.Take(), Describe(environment) + (environment.hasInput ? ", " + DescribeInput(environment) : std::string()));
         SUPERSONIC_LOG_INFO("Perf") << line;
         m_recentLines.push_back(line);
         while (m_recentLines.size() > kRecentLines) m_recentLines.pop_front();
@@ -113,6 +122,7 @@ std::string PerfOverlay::BuildReport(const Environment& environment) const {
               " (scale " + Fixed(environment.scale, 2) + "), " + std::to_string(environment.samples) + "x MSAA, present " +
               (environment.presentMode.empty() ? std::string("?") : environment.presentMode) + "\n";
     report += "Scene: " + (environment.scene.empty() ? std::string("?") : environment.scene) + "\n";
+    if (environment.hasInput) report += "Input: " + DescribeInput(environment) + "\n";
     report += std::string("Size in force: ") + PresetName(m_activePreset) +
               (environment.atFloorMissed ? " (at the smallest size and still under the target)" : "") + "\n\n";
 
@@ -194,6 +204,7 @@ void PerfOverlay::Draw(const Environment& environment) {
             ImGui::TextUnformatted("measuring...");
         }
         ImGui::TextUnformatted((Describe(environment)).c_str());
+        if (environment.hasInput) ImGui::TextUnformatted(DescribeInput(environment).c_str());
         if (!environment.gpu.empty()) ImGui::TextUnformatted(environment.gpu.c_str());
 
         if (environment.hasController) {
