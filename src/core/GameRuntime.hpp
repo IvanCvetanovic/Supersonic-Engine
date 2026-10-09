@@ -103,6 +103,21 @@ struct GameManifest {
     // pictures must reproduce. Set by a game's main; not read from or written to game.manifest's text.
     DynamicResolutionConfig dynamicResolution;
 
+    // A readout of the frame rate and of where the frame's time went, over the game's picture, with a button that shares a
+    // report and buttons that fix the scene target's scale for a measurement (PerfOverlay.hpp); and a log line of the same
+    // numbers every perfLogSeconds (0: none). Off, the default, nothing is measured beyond what always was. For a game whose
+    // players run it on hardware its developer does not own. Set by a game's main; not read from or written to
+    // game.manifest's text.
+    bool perfOverlay{false};
+    float perfLogSeconds{0.0f};
+
+    // Whether the engine watches the files a scene names for changes on disk (to reload a texture or a mesh a developer
+    // saved): a stat of every watched path every frame, and a hash of every material's paths. True, the default, is the
+    // engine as it was. A shipped game whose assets cannot change under it - and a phone game, whose virtual texture keys are
+    // not files at all, so every stat fails - sets it false and saves that work on every frame. Set by a game's main; not
+    // read from or written to game.manifest's text.
+    bool assetWatching{true};
+
     // What the engine opens at when nothing asks for anything, which is the
     // literal that used to be the only answer.
     static constexpr uint32_t kDefaultWidth = 1280;

@@ -7,6 +7,7 @@
 #include <entt/entt.hpp>
 
 #include "core/DynamicResolution.hpp"
+#include "core/PerfOverlay.hpp"
 #include "core/WorldShapes.hpp"
 #include "core/ScreenOverlay.hpp"
 
@@ -158,6 +159,17 @@ private:
     // not by the renderer. See EditorLayer for why that ordering matters.
     std::unique_ptr<EditorLayer> m_editorLayer;
     std::unique_ptr<DynamicResolution> m_dynamicResolution;
+    // The controller's configuration as the game gave it (with the start size the budget chose), kept so that the overlay's
+    // Auto preset can restore it after a fixed size was tried.
+    DynamicResolutionConfig m_resolutionConfig;
+
+    // The readout and log of how the frames run (PerfOverlay.hpp); null unless the manifest asks. The ticks the last
+    // iteration ran, because the loop reads the previous iteration's profiler zones at the top of the next.
+    std::unique_ptr<PerfOverlay> m_perf;
+    int m_perfTicks{0};
+    // What the overlay needs to know about where the numbers are taken: the strings once, the numbers each frame.
+    PerfOverlay::Environment m_perfEnv;
+    void RefreshPerfEnvironment();
 
     // Real output device. Degrades to a documented no-op where no backend is
     // compiled, instead of silently discarding every computed volume.

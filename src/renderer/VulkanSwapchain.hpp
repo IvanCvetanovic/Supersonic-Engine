@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
@@ -32,6 +33,9 @@ public:
     // one before it is presented. Decided each time the swapchain is built.
     bool IsReadable() const { return m_readable; }
 
+    // The present mode in use ("Mailbox", "Fifo"), for a log line or a readout.
+    const std::string& PresentModeName() const { return m_presentModeName; }
+
     void Recreate(Window& window);
     void Cleanup();
 
@@ -49,6 +53,7 @@ private:
     vk::SwapchainKHR m_swapChain{nullptr};
     vk::Format m_swapChainImageFormat;
     vk::Extent2D m_swapChainExtent;
+    std::string m_presentModeName{"Fifo"};
 
     std::vector<vk::Image> m_swapChainImages;
     std::vector<vk::ImageView> m_swapChainImageViews;

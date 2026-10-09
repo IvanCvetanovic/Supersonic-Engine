@@ -344,6 +344,20 @@ final class PostMortem {
         }
     }
 
+    /**
+     * The end of the game's log as text, for a message the player shares on purpose (no unexpected end behind it): the last
+     * {@code count} lines, each cut at {@code chars}. Empty when the game keeps no log or has not written one.
+     *
+     * @param logPath the game's log, relative to the app's files directory ("" for none)
+     */
+    static String logTailText(Context context, String logPath, int count, int chars) {
+        if (logPath == null || logPath.isEmpty()) return "";
+        StringBuilder out = new StringBuilder();
+        for (String line : logTail(new File(context.getFilesDir(), logPath), count, chars)) out.append(line).append('
+');
+        return out.toString();
+    }
+
     /** The last {@code count} lines of the game's log, each cut at {@code chars}; none when it has none. */
     private static List<String> logTail(File log, int count, int chars) {
         List<String> lines = new ArrayList<String>();

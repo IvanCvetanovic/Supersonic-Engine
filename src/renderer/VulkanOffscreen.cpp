@@ -1,4 +1,5 @@
 #include "renderer/VulkanOffscreen.hpp"
+#include "core/Profiler.hpp"
 #include "core/Log.hpp"
 
 #include <array>
@@ -82,7 +83,7 @@ bool VulkanOffscreen::ApplyPendingResize() {
     m_height = m_pendingHeight;
 
     // Safe here: called from the top of the frame, before any recording begins.
-    m_deviceRef.GetDevice().waitIdle();
+    { Profiler::DrainScope drain; m_deviceRef.GetDevice().waitIdle(); }
     cleanup();
 
     createResources();

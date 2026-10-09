@@ -740,6 +740,49 @@ static std::string forNewStringUTF(const std::string& utf8) {
     return out;
 }
 
+bool ShareText(const std::string& title, const std::string& utf8Text) {
+    if (!g.app || !g.app->activity || !g.app->activity->vm || !g.app->activity->clazz) return false;
+    JavaVM* vm = g.app->activity->vm;
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    const jint state = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+    if (state == JNI_EDETACHED) {
+        if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return false;
+        attached = true;
+    } else if (state != JNI_OK) {
+        return false;
+    }
+
+    bool shared = false;
+    jobject activity = g.app->activity->clazz;
+    jclass type = env->GetObjectClass(activity);
+    jmethodID share = type ? env->GetMethodID(type, "shareText", "(Ljava/lang/String;Ljava/lang/String;)V") : nullptr;
+    env->ExceptionClear();   // a plain NativeActivity has no such method; CheckJNI aborts on a pending exception
+    if (!share) {
+        SUPERSONIC_LOG_INFO("Android") << "Share: the activity is not SupersonicActivity; nothing is shared.";
+    } else {
+        jstring jTitle = env->NewStringUTF(forNewStringUTF(title).c_str());
+        jstring jText = env->NewStringUTF(forNewStringUTF(utf8Text).c_str());
+        bool threw = jTitle == nullptr || jText == nullptr;
+        if (threw) {
+            env->ExceptionClear();
+        } else {
+            env->CallVoidMethod(activity, share, jTitle, jText);
+            threw = env->ExceptionCheck();
+            if (threw) {
+                env->ExceptionDescribe();
+                env->ExceptionClear();
+            }
+        }
+        if (jTitle) env->DeleteLocalRef(jTitle);
+        if (jText) env->DeleteLocalRef(jText);
+        shared = !threw;
+    }
+    if (type) env->DeleteLocalRef(type);
+    if (attached) vm->DetachCurrentThread();
+    return shared;
+}
+
 bool ShowMessage(const std::string& title, const std::string& utf8Text) {
     SUPERSONIC_LOG_INFO("Android") << "Message for the player: " << title << ": " << utf8Text;
     if (!g.app || !g.app->activity || !g.app->activity->vm || !g.app->activity->clazz) return false;

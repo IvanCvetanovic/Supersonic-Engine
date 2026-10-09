@@ -36,6 +36,12 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     : m_styleUi(std::move(styleUi)), m_deviceRef(device), m_swapchainRef(swapchain),
       m_windowRef(window) {
 
+    // The first thing, so that every pipeline built from here on can use it: the scene target (made by the editor layer
+    // before the scene pipelines exist) hands this cache to its bloom chain, which until now got a null one and compiled
+    // three pipelines from SPIR-V at every launch and at every resize of the target; ImGui's pipeline did the same at
+    // every launch. A cache can only make creation faster (a stale one is discarded by its header check).
+    m_pipelineCache = std::make_unique<PipelineCache>(m_deviceRef, "cache/pipeline_cache.bin");
+
     createRenderPass();
     createFramebuffers();
     createCommandPool();
@@ -196,7 +202,7 @@ void VulkanRenderer::RecreateSwapchain() {
     if (width == 0 || height == 0 || !m_deviceRef.GetSurface()) return;
 #endif
 
-    m_deviceRef.GetDevice().waitIdle();
+    { Profiler::DrainScope drain; m_deviceRef.GetDevice().waitIdle(); }
     cleanupSwapchain();
 
     m_swapchainRef.Recreate(m_windowRef);
@@ -611,6 +617,9 @@ void VulkanRenderer::createGraphicsPipeline() {
         pumpStartup();
     }
 
+    // Again, now that the shape and overlay pipelines and ImGui's are in it too (a save with nothing new in it writes nothing).
+    m_pipelineCache->Save();
+
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "Scene, grid, shape, overlay and shadow pipelines created." << std::endl;
 }
 
@@ -798,7 +807,7 @@ void VulkanRenderer::updateEnvironmentDescriptors() {
     // rewritten while a command buffer that uses it is still executing. The
     // environment changes when a scene is loaded, so paying a full idle for it
     // costs nothing anyone can measure.
-    m_deviceRef.GetDevice().waitIdle();
+    { Profiler::DrainScope drain; m_deviceRef.GetDevice().waitIdle(); }
 
     // EVERY slot, whether it holds a real map or a black one. A binding
     // declared with descriptorCount N and written with fewer leaves the rest
@@ -1317,7 +1326,7 @@ void VulkanRenderer::initImGui() {
     initInfo.Device = static_cast<VkDevice>(m_deviceRef.GetDevice());
     initInfo.QueueFamily = m_deviceRef.GetQueueFamilyIndices().graphicsFamily.value();
     initInfo.Queue = static_cast<VkQueue>(m_deviceRef.GetGraphicsQueue());
-    initInfo.PipelineCache = VK_NULL_HANDLE;
+    initInfo.PipelineCache = static_cast<VkPipelineCache>(m_pipelineCache->Get());
     initInfo.DescriptorPool = static_cast<VkDescriptorPool>(m_imguiPool);
     initInfo.MinImageCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
     initInfo.ImageCount = static_cast<uint32_t>(m_swapchainRef.GetImages().size());

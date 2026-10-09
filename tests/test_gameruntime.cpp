@@ -12,6 +12,9 @@
 
 #include "TestHarness.hpp"
 #include "core/DynamicResolution.hpp"
+#include "core/FramePerf.hpp"
+#include "core/PerfOverlay.hpp"
+#include "core/Profiler.hpp"
 #include "core/GameRuntime.hpp"
 #include "core/Input.hpp"
 #include "core/Log.hpp"
@@ -1064,6 +1067,147 @@ static void testDynamicResolutionTakesANewConfigWhileRunning() {
     CHECK_EQ(changes, 0);
 }
 
+// Frames at a steady `milliseconds`, each with the given wait and game parts, until `seconds` have passed.
+static void feedFrames(FramePerfWindow& window, double seconds, float milliseconds, float waitMs, float gameMs) {
+    FramePerfSample sample;
+    sample.frameSeconds = milliseconds / 1000.0f;
+    sample.partMs[static_cast<std::size_t>(PerfPart::Wait)] = waitMs;
+    sample.partMs[static_cast<std::size_t>(PerfPart::Game)] = gameMs;
+    sample.ticks = 1;
+    for (double t = 0.0; t < seconds; t += sample.frameSeconds) window.Add(sample);
+}
+
+static void testFramePerfSummarisesAWindowOfFrames() {
+    FramePerfWindow window;
+    CHECK(!window.Ready(1.0));
+    feedFrames(window, 1.0, 16.7f, 2.0f, 5.0f);
+    CHECK_MSG(window.Ready(1.0) && !window.Ready(5.0), "a window is ready when its seconds have been gathered");
+    const int steadyFrames = window.Frames();
+
+    // One 200 ms hitch among them: the median ignores it, the maximum and the counts show it.
+    FramePerfSample hitch;
+    hitch.frameSeconds = 0.2f;
+    window.Add(hitch);
+    window.Add(FramePerfSample{});   // a frame with no time is not a measurement
+    const FramePerfSummary summary = window.Take();
+    CHECK_EQ(summary.frames, steadyFrames + 1);
+    CHECK_MSG(std::fabs(summary.medianMs - 16.7f) < 0.05f, "the median is the steady frame");
+    CHECK_MSG(std::fabs(summary.p95Ms - 16.7f) < 0.05f && std::fabs(summary.maxMs - 200.0f) < 0.05f, "the hitch is in the max only");
+    CHECK_EQ(summary.over33, 1);
+    CHECK_EQ(summary.over100, 1);
+    CHECK_MSG(summary.fps > 50.0f && summary.fps < 60.0f, "the rate is frames over seconds");
+    CHECK_MSG(window.Frames() == 0 && window.Seconds() == 0.0, "taking a window starts the next");
+    CHECK_NEAR(summary.meanPartMs[static_cast<std::size_t>(PerfPart::Wait)],
+               2.0f * static_cast<float>(steadyFrames) / static_cast<float>(steadyFrames + 1));
+
+    // The text: one log line short enough for a viewer that cuts at 170 characters, a readout of three short lines.
+    const std::string line = FormatPerfLine(summary, "scale 0.50 800x360 of 1600x720, 4x, Mailbox");
+    CHECK_MSG(line.rfind("Perf: ", 0) == 0 && line.find(" fps, frame 16.7 ms") != std::string::npos, "the line leads with the rate");
+    CHECK_MSG(line.size() <= 200, "and stays short");
+    const std::vector<std::string> readout = FormatPerfReadout(summary);
+    CHECK_EQ(readout.size(), 3u);
+    for (const std::string& text : readout) CHECK_MSG(text.size() <= 56, "a readout line fits the corner of a phone");
+}
+
+static void testPerfVerdictSaysWhereTheFrameWaited() {
+    const auto verdictOf = [](float waitMs, float gameMs, float drainMs) {
+        FramePerfWindow window;
+        FramePerfSample sample;
+        sample.frameSeconds = 0.020f;
+        sample.partMs[static_cast<std::size_t>(PerfPart::Wait)] = waitMs;
+        sample.partMs[static_cast<std::size_t>(PerfPart::Game)] = gameMs;
+        sample.partMs[static_cast<std::size_t>(PerfPart::Drain)] = drainMs;
+        for (int i = 0; i < 20; ++i) window.Add(sample);
+        return PerfVerdict(window.Take());
+    };
+    CHECK(verdictOf(15.0f, 3.0f, 0.0f).find("GPU or display bound") == 0);
+    CHECK(verdictOf(1.0f, 17.0f, 0.0f).find("CPU bound") == 0);
+    CHECK(verdictOf(7.0f, 11.0f, 0.0f).find("mixed") == 0);
+    CHECK_MSG(verdictOf(1.0f, 17.0f, 8.0f).find("stalls") == 0, "idle waits are their own verdict");
+    // An idle wait is the CPU waiting for the GPU as well: a frame whose wait is mostly idle waits is not CPU bound.
+    CHECK_MSG(verdictOf(1.0f, 17.0f, 4.0f).find("CPU bound") == std::string::npos, "and count as waiting");
+    CHECK(PerfVerdict(FramePerfSummary{}) == "no frames yet");
+}
+
+static void testThePerfOverlayKeepsAReportOfEachSizeMeasured() {
+    PerfOverlay::Environment environment;
+    environment.device = "Test phone";
+    environment.gpu = "Test GPU, Vulkan 1.1.0";
+    environment.presentMode = "Fifo";
+    environment.scene = "scenes/level1.esc";
+    environment.windowWidth = 1600;
+    environment.windowHeight = 720;
+    environment.sceneWidth = 800;
+    environment.sceneHeight = 360;
+    environment.samples = 4;
+    environment.scale = 0.5f;
+    environment.hasController = true;
+
+    // Off, nothing runs.
+    PerfOverlay quiet{PerfOverlay::Settings{}};
+    CHECK(!quiet.Active() && !quiet.Drawing());
+    FramePerfSample sample;
+    sample.frameSeconds = 0.020f;
+    quiet.Observe(sample, environment);
+    CHECK_MSG(quiet.BuildReport(environment).find("none yet") != std::string::npos, "an idle overlay measured nothing");
+
+    PerfOverlay::Settings settings;
+    settings.logSeconds = 3.0f;
+    PerfOverlay overlay(settings);
+    CHECK(overlay.Active() && !overlay.Drawing());
+    sample.partMs[static_cast<std::size_t>(PerfPart::Wait)] = 14.0f;
+    sample.partMs[static_cast<std::size_t>(PerfPart::Game)] = 4.0f;
+    for (double t = 0.0; t < 4.0; t += sample.frameSeconds) overlay.Observe(sample, environment);
+    CHECK_MSG(overlay.BuildReport(environment).find("none yet") != std::string::npos, "a size is measured after it has settled");
+    for (double t = 0.0; t < 6.0; t += sample.frameSeconds) overlay.Observe(sample, environment);
+    std::string report = overlay.BuildReport(environment);
+    CHECK_MSG(report.find("Auto (scale 0.50): 50.0 fps") != std::string::npos, "the size in force is in the report");
+    CHECK(report.find("Test phone") != std::string::npos && report.find("Test GPU, Vulkan 1.1.0") != std::string::npos);
+    CHECK(report.find("scenes/level1.esc") != std::string::npos && report.find("4x MSAA") != std::string::npos);
+    CHECK_MSG(report.find("GPU or display bound") != std::string::npos, "and what limited it");
+    CHECK_MSG(report.find("Perf: ") != std::string::npos, "with the lines it logged");
+
+    // Switching to another size keeps what the others measured, starts the new one empty and settles again.
+    overlay.SetActivePreset(2);
+    environment.scale = 0.6f;
+    report = overlay.BuildReport(environment);
+    CHECK_MSG(report.find("Auto (scale 0.50)") != std::string::npos, "the sizes already measured stay in the report");
+    CHECK_MSG(report.find("0.6 (scale") == std::string::npos && report.find("Size in force: 0.6") != std::string::npos,
+              "the new size starts empty");
+    CHECK_EQ(overlay.TakePresetRequest(), -1);
+
+    CHECK_MSG(PerfOverlay::PresetScale(0) < 0.0f && PerfOverlay::PresetScale(1) == 1.0f && PerfOverlay::PresetScale(4) == 0.3f,
+              "Auto is no fixed scale, the others are");
+    CHECK(std::string(PerfOverlay::PresetName(0)) == "Auto" && std::string(PerfOverlay::PresetName(4)) == "0.3");
+}
+
+static void testTheProfilerCountsAndTimesQueueDrains() {
+    Profiler::BeginFrame();
+    CHECK_EQ(Profiler::QueueDrains(), 0);
+    { Profiler::DrainScope first; }
+    { Profiler::DrainScope second; }
+    CHECK_EQ(Profiler::QueueDrains(), 2);
+    CHECK(Profiler::Milliseconds(ProfileZone::QueueDrain) >= 0.0);
+    CHECK(std::string(Profiler::Name(ProfileZone::QueueDrain)) == "Queue Drain");
+    Profiler::BeginFrame();
+    CHECK_MSG(Profiler::QueueDrains() == 0 && Profiler::Milliseconds(ProfileZone::QueueDrain) == 0.0, "a frame starts at zero");
+}
+
+static void testThePerfAndWatcherFieldsAreOffByDefaultAndNeverInTheManifestText() {
+    GameManifest plain;
+    CHECK_MSG(!plain.perfOverlay && plain.perfLogSeconds == 0.0f && plain.assetWatching, "a game that never heard of them is unchanged");
+    GameManifest asking;
+    asking.isGame = true;
+    asking.perfOverlay = true;
+    asking.perfLogSeconds = 5.0f;
+    asking.assetWatching = false;
+    GameManifest quiet;
+    quiet.isGame = true;
+    CHECK_MSG(GameRuntime::Serialize(asking) == GameRuntime::Serialize(quiet), "the manifest's text carries none of them");
+    const GameManifest reparsed = GameRuntime::Parse(GameRuntime::Serialize(asking));
+    CHECK_MSG(!reparsed.perfOverlay && reparsed.perfLogSeconds == 0.0f && reparsed.assetWatching, "nor reads them back");
+}
+
 static void testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo() {
     // Off the shelf the engine takes a Vulkan 1.2 GPU and nothing less: a game
     // that never heard of the setting behaves as it always did. A game that says
@@ -1423,6 +1567,11 @@ static void runTests() {
     testAStepThatDoesNotPayForItselfIsTakenBackAndNotRepeatedForAWhile();
     testAStepThatBoughtARealShareIsKeptAndNeverOscillates();
     testDynamicResolutionTakesANewConfigWhileRunning();
+    testFramePerfSummarisesAWindowOfFrames();
+    testPerfVerdictSaysWhereTheFrameWaited();
+    testThePerfOverlayKeepsAReportOfEachSizeMeasured();
+    testTheProfilerCountsAndTimesQueueDrains();
+    testThePerfAndWatcherFieldsAreOffByDefaultAndNeverInTheManifestText();
     testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo();
     testTheFileLogCarriesElapsedTimeOnlyWhenAsked();
     testHidingTheCursorIsTheSameRequestInputArbitrates();

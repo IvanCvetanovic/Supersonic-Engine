@@ -142,6 +142,36 @@ public class SupersonicActivity extends NativeActivity {
     }
 
     /**
+     * Offers `text` to the system's share sheet under `title`, with the end of the game's log (when the game
+     * names one in {@code supersonic.reportLog}) after it. For a game's own performance readout: the log of an
+     * installed app lives in its private files, which no file manager shows on Android 11 and later, so this is
+     * the only way a player's measurements reach the developer. Asked by the engine through JNI
+     * (Android::ShareText), any thread.
+     */
+    public void shareText(final String title, final String text) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    StringBuilder body = new StringBuilder(text);
+                    String tail = PostMortem.logTailText(SupersonicActivity.this, mReportLog, 60, 220);
+                    if (!tail.isEmpty()) body.append("
+
+End of the game's log:
+").append(tail);
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType("text/plain");
+                    send.putExtra(Intent.EXTRA_SUBJECT, title);
+                    send.putExtra(Intent.EXTRA_TEXT, body.toString());
+                    startActivity(Intent.createChooser(send, title));
+                } catch (RuntimeException e) {
+                    Log.w("Supersonic", "[Android] Share: could not be shared: " + e);
+                }
+            }
+        });
+    }
+
+    /**
      * The display mode for a refresh rate, asked by the engine from its own thread
      * (src/platform/android/AndroidApp.cpp, RequestRefreshRate). Among the modes at
      * the display's current resolution - a rate is not worth a resolution change -

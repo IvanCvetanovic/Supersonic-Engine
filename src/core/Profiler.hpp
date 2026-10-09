@@ -56,6 +56,11 @@ enum class ProfileZone : std::size_t {
     GameLayers,
 
     UndoCommit,
+
+    // Time spent waiting for a queue or the device to go idle (the one-off command buffers of a texture's first use, a mesh
+    // upload, a resize). A stall wherever it happens, and counted inside the zone it happened in as well, so it is the one
+    // zone that overlaps the others; Profiler::QueueDrains() says how many there were.
+    QueueDrain,
     Count,
 };
 
@@ -67,7 +72,11 @@ public:
     // a running total answers a question nobody is asking.
     static void BeginFrame() {
         for (double& ms : Accumulator()) ms = 0.0;
+        QueueDrainCount() = 0;
     }
+
+    // How many idle waits the frame just measured made (see ProfileZone::QueueDrain).
+    static int QueueDrains() { return QueueDrainCount(); }
 
     // Milliseconds spent in a zone during the frame just measured.
     static double Milliseconds(ProfileZone zone) {
@@ -80,10 +89,26 @@ public:
             "Sprites", "Transform", "Editor UI", "ImGui Render", "Resource Sync",
             "Pose Evaluation",
             "Frame Wait", "Frame Prepare", "Shadow Record", "Scene Record",
-            "Game Layers", "Undo Commit",
+            "Game Layers", "Undo Commit", "Queue Drain",
         };
         return kNames[static_cast<std::size_t>(zone)];
     }
+
+    // Around a call that waits for a queue or the device to go idle: counts it and times it into ProfileZone::QueueDrain.
+    class DrainScope {
+    public:
+        DrainScope() : m_start(std::chrono::steady_clock::now()) { ++QueueDrainCount(); }
+        ~DrainScope() {
+            const auto elapsed = std::chrono::steady_clock::now() - m_start;
+            Accumulator()[static_cast<std::size_t>(ProfileZone::QueueDrain)] +=
+                std::chrono::duration<double, std::milli>(elapsed).count();
+        }
+        DrainScope(const DrainScope&) = delete;
+        DrainScope& operator=(const DrainScope&) = delete;
+
+    private:
+        std::chrono::steady_clock::time_point m_start;
+    };
 
     // Accumulates rather than overwrites, so a zone entered more than once in a
     // frame - the fixed physics step, most obviously - reports the frame's
@@ -132,6 +157,11 @@ private:
     static std::array<double, kZoneCount>& Accumulator() {
         static std::array<double, kZoneCount> zones{};
         return zones;
+    }
+
+    static int& QueueDrainCount() {
+        static int count = 0;
+        return count;
     }
 };
 

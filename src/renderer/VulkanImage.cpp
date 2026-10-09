@@ -1,4 +1,5 @@
 #include "renderer/VulkanImage.hpp"
+#include "core/Profiler.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -287,7 +288,7 @@ void VulkanImage::TransitionLayout(
         throw std::runtime_error("Failed to submit image layout transition command buffer!");
     }
 
-    device.GetGraphicsQueue().waitIdle();
+    { Profiler::DrainScope drain; device.GetGraphicsQueue().waitIdle(); }
     device.GetDevice().freeCommandBuffers(commandPool, 1, &commandBuffer);
 }
 
@@ -406,7 +407,7 @@ bool VulkanImage::GenerateMipmaps(
     if (submitRes != vk::Result::eSuccess) {
         throw std::runtime_error("Failed to submit mipmap generation command buffer!");
     }
-    device.GetGraphicsQueue().waitIdle();
+    { Profiler::DrainScope drain; device.GetGraphicsQueue().waitIdle(); }
     device.GetDevice().freeCommandBuffers(commandPool, 1, &cmd);
 
     return canFilter;
@@ -477,7 +478,7 @@ void VulkanImage::UploadLayeredImage(
         throw std::runtime_error("Failed to submit a layered image upload!");
     }
 
-    device.GetGraphicsQueue().waitIdle();
+    { Profiler::DrainScope drain; device.GetGraphicsQueue().waitIdle(); }
     device.GetDevice().freeCommandBuffers(commandPool, 1, &commandBuffer);
 }
 
@@ -523,7 +524,7 @@ void VulkanImage::CopyBufferToImage(
         throw std::runtime_error("Failed to submit buffer-to-image copy command buffer!");
     }
 
-    device.GetGraphicsQueue().waitIdle();
+    { Profiler::DrainScope drain; device.GetGraphicsQueue().waitIdle(); }
     device.GetDevice().freeCommandBuffers(commandPool, 1, &commandBuffer);
 }
 

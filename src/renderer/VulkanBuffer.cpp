@@ -1,4 +1,5 @@
 #include "renderer/VulkanBuffer.hpp"
+#include "core/Profiler.hpp"
 
 #include <cstring>
 #include <iostream>
@@ -121,7 +122,7 @@ void VulkanBuffer::CopyBuffer(
         throw std::runtime_error("Failed to submit buffer copy command buffer!");
     }
 
-    device.GetGraphicsQueue().waitIdle();
+    { Profiler::DrainScope drain; device.GetGraphicsQueue().waitIdle(); }
     device.GetDevice().freeCommandBuffers(commandPool, 1, &commandBuffer);
 }
 

@@ -35,6 +35,10 @@
 #include "core/SceneSerializer.hpp"
 #include "core/PrefabSerializer.hpp"
 #include "platform/ExecutablePath.hpp"
+#include "platform/SafeArea.hpp"
+#if defined(__ANDROID__)
+#include "platform/android/AndroidApp.hpp"
+#endif
 #include "editor/Theme.hpp"
 #include "editor/EditorFonts.hpp"
 
@@ -355,10 +359,24 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
                 resolution.startScale, static_cast<float>(std::sqrt(resolution.startMaxPixels / windowPixels)));
         }
         m_dynamicResolution = std::make_unique<DynamicResolution>(resolution);
+        m_resolutionConfig = resolution;
         startScale = m_dynamicResolution->Scale();
         SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: starts at " << startScale
                                              << " of the window (target " << m_manifest.dynamicResolution.targetFps
                                              << " fps).";
+    }
+    if (m_manifest.perfOverlay || m_manifest.perfLogSeconds > 0.0f) {
+        PerfOverlay::Settings perf;
+        perf.overlay = m_manifest.perfOverlay;
+        perf.logSeconds = m_manifest.perfLogSeconds;
+        m_perf = std::make_unique<PerfOverlay>(perf);
+        const vk::PhysicalDeviceProperties gpu = m_vulkanDevice->GetPhysicalDevice().getProperties();
+        m_perfEnv.gpu = std::string(gpu.deviceName.data()) + ", Vulkan " + std::to_string(VK_API_VERSION_MAJOR(gpu.apiVersion)) +
+                        "." + std::to_string(VK_API_VERSION_MINOR(gpu.apiVersion)) + "." +
+                        std::to_string(VK_API_VERSION_PATCH(gpu.apiVersion));
+#if defined(__ANDROID__)
+        m_perfEnv.device = Android::DeviceSummary();
+#endif
     }
     m_editorLayer = std::make_unique<EditorLayer>();
     m_editorLayer->Init(*m_vulkanDevice,
@@ -1118,6 +1136,28 @@ void SupersonicApp::initECS() {
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Scene created." << std::endl;
 }
 
+void SupersonicApp::RefreshPerfEnvironment() {
+    PerfOverlay::Environment& env = m_perfEnv;
+    const vk::Extent2D window = m_swapchain->GetExtent();
+    const VulkanOffscreen& offscreen = m_editorLayer->GetOffscreen();
+    env.windowWidth = window.width;
+    env.windowHeight = window.height;
+    env.sceneWidth = offscreen.GetWidth();
+    env.sceneHeight = offscreen.GetHeight();
+    env.samples = static_cast<int>(offscreen.GetSampleCount());
+    env.scale = m_dynamicResolution ? m_dynamicResolution->Scale()
+                                    : (window.width > 0 ? static_cast<float>(env.sceneWidth) / static_cast<float>(window.width) : 1.0f);
+    // Strings are assigned only when they changed: this runs every frame, and on a phone an allocation a frame is a cost
+    // the readout should not add to what it measures.
+    if (env.presentMode != m_swapchain->PresentModeName()) env.presentMode = m_swapchain->PresentModeName();
+    if (env.scene != m_sceneManager.CurrentPath()) env.scene = m_sceneManager.CurrentPath();
+    env.hasController = m_dynamicResolution != nullptr;
+    env.atFloorMissed = m_dynamicResolution && m_dynamicResolution->AtTheFloor() && m_dynamicResolution->WindowMissedTheTarget();
+    const SafeAreaInsets safe = SafeArea::Get();
+    env.safeLeft = safe.left;
+    env.safeTop = safe.top;
+}
+
 void SupersonicApp::Run() {
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Starting Main 3D Game Loop..." << std::endl;
     // From here the frame loop reads the window's events itself.
@@ -1329,6 +1369,26 @@ void SupersonicApp::Run() {
             }
             break;
         }
+        // The frame that just ended, for the perf log and readout: the zones are zeroed by BeginFrame just below and the
+        // layers run after it, so this is the one place where they are all complete and still there.
+        FramePerfSample perfSample;
+        const bool perfMeasures = m_perf && m_perf->Active() && frame > 0;
+        if (perfMeasures) {
+            const auto ms = [](ProfileZone zone) { return static_cast<float>(Profiler::Milliseconds(zone)); };
+            auto& parts = perfSample.partMs;
+            parts[static_cast<std::size_t>(PerfPart::Wait)] = ms(ProfileZone::FrameWait);
+            parts[static_cast<std::size_t>(PerfPart::Prepare)] = ms(ProfileZone::FramePrepare);
+            parts[static_cast<std::size_t>(PerfPart::Shadow)] = ms(ProfileZone::ShadowRecord);
+            parts[static_cast<std::size_t>(PerfPart::Scene)] = ms(ProfileZone::SceneRecord);
+            parts[static_cast<std::size_t>(PerfPart::Sync)] = ms(ProfileZone::ResourceSync);
+            parts[static_cast<std::size_t>(PerfPart::Game)] = ms(ProfileZone::GameLayers);
+            parts[static_cast<std::size_t>(PerfPart::Transform)] = ms(ProfileZone::Transform);
+            parts[static_cast<std::size_t>(PerfPart::Ui)] = ms(ProfileZone::EditorUI) + ms(ProfileZone::ImGuiRender);
+            parts[static_cast<std::size_t>(PerfPart::Drain)] = ms(ProfileZone::QueueDrain);
+            perfSample.drains = Profiler::QueueDrains();
+            perfSample.ticks = m_perfTicks;
+        }
+        m_perfTicks = 0;
         ++frame;
         Profiler::BeginFrame();
 
@@ -1522,12 +1582,19 @@ void SupersonicApp::Run() {
                 ? static_cast<double>(rawDelta - kMaxFrameDelta)
                 : 0.0;
 
+        // The wall time of the iteration that ended, unclamped: the readout must say what the player saw.
+        if (perfMeasures) {
+            perfSample.frameSeconds = rawDelta;
+            RefreshPerfEnvironment();
+            m_perf->Observe(perfSample, m_perfEnv);
+        }
+
         // Swap in a rebuilt script plugin. Cheap: one stat unless it changed.
         m_hotReload->Poll();
 
         // Same cadence and same reasoning as the plugin poll above: a stat per
         // watched path, and only a changed write time costs anything.
-        m_assetWatcher.Poll();
+        if (m_manifest.assetWatching) m_assetWatcher.Poll();
         if (m_options.maxFrames > 0 && frame == 2) {
             SUPERSONIC_LOG_INFO("SelfCheck") << "Watching "
                 << m_assetWatcher.WatchedCount() << " asset path(s) for changes.";
@@ -1542,6 +1609,20 @@ void SupersonicApp::Run() {
         // Nothing is recording and no draw data is live at this point.
         // The scene target's scale, from the speed of the frames so far (the whole of the controller is
         // DynamicResolution.hpp); a change is applied by the resize just below.
+        // A size the player tapped on the perf overlay: fixed for a measurement, or Auto (the game's own configuration).
+        if (m_perf && m_dynamicResolution) {
+            const int preset = m_perf->TakePresetRequest();
+            if (preset >= 0) {
+                DynamicResolutionConfig config = m_resolutionConfig;
+                const float fixed = PerfOverlay::PresetScale(preset);
+                if (fixed > 0.0f) config.startScale = config.minScale = config.maxScale = fixed;
+                m_dynamicResolution->Reconfigure(config);
+                m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
+                m_perf->SetActivePreset(preset);
+                SUPERSONIC_LOG_INFO("SupersonicApp") << "Perf: size " << PerfOverlay::PresetName(preset) << ", scale "
+                                                     << m_dynamicResolution->Scale() << ".";
+            }
+        }
         if (m_dynamicResolution && m_dynamicResolution->Observe(rawDelta)) {
             m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
             SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: scale " << m_dynamicResolution->Scale()
@@ -1807,6 +1888,8 @@ void SupersonicApp::Run() {
                 m_physicsAccumulator = 0.0f;
             }
 
+            m_perfTicks = steps;
+
             // HOW FAR INTO THE NEXT TICK THIS FRAME IS. Written after the loop,
             // because it is exactly the remainder the loop could not consume.
             clock.alpha = gameTick > 0.0f
@@ -1864,6 +1947,7 @@ void SupersonicApp::Run() {
                                          m_hotReload->GetStatus(),
                                          m_hotReload->GetReloadCount());
         { SUPERSONIC_PROFILE(EditorUI);    m_editorLayer->BuildUI(m_registry, *m_window); }
+        if (m_perf && m_perf->Drawing()) m_perf->Draw(m_perfEnv);
 
         // After BuildUI, not inside it. A queued scene load clears and refills
         // the registry, and BuildUI runs while every panel is iterating views
@@ -1964,49 +2048,51 @@ void SupersonicApp::Run() {
         // by drag-and-drop or by loading a scene starts being watched without
         // anyone remembering to say so. Watch() returns immediately for a path
         // it already knows, so this is a hash lookup per asset per frame.
-        for (auto [entity, mesh] : m_registry.view<MeshComponent>().each()) {
-            if (!mesh.filePath.empty()) m_assetWatcher.Watch(mesh.filePath);
-        }
-        for (auto [entity, material] : m_registry.view<MaterialComponent>().each()) {
-            if (!material.albedoTexturePath.empty()) m_assetWatcher.Watch(material.albedoTexturePath);
-            if (!material.normalTexturePath.empty()) m_assetWatcher.Watch(material.normalTexturePath);
-            // Every texture a material names, or editing that one and saving it
-            // does nothing at all: the watcher never fires, so Invalidate never
-            // runs, so the registry's generation never moves, so the resource
-            // signature never changes and SyncResources never re-acquires it.
-            // The whole chain is silent from the first missing line.
-            if (!material.ormTexturePath.empty()) m_assetWatcher.Watch(material.ormTexturePath);
+        if (m_manifest.assetWatching) {
+            for (auto [entity, mesh] : m_registry.view<MeshComponent>().each()) {
+                if (!mesh.filePath.empty()) m_assetWatcher.Watch(mesh.filePath);
+            }
+            for (auto [entity, material] : m_registry.view<MaterialComponent>().each()) {
+                if (!material.albedoTexturePath.empty()) m_assetWatcher.Watch(material.albedoTexturePath);
+                if (!material.normalTexturePath.empty()) m_assetWatcher.Watch(material.normalTexturePath);
+                // Every texture a material names, or editing that one and saving it
+                // does nothing at all: the watcher never fires, so Invalidate never
+                // runs, so the registry's generation never moves, so the resource
+                // signature never changes and SyncResources never re-acquires it.
+                // The whole chain is silent from the first missing line.
+                if (!material.ormTexturePath.empty()) m_assetWatcher.Watch(material.ormTexturePath);
 
-            // NOT the overlay, and the exception is deliberate. An overlay is
-            // one sprite's own baked light, so a 2D game names hundreds of them
-            // in a session - Magic Portals ships 730 lightmaps, at most 21 in a
-            // level - and Watch never forgets a path. Every watched path is a
-            // stat on every frame, and one pass of stats over those 730 files
-            // (a script's, not this watcher's) took 4.6 to 6.6 ms: a third of a
-            // 60 Hz frame. So an edited overlay file is read again only when
-            // something invalidates its path, as a game unloading a level does,
-            // until the watcher has the platform backend its own header says
-            // is due in the hundreds.
+                // NOT the overlay, and the exception is deliberate. An overlay is
+                // one sprite's own baked light, so a 2D game names hundreds of them
+                // in a session - Magic Portals ships 730 lightmaps, at most 21 in a
+                // level - and Watch never forgets a path. Every watched path is a
+                // stat on every frame, and one pass of stats over those 730 files
+                // (a script's, not this watcher's) took 4.6 to 6.6 ms: a third of a
+                // 60 Hz frame. So an edited overlay file is read again only when
+                // something invalidates its path, as a game unloading a level does,
+                // until the watcher has the platform backend its own header says
+                // is due in the hundreds.
 
-            // And the shared asset itself. The three paths above are the
-            // RESOLVED ones Sync copied out of it, so without this line editing
-            // a .material in a text editor changes nothing until a restart -
-            // and worse, editing it to name a DIFFERENT texture leaves the old
-            // texture watched and the new one not.
-            if (!material.materialPath.empty()) m_assetWatcher.Watch(material.materialPath);
-        }
+                // And the shared asset itself. The three paths above are the
+                // RESOLVED ones Sync copied out of it, so without this line editing
+                // a .material in a text editor changes nothing until a restart -
+                // and worse, editing it to name a DIFFERENT texture leaves the old
+                // texture watched and the new one not.
+                if (!material.materialPath.empty()) m_assetWatcher.Watch(material.materialPath);
+            }
 
-        // And the sounds. Iterating on a footstep meant restarting the editor
-        // for exactly the same reason a material did.
-        for (auto [entity, source] : m_registry.view<AudioSourceComponent>().each()) {
-            if (!source.soundFile.empty()) m_assetWatcher.Watch(source.soundFile);
-        }
+            // And the sounds. Iterating on a footstep meant restarting the editor
+            // for exactly the same reason a material did.
+            for (auto [entity, source] : m_registry.view<AudioSourceComponent>().each()) {
+                if (!source.soundFile.empty()) m_assetWatcher.Watch(source.soundFile);
+            }
 
-        // A hull collider that names its own source. When it names none it is
-        // built from the entity's own mesh, which the loop above already
-        // watches - so only this case was outside everything.
-        for (auto [entity, hull] : m_registry.view<ConvexHullColliderComponent>().each()) {
-            if (!hull.sourcePath.empty()) m_assetWatcher.Watch(hull.sourcePath);
+            // A hull collider that names its own source. When it names none it is
+            // built from the entity's own mesh, which the loop above already
+            // watches - so only this case was outside everything.
+            for (auto [entity, hull] : m_registry.view<ConvexHullColliderComponent>().each()) {
+                if (!hull.sourcePath.empty()) m_assetWatcher.Watch(hull.sourcePath);
+            }
         }
 
         {

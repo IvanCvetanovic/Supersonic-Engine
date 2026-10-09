@@ -72,6 +72,12 @@ bool PumpEvents();
 // refused, and then the text is only in the log.
 bool ShowMessage(const std::string& title, const std::string& utf8Text);
 
+// Offers `utf8Text` to the system's share sheet under `title` (SupersonicActivity.shareText, through JNI), the end of the
+// game's log appended when the game names one. For a game's own performance readout: on Android 11 and later no file
+// manager shows an app's private files, so this is how a player's measurements reach the developer. Returns at once; false
+// when the activity is not a SupersonicActivity or the call failed. Any thread.
+bool ShareText(const std::string& title, const std::string& utf8Text);
+
 // ---- For the platform classes beside this file ------------------------------
 
 ANativeWindow* CurrentWindow();
