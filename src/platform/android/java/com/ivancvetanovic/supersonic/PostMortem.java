@@ -353,8 +353,7 @@ final class PostMortem {
     static String logTailText(Context context, String logPath, int count, int chars) {
         if (logPath == null || logPath.isEmpty()) return "";
         StringBuilder out = new StringBuilder();
-        for (String line : logTail(new File(context.getFilesDir(), logPath), count, chars)) out.append(line).append('
-');
+        for (String line : logTail(new File(context.getFilesDir(), logPath), count, chars)) out.append(line).append('\n');
         return out.toString();
     }
 

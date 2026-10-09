@@ -155,10 +155,7 @@ public class SupersonicActivity extends NativeActivity {
                 try {
                     StringBuilder body = new StringBuilder(text);
                     String tail = PostMortem.logTailText(SupersonicActivity.this, mReportLog, 60, 220);
-                    if (!tail.isEmpty()) body.append("
-
-End of the game's log:
-").append(tail);
+                    if (!tail.isEmpty()) body.append("\n\nEnd of the game's log:\n").append(tail);
                     Intent send = new Intent(Intent.ACTION_SEND);
                     send.setType("text/plain");
                     send.putExtra(Intent.EXTRA_SUBJECT, title);

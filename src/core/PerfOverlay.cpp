@@ -22,6 +22,12 @@ constexpr double kPresetResultSeconds = 5.0;
 constexpr double kPresetSettleSeconds = 2.5;
 constexpr std::size_t kRecentLines = 12;
 constexpr double kNoticeSeconds = 3.0;
+// A fingertip is about 8 mm; ImGui's default button is 2 to 4 mm on a phone. The panel is a test tool, so its buttons take the
+// room they need and its text a little more than the default.
+constexpr float kFontScale = 1.25f;
+constexpr float kButtonPaddingX = 16.0f;
+constexpr float kButtonPaddingY = 12.0f;
+constexpr float kItemSpacing = 12.0f;
 
 constexpr float kPresetScales[PerfOverlay::kPresetCount] = {-1.0f, 1.0f, 0.6f, 0.4f, 0.3f};
 constexpr const char* kPresetNames[PerfOverlay::kPresetCount] = {"Auto", "1.0", "0.6", "0.4", "0.3"};
@@ -163,15 +169,19 @@ void PerfOverlay::Draw(const Environment& environment) {
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                                    ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kButtonPaddingX, kButtonPaddingY));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(kItemSpacing, kItemSpacing * 0.6f));
     if (!ImGui::Begin("##perfoverlay", nullptr, flags)) {
         ImGui::End();
+        ImGui::PopStyleVar(2);
         return;
     }
+    ImGui::SetWindowFontScale(kFontScale);
 
-    if (ImGui::SmallButton(m_collapsed ? "perf +" : "perf -")) m_collapsed = !m_collapsed;
+    if (ImGui::Button(m_collapsed ? "perf +" : "perf -")) m_collapsed = !m_collapsed;
     if (!m_collapsed) {
         ImGui::SameLine();
-        if (ImGui::SmallButton("Share")) Share(environment);
+        if (ImGui::Button("Share")) Share(environment);
         if (m_noticeSeconds > 0.0) {
             ImGui::SameLine();
             ImGui::TextUnformatted(m_notice.c_str());
@@ -192,12 +202,13 @@ void PerfOverlay::Draw(const Environment& environment) {
                 ImGui::SameLine();
                 const bool active = i == m_activePreset;
                 if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-                if (ImGui::SmallButton(kPresetNames[i]) && !active) m_requestedPreset = i;
+                if (ImGui::Button(kPresetNames[i]) && !active) m_requestedPreset = i;
                 if (active) ImGui::PopStyleColor();
             }
         }
     }
     ImGui::End();
+    ImGui::PopStyleVar(2);
 }
 
 } // namespace Supersonic
