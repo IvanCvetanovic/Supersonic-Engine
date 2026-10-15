@@ -8,6 +8,7 @@
 
 #include "core/DynamicResolution.hpp"
 #include "core/PerfOverlay.hpp"
+#include "core/RenderScaleControl.hpp"
 #include "core/WorldShapes.hpp"
 #include "core/ScreenOverlay.hpp"
 
@@ -162,6 +163,16 @@ private:
     // The controller's configuration as the game gave it (with the start size the budget chose), kept so that the overlay's
     // Auto preset can restore it after a fixed size was tried.
     DynamicResolutionConfig m_resolutionConfig;
+    // What a game may ask of the size (RenderScaleControl.hpp), published into the registry context. The scale the controller
+    // started at (a fixed request is a share of it), the floor as the game declared it before the pixel floor raised it, the
+    // window height that floor was last worked out for, and whether the picture is held at a fixed size (by a request or by
+    // the overlay's presets) so that a window's resize does not move the floor under it.
+    RenderScaleControl m_renderScaleControl;
+    float m_controllerStartScale{1.0f};
+    DynamicResolutionConfig m_declaredResolution;   // as the game gave it, with the start size its budget chose
+    std::uint32_t m_floorWindowHeight{0};
+    bool m_scalePinned{false};
+    float m_pinnedFraction{0.0f};   // the share of the start size a request pinned the picture at; 0 where the overlay pinned it
 
     // The readout and log of how the frames run (PerfOverlay.hpp); null unless the manifest asks. The ticks the last
     // iteration ran, because the loop reads the previous iteration's profiler zones at the top of the next.

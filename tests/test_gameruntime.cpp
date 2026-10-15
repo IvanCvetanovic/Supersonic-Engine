@@ -15,6 +15,7 @@
 #include "core/FramePerf.hpp"
 #include "core/PerfOverlay.hpp"
 #include "core/Profiler.hpp"
+#include "core/RenderScaleControl.hpp"
 #include "core/GameRuntime.hpp"
 #include "core/Input.hpp"
 #include "core/Log.hpp"
@@ -827,6 +828,11 @@ static void testTheScenePerformanceOptInsAreOffByDefaultAndNeverInTheManifestsTe
     asking.spritesOnlyScenePipelines = true;
     asking.dynamicResolution.enabled = true;
     asking.dynamicResolution.startScale = 0.5f;
+    asking.dynamicResolution.relaxedRise = true;        // E47
+    asking.dynamicResolution.riseMargin = 1.4f;
+    asking.dynamicResolution.minTargetHeight = 360;
+    asking.dynamicResolution.emergencyBelowFps = 30.0f;
+    asking.dynamicResolution.emergencyScale = 0.3f;
     GameManifest quiet;
     quiet.isGame = true;
     CHECK_MSG(GameRuntime::Serialize(asking) == GameRuntime::Serialize(quiet), "the manifest's text must carry neither");
@@ -1065,6 +1071,409 @@ static void testDynamicResolutionTakesANewConfigWhileRunning() {
     int changes = 0;
     for (int i = 0; i < 300; ++i) changes += controller.Observe(0.2f) ? 1 : 0;
     CHECK_EQ(changes, 0);
+}
+
+
+// ---- E47: the way up that does not need 110 fps, the floor in pixels, and the player's say over the size ----------------
+
+// Simulated seconds at a frame of `fixedSeconds` + `pixelSeconds` x scale squared; counts the rises and the falls.
+struct RiseRun {
+    int rises{0};
+    int falls{0};
+    double seconds{0.0};
+};
+
+static RiseRun driveCountingRises(DynamicResolution& controller, double fixedSeconds, double pixelSeconds, double seconds) {
+    RiseRun run;
+    double elapsed = 0.0;
+    while (elapsed < seconds) {
+        const float scale = controller.Scale();
+        const double frame = fixedSeconds + pixelSeconds * scale * scale;
+        elapsed += frame;
+        if (controller.Observe(static_cast<float>(frame))) {
+            if (controller.LastChangeWasARise()) ++run.rises;
+            else ++run.falls;
+        }
+    }
+    run.seconds = elapsed;
+    return run;
+}
+
+static void testTheOptInsOfE47AreOffByDefault() {
+    const DynamicResolutionConfig defaults;
+    CHECK_MSG(!defaults.relaxedRise && defaults.minTargetHeight == 0, "the controller is E41's unless a game asks");
+    CHECK_MSG(defaults.emergencyBelowFps == 0.0f && defaults.emergencyScale == 0.0f, "and its floor is a hard one");
+    DynamicResolution controller(defaults);
+    CHECK_MSG(!controller.LoopPaced(), "and a loop is unpaced until the engine says otherwise");
+}
+
+static void testARiseNeedsNo110FpsWhenTheGameAsksAndTheLoopIsNotPaced() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.startScale = 0.3f;
+
+    // A frame of 9.5 ms that ignores the picture's size plus 20 ms x scale squared: 88 fps at 0.3. E41 needs 110 fps for 8 s to
+    // raise the scale, and this frame can never show it (the fixed part alone is 105 fps), so a size once lost is lost.
+    DynamicResolution legacy(config);
+    const RiseRun still = driveCountingRises(legacy, 0.0095, 0.020, 300.0);
+    CHECK_EQ(still.rises + still.falls, 0);
+    CHECK_NEAR(legacy.Scale(), 0.3f);
+
+    // The same frame, relaxed: the scale climbs to where the frame is at the target again, in a few steps, and holds.
+    DynamicResolutionConfig relaxed = config;
+    relaxed.relaxedRise = true;
+    DynamicResolution rising(relaxed);
+    const RiseRun climb = driveCountingRises(rising, 0.0095, 0.020, 300.0);
+    CHECK_MSG(climb.rises >= 3 && climb.rises <= 10 && climb.falls == 0, "a few rises, no falls");
+    CHECK_MSG(rising.Scale() > 0.42f && rising.Scale() < 0.56f, "to where the frame still has room");
+    const double frame = 0.0095 + 0.020 * rising.Scale() * rising.Scale();
+    CHECK_MSG(frame <= 1.0 / (config.targetFps * DynamicResolution::kShortfallTolerance), "without a shortfall");
+    const RiseRun held = driveCountingRises(rising, 0.0095, 0.020, 180.0);
+    CHECK_EQ(held.rises + held.falls, 0);
+
+    // A GPU already at the target is left alone.
+    DynamicResolutionConfig full = relaxed;
+    full.startScale = 1.0f;
+    DynamicResolution steady(full);
+    const RiseRun leftAlone = driveCountingRises(steady, 0.0, 0.0175, 240.0);
+    CHECK_EQ(leftAlone.rises + leftAlone.falls, 0);
+
+    // A loop the display paces cannot show room: a window never reads above the refresh rate, so the rule stands down and
+    // the controller is E41's.
+    DynamicResolution paced(relaxed);
+    paced.SetLoopPaced(true);
+    const RiseRun pacedRun = driveCountingRises(paced, 0.0095, 0.020, 300.0);
+    CHECK_EQ(pacedRun.rises + pacedRun.falls, 0);
+    CHECK_NEAR(paced.Scale(), 0.3f);
+
+    // 110 fps still raises it, with or without the option (the old way is not removed).
+    DynamicResolution fast(config);
+    CHECK_MSG(driveCountingRises(fast, 0.0, 0.003, 120.0).rises >= 1, "a GPU with a lot of room rises as before");
+}
+
+static void testARiseThatDoesNotHoldWaitsBeforeTheNextOne() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.startScale = 0.3f;
+    config.relaxedRise = true;
+    DynamicResolution controller(config);
+
+    // Climb until the first rise.
+    int guard = 0;
+    while (guard++ < 20000) {
+        const float scale = controller.Scale();
+        const double frame = 0.0095 + 0.020 * scale * scale;
+        if (controller.Observe(static_cast<float>(frame)) && controller.LastChangeWasARise()) break;
+    }
+    CHECK_MSG(controller.LastChangeWasARise(), "the first rise came");
+    const float afterRise = controller.Scale();
+
+    // The scene gets eight times heavier in pixels a few seconds later (a shortfall at once, and one a smaller picture cures):
+    // the rise did not hold.
+    int falls = 0;
+    for (double t = 0.0; t < 8.0;) {
+        const float scale = controller.Scale();
+        const double frame = 0.0095 + 0.160 * scale * scale;
+        t += frame;
+        if (controller.Observe(static_cast<float>(frame)) && !controller.LastChangeWasARise()) ++falls;
+    }
+    CHECK_MSG(falls >= 1 && controller.Scale() < afterRise, "the heavier frames brought the scale down");
+
+    // The scene is light again. For the hold (60 s) no rise is taken, however calm the frames are...
+    const RiseRun during = driveCountingRises(controller, 0.0095, 0.020, 40.0);
+    CHECK_MSG(during.rises == 0, "no new rise while the hold runs");
+    // ...and once it has passed, it climbs again.
+    const RiseRun after = driveCountingRises(controller, 0.0095, 0.020, 200.0);
+    CHECK_MSG(after.rises >= 1, "the way up is open again");
+}
+
+static void testThePixelFloorIsTheScaleThatKeepsTheTargetTallEnough() {
+    CHECK_NEAR(DynamicResolution::FloorForTargetHeight(0.3f, 1.0f, 720, 360), 0.5f);     // a phone's 1600x720: 800x360
+    CHECK_NEAR(DynamicResolution::FloorForTargetHeight(0.3f, 1.0f, 1600, 360), 0.3f);    // a tablet's 1600 lines: the old floor binds
+    CHECK_NEAR(DynamicResolution::FloorForTargetHeight(0.3f, 1.0f, 1080, 360), 0.34f);   // rounded UP: 0.33 would be 356 lines
+    CHECK_NEAR(DynamicResolution::FloorForTargetHeight(0.3f, 1.0f, 0, 360), 0.3f);       // no window yet: the floor as given
+    CHECK_NEAR(DynamicResolution::FloorForTargetHeight(0.3f, 1.0f, 720, 0), 0.3f);       // no pixel floor asked
+    CHECK_NEAR(DynamicResolution::FloorForTargetHeight(0.3f, 0.4f, 480, 360), 0.4f);     // never above the ceiling
+    CHECK_NEAR(DynamicResolution::FloorForTargetHeight(0.6f, 1.0f, 1600, 360), 0.6f);    // never below the floor as given
+
+    // The target a scale makes (the window's height times the scale, truncated and made even: EditorLayer::ScaledExtent) is at
+    // least that many lines high, for every window height and every floor in pixels the picture can have, whatever the float
+    // arithmetic does to the product (a 150-line window at 0.84 is 125.99999 lines, not 126).
+    for (std::uint32_t height = 100; height <= 3000; height += 7) {
+        for (const std::uint32_t lines : {126u, 240u, 360u, 480u, 720u}) {
+            if (lines > height) continue;
+            const float scale = DynamicResolution::FloorForTargetHeight(0.3f, 1.0f, height, lines);
+            const std::uint32_t target = scale >= 1.0f ? height : (static_cast<std::uint32_t>(static_cast<float>(height) * scale) & ~1u);
+            CHECK_MSG(target >= lines, "a " + std::to_string(height) + "-line window with a floor of " + std::to_string(lines) +
+                                           " lines made a target of " + std::to_string(target));
+        }
+    }
+}
+
+static void testTheFloorGivesWayOnlyWhenTheGameWouldBeUnplayablySlow() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.minScale = 0.5f;              // the floor of a picture worth looking at
+    config.emergencyScale = 0.3f;
+    config.emergencyBelowFps = 30.0f;
+
+    // 90 ms at full size and all of it following the pixel count: 22.5 ms at the floor, 44 fps. A shortfall, but a playable
+    // one: the picture stops at the floor and keeps its legibility.
+    DynamicResolution playable(config);
+    driveAStandInGpu(playable, 0.09, 4000);
+    CHECK_NEAR(playable.Scale(), 0.5f);
+
+    // 200 ms at full size: 50 ms at the floor, 20 fps. Not a speed anyone plays at: the scale goes on down to the emergency
+    // floor, where the same GPU draws in 18 ms.
+    DynamicResolution crawling(config);
+    driveAStandInGpu(crawling, 0.2, 4000);
+    CHECK_NEAR(crawling.Scale(), 0.3f);
+    CHECK_MSG(crawling.AtTheFloor(), "and the floor it is at is the emergency one");
+
+    // Without the speed that triggers it, the floor is a hard one (the emergency scale is ignored, not obeyed).
+    DynamicResolutionConfig hard = config;
+    hard.emergencyBelowFps = 0.0f;
+    DynamicResolution hardFloor(hard);
+    driveAStandInGpu(hardFloor, 0.2, 4000);
+    CHECK_NEAR(hardFloor.Scale(), 0.5f);
+
+    // An emergency scale that is not under the floor is no emergency scale at all.
+    DynamicResolutionConfig odd = config;
+    odd.emergencyScale = 0.8f;
+    DynamicResolution mended(odd);
+    driveAStandInGpu(mended, 0.2, 4000);
+    CHECK_NEAR(mended.Scale(), 0.5f);
+
+    // From the emergency floor the way up is the relaxed rise: when the GPU gets fast the picture climbs back over the
+    // comfortable floor and stays there, without hovering between the two.
+    DynamicResolutionConfig climbing = config;
+    climbing.relaxedRise = true;
+    DynamicResolution recovering(climbing);
+    driveAStandInGpu(recovering, 0.2, 4000);
+    CHECK_NEAR(recovering.Scale(), 0.3f);
+    const RiseRun back = driveCountingRises(recovering, 0.0, 0.02, 300.0);
+    CHECK_MSG(recovering.Scale() > 0.5f, "back over the comfortable floor");
+    CHECK_MSG(back.rises >= 2 && back.rises <= 8 && back.falls == 0, "in a few rises, with no fall between");
+    const RiseRun settled = driveCountingRises(recovering, 0.0, 0.02, 120.0);
+    CHECK_EQ(settled.rises + settled.falls, 0);
+}
+
+// Simulated seconds at a frame of `fixedSeconds` + `pixelSeconds` x scale squared, ignoring what changes.
+static void driveFor(DynamicResolution& controller, double fixedSeconds, double pixelSeconds, double seconds) {
+    for (double t = 0.0; t < seconds;) {
+        const float scale = controller.Scale();
+        const double frame = fixedSeconds + pixelSeconds * scale * scale;
+        t += frame;
+        controller.Observe(static_cast<float>(frame));
+    }
+}
+
+// The simulated seconds until the next rise on room, or -1 if none comes within `limit`.
+static double secondsUntilARise(DynamicResolution& controller, double fixedSeconds, double pixelSeconds, double limit) {
+    for (double t = 0.0; t < limit;) {
+        const float scale = controller.Scale();
+        const double frame = fixedSeconds + pixelSeconds * scale * scale;
+        t += frame;
+        if (controller.Observe(static_cast<float>(frame)) && controller.LastChangeWasARise()) return t;
+    }
+    return -1.0;
+}
+
+static void testARiseHoldDoublesWithEachFailureAndIsCapped() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.startScale = 0.3f;
+    config.relaxedRise = true;
+    DynamicResolution controller(config);
+
+    // A light scene: the picture climbs. Then a scene eight times heavier in pixels at once: the rise did not hold, and the
+    // next one waits 60 s, then 120, 240, 480 and (the cap) 480 again, each measured from the heavy scene's end.
+    CHECK_MSG(secondsUntilARise(controller, 0.0095, 0.020, 100.0) > 0.0, "the first rise");
+    const double holds[] = {60.0, 120.0, 240.0, 480.0, 480.0};
+    for (const double hold : holds) {
+        driveFor(controller, 0.0095, 0.160, 6.0);
+        const double wait = secondsUntilARise(controller, 0.0095, 0.020, 900.0);
+        CHECK_MSG(wait >= hold - 10.0 && wait <= hold + 45.0, "the next rise came after " + std::to_string(wait) + " s, the hold was " + std::to_string(hold));
+    }
+}
+
+static void testARiseThatHeldIsNotHeldAgainstTheNextFailureAndReconfigureForgets() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.startScale = 0.3f;
+    config.relaxedRise = true;
+
+    // After the trial (20 s without a shortfall) the rise is trusted: a heavy scene much later is an ordinary fall, with no hold.
+    DynamicResolution trusted(config);
+    driveFor(trusted, 0.0095, 0.020, 150.0);   // climbed and settled; the last rise is long past
+    driveFor(trusted, 0.0095, 0.160, 6.0);
+    const double quick = secondsUntilARise(trusted, 0.0095, 0.020, 300.0);
+    CHECK_MSG(quick > 0.0 && quick < 40.0, "no hold after a trusted rise: " + std::to_string(quick));
+
+    // A hold in force is forgotten by Reconfigure, as every other judgement is.
+    DynamicResolution held(config);
+    CHECK(secondsUntilARise(held, 0.0095, 0.020, 100.0) > 0.0);
+    driveFor(held, 0.0095, 0.160, 6.0);   // the rise did not hold: 60 s
+    held.Reconfigure(config);
+    const double forgotten = secondsUntilARise(held, 0.0095, 0.020, 300.0);
+    CHECK_MSG(forgotten > 0.0 && forgotten < 40.0, "Reconfigure forgot the hold: " + std::to_string(forgotten));
+}
+
+static void testTheRiseMarginSetsWhereTheWayUpOpens() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.startScale = 0.3f;
+    config.relaxedRise = true;
+    // 88 fps at 0.3 (9.5 ms + 20 ms x 0.09). The way up opens at 58 x 1.25 = 72.5 fps, so it climbs; with a margin of 1.8 it
+    // opens at 104 fps and does not.
+    DynamicResolution open(config);
+    CHECK(secondsUntilARise(open, 0.0095, 0.020, 100.0) > 0.0);
+    config.riseMargin = 1.8f;
+    DynamicResolution shut(config);
+    CHECK_MSG(secondsUntilARise(shut, 0.0095, 0.020, 200.0) < 0.0, "a margin of 1.8 asks for 104 fps");
+}
+
+static void testAFallIsMeasuredAtTheComfortableFloorFirst() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.minScale = 0.5f;
+    config.emergencyScale = 0.3f;
+    config.emergencyBelowFps = 30.0f;
+    // 5 fps at full size: the first step down stops at the comfortable floor, however slow the frame was, and is judged there.
+    DynamicResolution controller(config);
+    for (int guard = 0; guard < 400 && !controller.Observe(0.2f); ++guard) {}
+    CHECK_NEAR(controller.Scale(), 0.5f);
+    CHECK_MSG(!controller.AtTheFloor(), "the comfortable floor is not the floor the picture cannot go below");
+}
+
+static void testTheEmergencyFloorIsReachedFromJustAboveTheFloor() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.startScale = 0.51f;           // one hundredth above the floor: a step to it is under the controller's 0.01 test
+    config.minScale = 0.5f;
+    config.emergencyScale = 0.3f;
+    config.emergencyBelowFps = 30.0f;
+    DynamicResolution controller(config);
+    driveAStandInGpu(controller, 0.2, 4000);   // 52 ms at 0.51: 19 fps
+    CHECK_NEAR(controller.Scale(), 0.3f);
+
+    // And the same start on a playable GPU stays where it is, a hundredth over the floor.
+    DynamicResolution playable(config);
+    driveAStandInGpu(playable, 0.09, 4000);    // 23.4 ms at 0.51: 43 fps
+    CHECK_MSG(playable.Scale() >= 0.5f && playable.Scale() <= 0.51f, "a shortfall above 30 fps does not give up the picture");
+}
+
+static void testAFloorThatRoseLiftsAPictureThatHadFallenBelowIt() {
+    DynamicResolutionConfig config;
+    config.enabled = true;
+    config.minScale = 0.3f;
+    config.relaxedRise = true;
+    DynamicResolution controller(config);
+    driveAStandInGpu(controller, 0.117, 2000);   // a slow GPU: the picture settled low
+    CHECK(controller.Scale() < 0.5f);
+
+    // The window got shorter, so the floor is now 0.5 with the old floor kept for an emergency: the picture is lifted into the
+    // comfortable range and judged there, instead of being left under it.
+    DynamicResolutionConfig raised = DynamicResolution::ForWindow(
+        [&] { DynamicResolutionConfig declared = config; declared.minTargetHeight = 360; declared.emergencyBelowFps = 30.0f; return declared; }(), 720);
+    CHECK_NEAR(raised.minScale, 0.5f);
+    CHECK_NEAR(raised.emergencyScale, 0.3f);
+    controller.Reconfigure(raised);
+    CHECK_NEAR(controller.Scale(), 0.5f);
+}
+
+static void testAPinnedSizeHoldsWhateverTheGpuDoes() {
+    DynamicResolutionConfig declared;
+    declared.enabled = true;
+    declared.relaxedRise = true;
+    declared.minTargetHeight = 360;
+    declared.emergencyBelowFps = 30.0f;
+    const DynamicResolutionConfig forPhone = DynamicResolution::ForWindow(declared, 720);   // floor 0.5, emergency 0.3
+
+    // The controller has fallen to the emergency floor on a slow GPU...
+    DynamicResolution controller(forPhone);
+    driveAStandInGpu(controller, 0.4, 4000);
+    CHECK_NEAR(controller.Scale(), 0.3f);
+
+    // ...and the player pins the picture at 0.74: it is that at once, and stays that however slow the frames are (no emergency
+    // floor to fall to, no rise, no pixel floor).
+    const DynamicResolutionConfig pinned = DynamicResolution::Pinned(forPhone, 0.74f);
+    CHECK(!pinned.relaxedRise && pinned.emergencyBelowFps == 0.0f && pinned.emergencyScale == 0.0f && pinned.minTargetHeight == 0);
+    controller.Reconfigure(pinned);
+    CHECK_NEAR(controller.Scale(), 0.74f);
+    CHECK_EQ(driveAStandInGpu(controller, 0.4, 3000), 0);
+    CHECK_NEAR(controller.Scale(), 0.74f);
+    // And a fast GPU does not raise it.
+    CHECK_EQ(driveAStandInGpu(controller, 0.003, 6000), 0);
+    CHECK_NEAR(controller.Scale(), 0.74f);
+
+    // Back to automatic: the controller decides again from where it is.
+    controller.Reconfigure(forPhone);
+    CHECK(controller.Scale() >= 0.5f);
+}
+
+static void testTheDeclaredConfigIsWorkedOutForEachWindowHeight() {
+    DynamicResolutionConfig declared;
+    declared.minScale = 0.3f;
+    declared.minTargetHeight = 360;
+    declared.emergencyBelowFps = 30.0f;
+
+    // A phone's 720 lines: 0.5, the old floor kept for an emergency. A tablet's 1600: 0.3 is already more than 360 lines, so the
+    // pixel floor changes nothing and there is no emergency floor under it.
+    const DynamicResolutionConfig phone = DynamicResolution::ForWindow(declared, 720);
+    CHECK_NEAR(phone.minScale, 0.5f);
+    CHECK_NEAR(phone.emergencyScale, 0.3f);
+    const DynamicResolutionConfig tablet = DynamicResolution::ForWindow(declared, 1600);
+    CHECK_NEAR(tablet.minScale, 0.3f);
+    CHECK_NEAR(tablet.emergencyScale, 0.0f);
+    CHECK_NEAR(DynamicResolution::ForWindow(declared, 0).minScale, 0.3f);
+
+    // No emergency asked for: the raised floor is a hard one.
+    declared.emergencyBelowFps = 0.0f;
+    const DynamicResolutionConfig hard = DynamicResolution::ForWindow(declared, 720);
+    CHECK_NEAR(hard.minScale, 0.5f);
+    CHECK_NEAR(hard.emergencyScale, 0.0f);
+
+    // No pixel floor asked for: the declaration as it was, whatever the window.
+    declared.minTargetHeight = 0;
+    declared.emergencyBelowFps = 30.0f;
+    for (const std::uint32_t height : {0u, 240u, 720u, 1600u}) {
+        const DynamicResolutionConfig same = DynamicResolution::ForWindow(declared, height);
+        CHECK_NEAR(same.minScale, 0.3f);
+        CHECK_NEAR(same.emergencyScale, 0.0f);
+    }
+}
+
+static void testTheRenderScaleControlLatchesTheLastRequestAndDropsOneWithNothingToAsk() {
+    RenderScaleControl control;
+    RenderScaleRequest request;
+    CHECK_MSG(!control.Available() && control.Mode() == RenderScaleMode::Automatic, "nothing to ask before the engine says so");
+
+    // A request before there is a controller is dropped, not kept for later.
+    control.RequestFixed(0.5f);
+    control.Publish(false, 1.0f);
+    CHECK(!control.TakeRequest(&request));
+
+    control.Publish(true, 0.8f);
+    CHECK(control.Available());
+    CHECK_NEAR(control.CurrentScale(), 0.8f);
+    CHECK_MSG(!control.TakeRequest(&request), "nothing asked, nothing taken");
+
+    // The last request before the frame wins; taking it clears it; the mode reads back what was asked.
+    control.RequestFixed(0.5f);
+    control.RequestFixed(2.0f);          // above the window: held at the window's size
+    CHECK(control.Mode() == RenderScaleMode::Fixed);
+    CHECK(control.TakeRequest(&request));
+    CHECK(request.mode == RenderScaleMode::Fixed);
+    CHECK_NEAR(request.fraction, 1.0f);
+    CHECK(!control.TakeRequest(&request));
+    control.RequestFixed(-3.0f);         // nonsense: the smallest picture the controller allows, never zero
+    CHECK(control.TakeRequest(&request));
+    CHECK_MSG(request.fraction > 0.0f && request.fraction <= 0.11f, "a size that is not a size is the smallest, not zero");
+    control.RequestAutomatic();
+    CHECK(control.TakeRequest(&request));
+    CHECK(request.mode == RenderScaleMode::Automatic);
+    CHECK(control.Mode() == RenderScaleMode::Automatic);
 }
 
 // Frames at a steady `milliseconds`, each with the given wait and game parts, until `seconds` have passed.
@@ -1616,6 +2025,20 @@ static void runTests() {
     testAStepThatDoesNotPayForItselfIsTakenBackAndNotRepeatedForAWhile();
     testAStepThatBoughtARealShareIsKeptAndNeverOscillates();
     testDynamicResolutionTakesANewConfigWhileRunning();
+    testTheOptInsOfE47AreOffByDefault();
+    testARiseNeedsNo110FpsWhenTheGameAsksAndTheLoopIsNotPaced();
+    testARiseThatDoesNotHoldWaitsBeforeTheNextOne();
+    testThePixelFloorIsTheScaleThatKeepsTheTargetTallEnough();
+    testTheFloorGivesWayOnlyWhenTheGameWouldBeUnplayablySlow();
+    testARiseHoldDoublesWithEachFailureAndIsCapped();
+    testARiseThatHeldIsNotHeldAgainstTheNextFailureAndReconfigureForgets();
+    testTheRiseMarginSetsWhereTheWayUpOpens();
+    testAFallIsMeasuredAtTheComfortableFloorFirst();
+    testTheEmergencyFloorIsReachedFromJustAboveTheFloor();
+    testAFloorThatRoseLiftsAPictureThatHadFallenBelowIt();
+    testAPinnedSizeHoldsWhateverTheGpuDoes();
+    testTheDeclaredConfigIsWorkedOutForEachWindowHeight();
+    testTheRenderScaleControlLatchesTheLastRequestAndDropsOneWithNothingToAsk();
     testFramePerfSummarisesAWindowOfFrames();
     testPerfVerdictSaysWhereTheFrameWaited();
     testThePerfOverlayKeepsAReportOfEachSizeMeasured();

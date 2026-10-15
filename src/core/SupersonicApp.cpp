@@ -359,13 +359,25 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
             resolution.startScale = std::min(
                 resolution.startScale, static_cast<float>(std::sqrt(resolution.startMaxPixels / windowPixels)));
         }
+        // E47: a floor in pixels (opt-in), worked out for the window as it is now and again when its height changes.
+        m_declaredResolution = resolution;
+        m_floorWindowHeight = m_swapchain->GetExtent().height;
+        resolution = DynamicResolution::ForWindow(m_declaredResolution, m_floorWindowHeight);
         m_dynamicResolution = std::make_unique<DynamicResolution>(resolution);
+        // E47: a loop the display paces cannot show room, so the relaxed rise (opt-in) is for the unpaced ones.
+        const std::string& presentMode = m_swapchain->PresentModeName();
+        m_dynamicResolution->SetLoopPaced(presentMode == "Fifo" || presentMode == "FifoRelaxed");
         m_resolutionConfig = resolution;
         startScale = m_dynamicResolution->Scale();
+        m_controllerStartScale = startScale;
         SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: starts at " << startScale
                                              << " of the window (target " << m_manifest.dynamicResolution.targetFps
-                                             << " fps).";
+                                             << " fps, floor " << m_resolutionConfig.minScale << ", " << presentMode
+                                             << (m_dynamicResolution->LoopPaced() ? ", paced by the display" : "")
+                                             << (resolution.relaxedRise && !m_dynamicResolution->LoopPaced() ? ", relaxed rise" : "")
+                                             << ").";
     }
+    m_renderScaleControl.Publish(m_dynamicResolution != nullptr, startScale);
     if (m_manifest.perfOverlay || m_manifest.perfLogSeconds > 0.0f) {
         PerfOverlay::Settings perf;
         perf.overlay = m_manifest.perfOverlay;
@@ -503,6 +515,9 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     // requests and the queries and not the applying, which is the frame's job.
     m_registry.ctx().insert_or_assign<WindowControl*>(
         static_cast<WindowControl*>(m_windowControl.get()));
+
+    // And the size of the scene target, for a game's options screen (RenderScaleControl.hpp).
+    m_registry.ctx().insert_or_assign<RenderScaleControl*>(&m_renderScaleControl);
 
     // The two registries a game has to reach, and only those two.
     //
@@ -848,6 +863,7 @@ SupersonicApp::~SupersonicApp() {
     // The same, for the window control and the window it holds a reference
     // to, both of which go below.
     m_registry.ctx().erase<WindowControl*>();
+    m_registry.ctx().erase<RenderScaleControl*>();
 
     // Order matters: the editor frees an ImGui descriptor set, which must
     // happen before ImGui_ImplVulkan_Shutdown runs in ~VulkanRenderer.
@@ -1620,12 +1636,60 @@ void SupersonicApp::Run() {
         // The scene target's scale, from the speed of the frames so far (the whole of the controller is
         // DynamicResolution.hpp); a change is applied by the resize just below.
         // A size the player tapped on the perf overlay: fixed for a measurement, or Auto (the game's own configuration).
+        if (m_dynamicResolution) {
+            // E47: the window's height changed (a rotation, a split screen, a bar): the pixel floor is worked out again, and
+            // the controller is reconfigured only if the floor is not what it was - a Reconfigure forgets what the controller
+            // learned (its holds, its judgement), which a window that moved a few pixels must not cost a game that asked for
+            // no pixel floor. A picture held at a fixed size is not moved by it.
+            const std::uint32_t windowHeight = m_swapchain->GetExtent().height;
+            if (windowHeight != m_floorWindowHeight && windowHeight != 0) {
+                m_floorWindowHeight = windowHeight;
+                const DynamicResolutionConfig forWindow = DynamicResolution::ForWindow(m_declaredResolution, windowHeight);
+                if (forWindow.minScale != m_resolutionConfig.minScale || forWindow.emergencyScale != m_resolutionConfig.emergencyScale) {
+                    m_resolutionConfig = forWindow;
+                    if (!m_scalePinned) {
+                        m_dynamicResolution->Reconfigure(m_resolutionConfig);
+                        m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
+                    }
+                }
+            }
+            // E47: the player's request (a game's options row), before this frame's time is judged. One that asks for what the
+            // picture already is changes nothing (a Reconfigure forgets what was learned).
+            RenderScaleRequest request;
+            if (m_renderScaleControl.TakeRequest(&request)) {
+                const bool already = request.mode == RenderScaleMode::Fixed
+                                         ? (m_scalePinned && m_pinnedFraction == request.fraction)
+                                         : !m_scalePinned;
+                if (!already) {
+                    if (request.mode == RenderScaleMode::Fixed) {
+                        const float fixed = std::min(1.0f, std::max(m_resolutionConfig.minScale, m_controllerStartScale * request.fraction));
+                        m_dynamicResolution->Reconfigure(DynamicResolution::Pinned(m_resolutionConfig, fixed));
+                        m_scalePinned = true;
+                        m_pinnedFraction = request.fraction;
+                    } else {
+                        // Back to the controller's own choice, from where a launch starts and not from the size that was held: a
+                        // small held picture on a loop the display paces would never be lifted (a rise needs 110 fps there).
+                        m_resolutionConfig = DynamicResolution::ForWindow(m_declaredResolution, m_swapchain->GetExtent().height);
+                        const bool paced = m_dynamicResolution->LoopPaced();
+                        m_dynamicResolution = std::make_unique<DynamicResolution>(m_resolutionConfig);
+                        m_dynamicResolution->SetLoopPaced(paced);
+                        m_scalePinned = false;
+                        m_pinnedFraction = 0.0f;
+                    }
+                    m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
+                    SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: "
+                                                         << (request.mode == RenderScaleMode::Fixed ? "held at " : "automatic from ")
+                                                         << m_dynamicResolution->Scale() << " (asked by the game).";
+                }
+            }
+        }
         if (m_perf && m_dynamicResolution) {
             const int preset = m_perf->TakePresetRequest();
             if (preset >= 0) {
-                DynamicResolutionConfig config = m_resolutionConfig;
                 const float fixed = PerfOverlay::PresetScale(preset);
-                if (fixed > 0.0f) config.startScale = config.minScale = config.maxScale = fixed;
+                m_scalePinned = fixed > 0.0f;
+                m_pinnedFraction = 0.0f;
+                DynamicResolutionConfig config = fixed > 0.0f ? DynamicResolution::Pinned(m_resolutionConfig, fixed) : m_resolutionConfig;
                 m_dynamicResolution->Reconfigure(config);
                 m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
                 m_perf->SetActivePreset(preset);
@@ -1640,8 +1704,9 @@ void SupersonicApp::Run() {
                                                  << " ms)"
                                                  << (m_dynamicResolution->LastChangeWasARevert()
                                                          ? ": the last step down did not speed the frame up, taken back."
-                                                         : ".");
+                                                         : (m_dynamicResolution->LastChangeWasARise() ? ": a rise." : "."));
         }
+        if (m_dynamicResolution) m_renderScaleControl.Publish(true, m_dynamicResolution->Scale());
 
         m_editorLayer->ApplyPendingResize();
 

@@ -60,6 +60,31 @@ struct DynamicResolutionConfig {
     float headroomFps{110.0f};
     float windowSeconds{1.2f};
     float upAfterSeconds{8.0f};
+
+    // ---- Opt-in refinements (E47). Every one is off by default: a game that sets none of them has the controller as E41 made it.
+
+    // A rise on room, not on proof of an enormous one. E41 raises the scale only after headroomFps (110) for upAfterSeconds on
+    // end, and a window anywhere between the shortfall line and 110 fps resets that count, so a phone whose frame has a fixed
+    // share (the CPU, the driver) that keeps it under 9 ms never gets back a size it lost - to a load hitch at a scene's start,
+    // to a heavy scene, to heat. With this on, the way up opens at targetFps x riseMargin as well, and the step is still the
+    // one ScaleAfterHeadroom predicts to keep targetFps x 1.2 (the prediction follows the pixel count entirely, so a frame with
+    // a fixed share lands above it: the rise errs towards keeping the speed). Never on a loop the display paces (SetLoopPaced):
+    // there a window cannot show more than the refresh rate, so room is invisible and the rule would only guess.
+    bool relaxedRise{false};
+    float riseMargin{1.25f};
+
+    // A floor in pixels: the scene target is never fewer lines high than this (0, the default, is the floor minScale alone).
+    // The caller that knows the window turns it into a scale with FloorForTargetHeight, and again whenever the window's size
+    // changes; the controller itself only ever sees minScale.
+    std::uint32_t minTargetHeight{0};
+
+    // A floor that gives way when the game would be unplayably slow. With minScale as the floor of a picture worth looking at
+    // (the pixel floor above), a GPU that cannot keep even 30 fps there would be left to crawl; with emergencyBelowFps > 0 the
+    // scale may go on down to emergencyScale, but only on a window that, AT the floor, ran under emergencyBelowFps. Off by
+    // default (0): minScale is then a hard floor, as in E41. emergencyScale is worked out by the caller that raises minScale
+    // (SupersonicApp: the floor as the game declared it) and is mended to nothing unless it is under minScale.
+    float emergencyBelowFps{0.0f};
+    float emergencyScale{0.0f};
 };
 
 class DynamicResolution {
@@ -75,7 +100,15 @@ public:
     // caller compares Scale() before and after to know whether to resize.
     void Reconfigure(const DynamicResolutionConfig& config);
 
+    // Whether the loop is paced by the display (a FIFO present: MoltenVK, a device with no MAILBOX). Set by the engine, which
+    // knows the present mode; a paced loop never takes the relaxed rise (DynamicResolutionConfig::relaxedRise).
+    void SetLoopPaced(bool paced) { m_loopPaced = paced; }
+    bool LoopPaced() const { return m_loopPaced; }
+
     float Scale() const { return m_scale; }
+    // Whether the last change was a rise on room (not the taking back of a step down, which also enlarges the picture) (for
+    // the log).
+    bool LastChangeWasARise() const { return m_lastWasRise; }
     // The median frame time, in milliseconds, of the window that changed the scale last; 0 before one.
     float LastMedianMilliseconds() const { return m_lastMedianMs; }
     // The median of the window that ended last, whether or not it changed anything (for a log line); 0 before one. And
@@ -83,7 +116,7 @@ public:
     // smaller and the target is still missed.
     float WindowMedianMilliseconds() const { return m_windowMedianMs; }
     bool WindowMissedTheTarget() const { return m_windowMissed; }
-    bool AtTheFloor() const { return m_scale <= m_config.minScale + 0.005f; }
+    bool AtTheFloor() const { return m_scale <= AbsoluteFloor() + 0.005f; }
     // Whether the last change took back a step down that did not pay for itself (for the log).
     bool LastChangeWasARevert() const { return m_lastWasRevert; }
 
@@ -101,6 +134,12 @@ public:
     static constexpr double kFirstHoldSeconds = 30.0;
     static constexpr double kLongestHoldSeconds = 480.0;
     static constexpr float kReleaseBelow = 0.7f;
+    // The relaxed rise's own judgement: a shortfall within this many seconds of a rise says the rise was a mistake (a heavier
+    // scene, heat, a prediction that did not hold). The next rise then waits kFirstRiseHoldSeconds, doubling after each
+    // repeat up to kLongestRiseHoldSeconds, so a rise and a fall cannot take turns every few seconds (each costs a resize).
+    static constexpr double kRiseTrustSeconds = 20.0;
+    static constexpr double kFirstRiseHoldSeconds = 60.0;
+    static constexpr double kLongestRiseHoldSeconds = 480.0;
     // Frames after a change that are not counted: the resize itself costs one or two.
     static constexpr int kSettleFrames = 4;
     // A frame longer than this is a load or a hitch, not the GPU's speed.
@@ -114,9 +153,29 @@ public:
     // The new scale after a long calm at `fps`: rises by at most a quarter, never above `maxScale`, and never to a size that is
     // predicted to fall below the target with 20% to spare.
     static float ScaleAfterHeadroom(float scale, float fps, float target, float maxScale);
+    // The floor, as a share of a window `windowHeight` pixels high, that keeps the scene target at least `minTargetHeight`
+    // pixels high: `minScale` raised to it, never above `maxScale`. 0 for either pixel count is no pixel floor (`minScale`
+    // as given). The pixel count is what a picture's legibility follows (a text of 8 pixels in the art is unreadable below
+    // about 360 lines whatever the window is), where a share of the window is a very different picture on a phone and on a
+    // tablet.
+    static float FloorForTargetHeight(float minScale, float maxScale, std::uint32_t windowHeight, std::uint32_t minTargetHeight);
+    // The configuration a game declared, for a window `windowHeight` lines high: minScale raised by the pixel floor
+    // (minTargetHeight) and, when the declaration asks for an emergency floor (emergencyBelowFps > 0) and the pixel floor
+    // raised minScale, the declared floor kept as emergencyScale. Pure, so that whoever owns the window can call it again when
+    // the window's height changes and reconfigure only when the result differs.
+    static DynamicResolutionConfig ForWindow(const DynamicResolutionConfig& declared, std::uint32_t windowHeight);
+    // The same configuration held at one size: no controller, only a scale (min = max = start), with no emergency floor to let
+    // it fall, no rise, no pixel floor. What a player's pick of a size, or a measurement's fixed size, is.
+    static DynamicResolutionConfig Pinned(const DynamicResolutionConfig& config, float scale);
 
 private:
     void Mend();
+    // The lowest scale there is: the emergency floor when the config has one, else minScale.
+    float AbsoluteFloor() const { return m_config.emergencyScale > 0.0f ? m_config.emergencyScale : m_config.minScale; }
+    // The floor a shortfall at `fps` may fall to from the current scale: minScale from above (a fall is measured at the
+    // comfortable floor first), the emergency floor when the window at that floor ran under emergencyBelowFps, and not below
+    // where it already is otherwise.
+    float FloorFor(float fps) const;
 
     DynamicResolutionConfig m_config;
     float m_scale;
@@ -137,6 +196,16 @@ private:
     double m_holdSeconds{0.0};
     double m_nextHoldSeconds{kFirstHoldSeconds};
     float m_revertFps{0.0f};
+
+    // The relaxed rise (DynamicResolutionConfig::relaxedRise): whether the display paces the loop; whether the last change was a
+    // rise; seconds since the last rise while it is still on trial; the hold after a rise that did not hold and the length of
+    // the next one.
+    bool m_loopPaced{false};
+    bool m_lastWasRise{false};
+    bool m_riseOnTrial{false};
+    double m_sinceRiseSeconds{0.0};
+    double m_riseHoldSeconds{0.0};
+    double m_nextRiseHoldSeconds{kFirstRiseHoldSeconds};
 };
 
 } // namespace Supersonic

@@ -200,6 +200,15 @@ as clicks and loads its first level. What that took, all of it under
   shortfall (a step that does not speed the frame up, as on a CPU-bound phone, is taken back and not tried again for half a minute, then a minute, then two), rising slowly after eight calm seconds (only an unpaced loop can show them), never for a capture or fixed-step run, the target created at its start size and stretched to
   the window by the same `ImGui::Image` as ever. On the tablet, together: menu 61.7, level 2 61.7, level 1 76 frames a
   second, from 8.8, 27 and 27.
+  Three refinements of the controller, each opt-in on `DynamicResolutionConfig` and off by default (a game that sets none of
+  them has E41's controller, decision for decision): `relaxedRise` opens the way up at 1.25 x the target instead of 110
+  frames a second (on trial for 20 s; a rise that does not hold waits 60 s, doubling to 480; never on a loop the display
+  paces, which the engine tells the controller from the present mode), `minTargetHeight` is a floor in lines of picture
+  (`DynamicResolution::ForWindow` works the declared floor out for the window's height, and the engine again when it
+  changes), and `emergencyBelowFps` lets that floor give way only where the game would run slower than that at it. A game's
+  options screen can ask for the size through `RenderScaleControl` (published in the registry context like
+  `WindowControl`): Automatic, or Fixed at a share of the size the controller started at, held by
+  `DynamicResolution::Pinned`.
 - **Measuring a game where nobody can attach a profiler**, three more opt-ins of the manifest (never in `game.manifest`'s
   text, all off or as before by default). `perfOverlay` draws a panel over the picture (`PerfOverlay.hpp`, ImGui, so it
   is touchable on a phone): the frame rate, the median, 95th-percentile and worst frame, where the frame's time went
