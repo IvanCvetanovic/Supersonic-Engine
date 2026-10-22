@@ -731,6 +731,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             }
             ImGui::TextDisabled("A settled body stops being simulated until "
                                 "something touches or moves it.");
+            ImGui::Checkbox("Integrate After Solve", &rb.integrateAfterSolve);
+            ImGui::TextDisabled("Box2D's order for this body: it is moved by what its "
+                                "contacts leave it, not before them. Ignored under the "
+                                "world ground plane.");
             ImGui::DragFloat("Mass", &rb.mass, 0.1f, 0.01f, 1000.0f);
             Theme::DrawVec3Control("Velocity", rb.velocity, 0.0f);
         }

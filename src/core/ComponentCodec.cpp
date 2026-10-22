@@ -368,7 +368,15 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         // and writing them would let a scene be saved with a body asleep in
         // mid-air - which would then never fall.
         out << indent << "  \"AllowSleep\": " << (body->allowSleep ? "true" : "false") << ",\n";
-        out << indent << "  \"IsKinematic\": " << (body->isKinematic ? "true" : "false") << "\n";
+        out << indent << "  \"IsKinematic\": " << (body->isKinematic ? "true" : "false");
+        // Written only when set. Every scene saved before the key existed, and
+        // every body that never asks for it, is the file it always was - which is
+        // what lets a diff of a scene show a choice rather than a new key on
+        // every body.
+        if (body->integrateAfterSolve) {
+            out << ",\n" << indent << "  \"IntegrateAfterSolve\": true";
+        }
+        out << "\n";
         out << indent << "},\n";
     }
 
@@ -984,6 +992,8 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // A scene written before sleeping existed has no key and must keep
         // being allowed to sleep, which is the default for a new body too.
         body.allowSleep = r["AllowSleep"].AsBool(true);
+        // Absent is false: the order every scene on disk was written against.
+        body.integrateAfterSolve = r["IntegrateAfterSolve"].AsBool(false);
     }
 
     if (node.Has("PhysicsMaterial")) {

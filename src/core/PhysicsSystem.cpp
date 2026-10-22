@@ -378,6 +378,45 @@ void capsuleEnds(const Body& body, glm::vec3& outA, glm::vec3& outB) {
     outB = body.centre + half;
 }
 
+// Turns a body by its angular velocity for one step.
+//
+// A function of its own because there are two places a body is turned: the
+// integrate loop, for every body, and the end of the step, for a body that asked
+// to be moved after the solve (RigidBodyComponent::integrateAfterSolve). Written
+// out twice, a fix to one would quietly leave the other behind.
+//
+// Integrated as a rotation MATRIX and written back as Euler angles.
+//
+// Adding the angular velocity to the Euler triple directly is only
+// correct for spin about one axis at a time: Euler rates are not
+// the angular velocity, and a body tumbling about two axes at once
+// would wander off in a way that looks like the physics is broken.
+// The transform stores Euler because that is what an inspector can
+// sensibly edit, so the conversion happens here, once per step.
+//
+// Through the transform's OWN matrix, not through glm::quat(vec3).
+// That constructor composes the three angles in the opposite order
+// from getModelMatrix, so for any orientation with more than one
+// non-zero angle it is a different rotation - 0.33 out on a matrix
+// entry for (0.5, 0.7, 0.3). Both halves of the old round trip used
+// it, so it was self-consistent and every test passed, while the
+// spin was applied about the wrong axes relative to the matrix that
+// renders and collides the body. A body turning about ONE axis has
+// one non-zero angle and the two conventions agree exactly there,
+// which is why nothing caught it until a hinged door swung past
+// ninety degrees and picked up a second.
+void advanceRotation(TransformComponent& transform, const RigidBodyComponent& rigidBody,
+                     float deltaTime) {
+    const float speed = glm::length(rigidBody.angularVelocity);
+    if (speed > 1e-6f) {
+        // The spin is in WORLD space, so it multiplies on the left.
+        const glm::mat3 spin = glm::mat3_cast(
+            DetMath::angleAxis(speed * deltaTime, rigidBody.angularVelocity / speed));
+        transform.rotation =
+            TransformComponent::EulerFromRotation(spin * transform.getRotationMatrix());
+    }
+}
+
 } // namespace
 
 void PhysicsSystem::SweepAndPrune(std::vector<Proxy>& proxies,
@@ -492,6 +531,35 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         }
     }
 
+    // ---- Bodies that move after the solve (RigidBodyComponent::integrateAfterSolve) ----
+    //
+    // Box2D's order for the bodies that ask for it. The integrate loop below
+    // still gives such a body its gravity, its damping and its axis locks, but
+    // leaves its rotation and position to be advanced from the velocity the
+    // solve leaves it. They are collected there and applied here, once, by the
+    // two places a step can end: after the solve (before the joints are checked
+    // for breaking), or on the early return when there is nothing to solve - a
+    // body that touches nothing and hangs from nothing is still moved by its
+    // velocity, or it would never move at all in a scene with no contacts.
+    //
+    // A list that lives for this call and no longer: nothing is kept between
+    // steps, and an empty one costs nothing, which is what every scene that
+    // never sets the flag has.
+    struct DeferredMove {
+        entt::entity entity;
+        glm::mat3 worldToLocal; // as the integrate loop saw its parent, which has not moved on since
+    };
+    std::vector<DeferredMove> deferredMoves;
+    const auto applyDeferredMoves = [&]() {
+        for (const DeferredMove& move : deferredMoves) {
+            auto* transform = registry.try_get<TransformComponent>(move.entity);
+            auto* rigidBody = registry.try_get<RigidBodyComponent>(move.entity);
+            if (!transform || !rigidBody) continue;
+            if (!rigidBody->freezeRotation) advanceRotation(*transform, *rigidBody, deltaTime);
+            transform->position += move.worldToLocal * (rigidBody->velocity * deltaTime);
+        }
+    };
+
     // ---- Integrate, and resolve against the world ground plane ----
     auto dynamics = registry.view<TransformComponent, RigidBodyComponent>();
     for (auto entity : dynamics) {
@@ -558,6 +626,10 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             rigidBody.velocity += settings.gravity * deltaTime;
         }
 
+        // Not under the ground plane: that is resolved just below, against the
+        // position written in this loop, so the move cannot wait for the solve.
+        const bool moveAfterSolve = rigidBody.integrateAfterSolve && !settings.hasGroundPlane;
+
         // Velocity is world space; position is relative to the parent. Without
         // the conversion a parented body drifts along its parent's axes instead
         // of falling straight down.
@@ -586,38 +658,17 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                     DetMath::pow(std::max(0.0f, 1.0f - rigidBody.angularDamping), deltaTime);
             }
 
-            // Integrated as a rotation MATRIX and written back as Euler
-            // angles.
-            //
-            // Adding the angular velocity to the Euler triple directly is only
-            // correct for spin about one axis at a time: Euler rates are not
-            // the angular velocity, and a body tumbling about two axes at once
-            // would wander off in a way that looks like the physics is broken.
-            // The transform stores Euler because that is what an inspector can
-            // sensibly edit, so the conversion happens here, once per step.
-            //
-            // Through the transform's OWN matrix, not through glm::quat(vec3).
-            // That constructor composes the three angles in the opposite order
-            // from getModelMatrix, so for any orientation with more than one
-            // non-zero angle it is a different rotation - 0.33 out on a matrix
-            // entry for (0.5, 0.7, 0.3). Both halves of the old round trip used
-            // it, so it was self-consistent and every test passed, while the
-            // spin was applied about the wrong axes relative to the matrix that
-            // renders and collides the body. A body turning about ONE axis has
-            // one non-zero angle and the two conventions agree exactly there,
-            // which is why nothing caught it until a hinged door swung past
-            // ninety degrees and picked up a second.
-            const float speed = glm::length(rigidBody.angularVelocity);
-            if (speed > 1e-6f) {
-                // The spin is in WORLD space, so it multiplies on the left.
-                const glm::mat3 spin = glm::mat3_cast(
-                    DetMath::angleAxis(speed * deltaTime, rigidBody.angularVelocity / speed));
-                transform.rotation =
-                    TransformComponent::EulerFromRotation(spin * transform.getRotationMatrix());
-            }
+            // Integrated as a rotation matrix, written back as Euler angles:
+            // see advanceRotation for why. A body that moves after the solve is
+            // turned there, by the spin the solve leaves it.
+            if (!moveAfterSolve) advanceRotation(transform, rigidBody, deltaTime);
         }
 
-        transform.position += worldToLocal * (rigidBody.velocity * deltaTime);
+        if (moveAfterSolve) {
+            deferredMoves.push_back({entity, worldToLocal});
+        } else {
+            transform.position += worldToLocal * (rigidBody.velocity * deltaTime);
+        }
 
         // The optional world ground plane. Off unless the scene asks for it,
         // which is the whole of the change: it used to be unconditional, so
@@ -1999,7 +2050,10 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         }
     }
 
-    if (constraints.empty() && joints.empty()) return;
+    if (constraints.empty() && joints.empty()) {
+        applyDeferredMoves();
+        return;
+    }
 
     // ---- Velocity solve ----------------------------------------------------
     //
@@ -2140,6 +2194,9 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             }
         }
     }
+
+    // The bodies that move after the solve, by what the solve left them.
+    applyDeferredMoves();
 
     // ---- What broke ---------------------------------------------------------
     //

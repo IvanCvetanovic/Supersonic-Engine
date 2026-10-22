@@ -1262,8 +1262,8 @@ for each non-kinematic RigidBodyComponent:
     wake it if it was moved or given a velocity from outside
     sleep it if it has been below the sleep thresholds for long enough
     gravity, linear damping, angular damping
-    integrate rotation as a quaternion, write it back as Euler
-    position += worldToLocal * (velocity * dt)
+    integrate rotation as a quaternion, write it back as Euler    (*)
+    position += worldToLocal * (velocity * dt)                    (*)
     resolve against the world ground plane, if the scene has one
 gather every collider into world-space bodies and proxies
 sweep and prune  ->  candidate pairs
@@ -1275,6 +1275,9 @@ build the joint list, including bodies that have no collider at all
 four sweeps of joint positional correction, re-reading as it goes
 eight passes over every constraint: normal impulse, then friction,
                                     then every joint
+(*) for a body with integrateAfterSolve, the two lines marked wait until here,
+    and run on the velocity and spin the passes left it
+check which joints broke
 ```
 
 Sleeping is decided during integration rather than after the solve, and the
@@ -1283,6 +1286,56 @@ the right question to ask, and it is also the only place the decision can live:
 `Update` returns early when the scene holds fewer than two colliders, and a lone
 body resting on the world plane is exactly the case that has to be able to
 sleep.
+
+**A body can ask to be moved after the solve.** The order above - move, then
+solve - is the engine's for every body, and it is not Box2D's, which solves the
+velocity first and moves by what the solve left. The difference is not a
+rounding: the engine's contact acts one step late, because the body has already
+been moved by the velocity it brought into the step when the solver takes the
+approach out of it, and the coarser the step the more that costs. How much it
+costs depends on the scene, and it was measured in a game rather than by the
+engine's own tests: Magic Portals' 30 u rolling stone, off a 14 degree prism, at
+that game's 1/30 s step, creeps at 0.28 u a frame where the original (Box2D)
+gives 1.05, and at 1.00 with its body moved after the solve. A 0.5 m ball on the
+same slope in the engine's tests rolls as far either way (0.0002 m apart in a
+second at 1/30 s), so the size of the effect is something to measure in the scene
+that needs it, not a constant of the engine; why this ball shows none is not
+isolated.
+`RigidBodyComponent::integrateAfterSolve` (`IntegrateAfterSolve` in a scene file)
+is the opt-in for one body. It is `false` by default, and written to a file only
+when it is `true`, so no scene on disk and no body that leaves it alone changes by
+a bit; `tests/test_determinism.cpp` records the state hashes of two scripted
+worlds - contacts, joints, sleepers, a platform, a parented child, the ground
+plane - from before the field existed and asserts them unchanged.
+
+A flagged body still gets its gravity, damping and axis locks in the integrate
+loop, where it always did. What waits is its rotation and its position: they go
+on a list that lives for the call, and are applied once, where the step ends -
+after the eight passes and before the joints are checked for breaking, or on the
+early return when there is nothing to solve, because a body that touches nothing
+and hangs from nothing must still be moved by its velocity (and moves, in that
+case, by exactly the arithmetic it would have unflagged). The rotation is the
+same function the integrate loop calls (`advanceRotation`), and the move is
+converted through the parent's basis as the integrate loop saw it. There is no
+other state and no knob.
+
+What it leaves alone, and what it does not mean:
+
+- **The ground plane.** Under `hasGroundPlane` the flag is ignored (§7i): the
+  plane is resolved inside the integrate loop against the position just written.
+- **Kinematic and sleeping bodies.** A kinematic body is moved by code and the
+  integrate loop skips it; a sleeping body is skipped too, so it is never on the
+  list. One woken by an impact in the pair loop has already been passed by the
+  integrate loop and is moved from the next step, flagged or not.
+- **The other side of a contact.** A pair is found from where each body stands
+  when the solve begins: the flagged one has not moved yet and the unflagged
+  one has. A pair that should behave as Box2D's wants the flag on both bodies;
+  a mixed pair is legal, holds, and is neither order.
+- **What the step reports.** The contacts a step returns, and the joint position
+  correction that precedes the solve, see a flagged body where the step began.
+  A joint holds a flagged body by the velocity it leaves, then the move: the
+  rope's error at the end of a step is the one that velocity constraint left,
+  and the next step's position correction takes it out.
 
 Velocity is world space; `TransformComponent::position` is local to the parent.
 Every write of a world-space displacement therefore goes through the inverse of
@@ -1990,6 +2043,13 @@ with its origin half a unit above the plane.
 solid. The two live two hundred lines apart and have to agree, or a character
 stands on a floor that is switched off.
 
+A body's `integrateAfterSolve` (§7b) is **ignored while the plane is on**. The
+plane is resolved here, in the integrate loop, against the position the loop has
+just written; a move that waited for the solve would be tested against the plane
+at the position the step began from and then driven through it. A flagged world
+under the plane is therefore the unflagged one to the bit, and
+`test_determinism` pins that.
+
 ### 7j. Sleeping
 
 A body that has stayed below `kSleepLinearVelocity` (0.05 m/s) and
@@ -2047,6 +2107,12 @@ that is serialised — `isSleeping`, the timer and the recorded position are
 runtime state, re-derived within half a second of a scene loading. Writing them
 would allow a scene to be saved with a body asleep in mid-air, which would then
 never fall.
+
+A sleeping body is not integrated, so it is never one of the bodies that move
+after the solve (§7b), flagged or not. One that a script wakes by writing its
+velocity is integrated in the same step and moved by that velocity; one woken by
+an impact in the pair loop has already been passed by the integrate loop, and is
+moved from the next step.
 
 Verified by running the same scene twice, once allowed to sleep and once not: all
 three bodies end at bit-identical positions. A resting body reaches a true fixed
@@ -2149,6 +2215,17 @@ Listed rather than hidden, in the same spirit as the rest of this document.
   close in any direction, not the volume it actually sweeps, so two bodies
   passing diagonally near each other are reported and slowed for a collision
   that would never have happened.
+- **Integrate first, solve second.** A body is moved by the velocity it brought
+  into the step and the solver then takes the approach out of what it found,
+  where Box2D solves the velocity and moves by the result. A contact therefore
+  acts one step late, and the cost grows with the step and depends on the scene:
+  in the game this was added for, a rolling stone at 1/30 s creeps at under a
+  third of the pace Box2D gives it (§7b has the measurement and the case where
+  the engine's own tests show none). This is the
+  engine's order for every body, so changing it
+  for everybody would move every recording and every scene's behaviour at once.
+  `RigidBodyComponent::integrateAfterSolve` is the opt-in escape for one body
+  (§7b): Box2D's order for that body alone, with the default bit-identical.
 - **No persistent broadphase.** The body and proxy lists are rebuilt from the
   registry, the world bounds recomputed and the proxies re-sorted every step,
   whether or not anything moved. Sleeping removes the integrate-and-solve for a

@@ -20,6 +20,7 @@
 #include "core/SceneSerializer.hpp"
 
 #include <filesystem>
+#include <fstream>
 
 #include <algorithm>
 #include <cmath>
@@ -3452,7 +3453,680 @@ static void testAJointStopsItsTwoEndsColliding() {
                   std::to_string(apart));
 }
 
+// ---- Moving after the solve --------------------------------------------------
+//
+// RigidBodyComponent::integrateAfterSolve is Box2D's order of a step for ONE
+// body: velocity, then the solve, then the move. The engine's own order moves
+// first and solves second, for everybody, and it stays the default - so half of
+// what these prove is that the flag does nothing it was not asked to, and the
+// other half is that it does what it was.
+//
+// Every comparison between two worlds builds both with the same function, so
+// the flag is the only difference between them. Equality is `==` on the floats
+// and not nearly(): a body the flag has no business changing is not "close".
+
+// What a step can change in a body, compared exactly.
+static bool sameState(entt::registry& a, entt::entity ea, entt::registry& b, entt::entity eb) {
+    const auto& ta = a.get<TransformComponent>(ea);
+    const auto& tb = b.get<TransformComponent>(eb);
+    const auto& ra = a.get<RigidBodyComponent>(ea);
+    const auto& rb = b.get<RigidBodyComponent>(eb);
+    return ta.position == tb.position && ta.rotation == tb.rotation &&
+           ra.velocity == rb.velocity && ra.angularVelocity == rb.angularVelocity &&
+           ra.isSleeping == rb.isSleeping;
+}
+
+// Steps two worlds together and returns the first step at which the body in one
+// differs from the body in the other, or -1 if it never does.
+static int firstStepTheyDiffer(entt::registry& a, entt::entity ea, entt::registry& b,
+                               entt::entity eb, int steps, bool refreshTransforms = false) {
+    for (int step = 0; step < steps; ++step) {
+        PhysicsSystem::Update(a, 1.0f / 60.0f);
+        PhysicsSystem::Update(b, 1.0f / 60.0f);
+        if (refreshTransforms) {
+            TransformSystem::UpdateWorldTransforms(a);
+            TransformSystem::UpdateWorldTransforms(b);
+        }
+        if (!sameState(a, ea, b, eb)) return step;
+    }
+    return -1;
+}
+
+static void testABodyThatTouchesNothingIsMovedTheSameWhetherOrNotItMovesAfterTheSolve() {
+    // THE EARLY RETURN. Update stops before the solve when there is nothing to
+    // solve - fewer than two colliders, or none that can meet - and a move that
+    // waited for the solve would be lost there. It would not show in any scene
+    // with contacts, which is why this is its own test: the body here tumbles
+    // about all three axes, is damped both ways and falls, and in a scene where
+    // the solver has nothing to do it must end every step exactly where the
+    // unflagged body does.
+    //
+    // Three scenes: no collider anywhere; a lone collider; and a collider with a
+    // resting pair far away, so the solve DOES run and does not touch this body.
+    //
+    // Fails under: the deferred moves not applied on the early return (variants
+    // 0 and 1: the flagged body never leaves where it started); applied twice;
+    // applied from a velocity the solve did not leave it; the rotation formula
+    // differing from the integrate loop's.
+    for (int variant = 0; variant < 3; ++variant) {
+        const auto build = [variant](entt::registry& registry, bool flagged) {
+            const auto body = registry.create();
+            auto& transform = registry.emplace<TransformComponent>(body);
+            transform.position = glm::vec3(0.0f, 10.0f, 0.0f);
+            transform.rotation = glm::vec3(0.3f, 0.5f, 0.2f);
+            auto& rigid = registry.emplace<RigidBodyComponent>(body);
+            rigid.velocity = glm::vec3(1.0f, 2.0f, 0.5f);
+            rigid.angularVelocity = glm::vec3(2.0f, 1.0f, 3.0f);
+            rigid.linearDamping = 0.1f;
+            rigid.angularDamping = 0.1f;
+            rigid.allowSleep = false;
+            rigid.integrateAfterSolve = flagged;
+            if (variant >= 1) registry.emplace<BoxColliderComponent>(body);
+            if (variant == 2) {
+                makeStaticBox(registry, glm::vec3(50.0f, 0.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+                makeBox(registry, glm::vec3(50.0f, 1.0f, 0.0f));
+            }
+            return body;
+        };
+
+        entt::registry unflagged;
+        entt::registry flagged;
+        const auto plain = build(unflagged, false);
+        const auto asked = build(flagged, true);
+        const glm::vec3 start = flagged.get<TransformComponent>(asked).position;
+
+        const int differs = firstStepTheyDiffer(unflagged, plain, flagged, asked, 120);
+        CHECK_MSG(differs < 0, "scene " + std::to_string(variant) +
+                                   ": a body nothing touches must be moved identically; first "
+                                   "difference on step " + std::to_string(differs));
+        CHECK_MSG(flagged.get<TransformComponent>(asked).position.y < start.y - 1.0f,
+                  "scene " + std::to_string(variant) + ": and it must have been moved at all");
+    }
+}
+
+static void testAParentedSpinningBodyIsMovedTheSameWhetherOrNotItMovesAfterTheSolve() {
+    // The two things the deferral carries across the solve that nothing else
+    // here reaches: the parent's basis the move is converted through (kept from
+    // the integrate loop, since the transforms are not refreshed mid-step), and
+    // the rotation, which is applied about the WORLD axis of a spin with two
+    // non-zero components. The parent is turned about two axes and scaled
+    // unevenly, so a basis taken as identity, or transposed instead of
+    // inverted, or an Euler rate added to an Euler triple, moves the child
+    // somewhere else.
+    //
+    // Fails under: the move not converted to the parent's space; the basis read
+    // after the parent has moved; the spin integrated as an Euler rate.
+    const auto build = [](entt::registry& registry, bool flagged) {
+        const auto parent = registry.create();
+        registry.emplace<TransformComponent>(parent, glm::vec3(5.0f, 10.0f, 0.0f),
+                                             glm::vec3(0.4f, 0.7f, 0.2f), glm::vec3(2.0f, 1.0f, 3.0f));
+        const auto child = registry.create();
+        registry.emplace<TransformComponent>(child);
+        registry.emplace<HierarchyComponent>(child, parent);
+        auto& rigid = registry.emplace<RigidBodyComponent>(child);
+        rigid.velocity = glm::vec3(1.0f, 0.5f, 2.0f);
+        rigid.angularVelocity = glm::vec3(1.0f, 2.0f, 0.5f);
+        rigid.allowSleep = false;
+        rigid.integrateAfterSolve = flagged;
+        TransformSystem::UpdateWorldTransforms(registry);
+        return child;
+    };
+
+    entt::registry unflagged;
+    entt::registry flagged;
+    const auto plain = build(unflagged, false);
+    const auto asked = build(flagged, true);
+
+    const int differs = firstStepTheyDiffer(unflagged, plain, flagged, asked, 120, true);
+    CHECK_MSG(differs < 0, "a parented, spinning body must be moved identically; first difference "
+                           "on step " + std::to_string(differs));
+    CHECK_MSG(glm::length(flagged.get<TransformComponent>(asked).position) > 0.5f,
+              "and it must have gone somewhere");
+}
+
+static void testTheGroundPlaneMakesTheFlagIrrelevant() {
+    // The plane is resolved inside the integrate loop, against the position the
+    // loop has just written; a body whose move waited for the solve would be
+    // tested against the plane where it STARTED the step and then driven below
+    // it. So under the plane the flag is ignored, and the proof is that a flagged
+    // world is the unflagged one to the bit - tumbling box, ball and all.
+    //
+    // Fails under: honouring the flag when the scene has the plane on.
+    const auto build = [](entt::registry& registry, bool flagged) {
+        enableGroundPlane(registry);
+        const auto crate = makeBox(registry, glm::vec3(0.0f, 4.0f, 0.0f));
+        registry.get<TransformComponent>(crate).rotation = glm::vec3(0.2f, 0.1f, 0.3f);
+        registry.get<RigidBodyComponent>(crate).angularVelocity = glm::vec3(1.0f, 2.0f, 3.0f);
+        registry.get<RigidBodyComponent>(crate).allowSleep = false;
+        registry.get<RigidBodyComponent>(crate).integrateAfterSolve = flagged;
+        const auto ball = makeSphere(registry, glm::vec3(6.0f, 6.0f, 0.0f), 0.5f);
+        registry.get<RigidBodyComponent>(ball).allowSleep = false;
+        registry.get<RigidBodyComponent>(ball).restitution = 0.6f;
+        registry.get<RigidBodyComponent>(ball).integrateAfterSolve = flagged;
+        return ball;
+    };
+
+    entt::registry unflagged;
+    entt::registry flagged;
+    const auto plain = build(unflagged, false);
+    const auto asked = build(flagged, true);
+
+    const int differs = firstStepTheyDiffer(unflagged, plain, flagged, asked, 300);
+    CHECK_MSG(differs < 0, "under the ground plane a flagged ball must move as an unflagged one; "
+                           "first difference on step " + std::to_string(differs));
+
+    // Both really did meet the plane, or the equality above is two bodies
+    // falling through nothing together.
+    CHECK_MSG(test::nearly(flagged.get<TransformComponent>(asked).position.y, 0.5f, 0.05f),
+              "and it came to rest on the plane");
+}
+
+static void testAKinematicBodyIgnoresTheFlag() {
+    // Code moves a kinematic body; the step never does, and a flag cannot make
+    // it. A move deferred for one would be code-less motion by its velocity.
+    //
+    // Fails under: a kinematic body reaching the deferral (it moves by its
+    // velocity every step).
+    entt::registry registry;
+    const auto platform = registry.create();
+    registry.emplace<TransformComponent>(platform, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f),
+                                         glm::vec3(10.0f, 1.0f, 10.0f));
+    registry.emplace<BoxColliderComponent>(platform);
+    auto& body = registry.emplace<RigidBodyComponent>(platform);
+    body.isKinematic = true;
+    body.velocity = glm::vec3(1.0f, 0.0f, 0.0f);
+    body.integrateAfterSolve = true;
+
+    const auto cargo = makeBox(registry, glm::vec3(0.0f, 6.2f, 0.0f));
+    registry.get<RigidBodyComponent>(cargo).integrateAfterSolve = true;
+    registry.get<RigidBodyComponent>(cargo).allowSleep = false;
+
+    const glm::vec3 start = registry.get<TransformComponent>(platform).position;
+    stepFor(registry, 1.0f);
+
+    CHECK_MSG(registry.get<TransformComponent>(platform).position == start,
+              "a flagged kinematic body is not moved by the step");
+    CHECK_MSG(registry.get<RigidBodyComponent>(platform).velocity == glm::vec3(1.0f, 0.0f, 0.0f),
+              "and the step leaves its velocity alone");
+}
+
+static void testASleepingBodyIsSkippedAndMovesWhenItIsWoken() {
+    // Asleep is set directly. A body left to settle on its own was seen to stay
+    // awake for ten seconds in a scene that looked at rest, so a test that waited
+    // for sleep would be testing whichever it happened to do.
+    //
+    // A sleeping body is not integrated, flagged or not: it stays exactly where
+    // it is, with exactly zero velocity. A script that writes its velocity wakes
+    // it, and THAT step it is moved by the deferred path - on the early return,
+    // since nothing else is here.
+    //
+    // Fails under: a sleeping body reaching the deferral and being moved; a
+    // woken body whose move is lost.
+    entt::registry registry;
+    const auto sleeper = makeBox(registry, glm::vec3(0.0f, 5.0f, 0.0f));
+    auto& body = registry.get<RigidBodyComponent>(sleeper);
+    body.integrateAfterSolve = true;
+    body.useGravity = false;
+    body.isSleeping = true;
+    body.sleepPosition = glm::vec3(0.0f, 5.0f, 0.0f);
+
+    stepFor(registry, 1.0f);
+    CHECK_MSG(registry.get<TransformComponent>(sleeper).position == glm::vec3(0.0f, 5.0f, 0.0f),
+              "a sleeping flagged body does not move by even a float");
+    CHECK_MSG(body.isSleeping && body.velocity == glm::vec3(0.0f), "and it is still asleep, at rest");
+
+    body.velocity = glm::vec3(1.0f, 0.0f, 0.0f);
+    for (int i = 0; i < 10; ++i) PhysicsSystem::Update(registry, 1.0f / 60.0f);
+    CHECK_MSG(!body.isSleeping, "writing its velocity wakes it");
+    CHECK_MSG(registry.get<TransformComponent>(sleeper).position.x > 0.15f,
+              "and it is then moved by that velocity: x = " +
+                  std::to_string(registry.get<TransformComponent>(sleeper).position.x));
+}
+
+static void testSomethingLandingOnASleepingFlaggedBodyWakesIt() {
+    // Waking happens in the pair loop, in place, AFTER the integrate loop has
+    // passed the sleeper by - so it is solved this step but was never put on the
+    // deferral list. The wake has to survive that, and the body has to be an
+    // ordinary awake one from the next step.
+    //
+    // Fails under: a flagged sleeper that the pair loop cannot wake.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    const auto crate = makeBox(registry, glm::vec3(0.0f, 6.0f, 0.0f));
+    auto& body = registry.get<RigidBodyComponent>(crate);
+    body.integrateAfterSolve = true;
+    body.isSleeping = true;
+    body.sleepPosition = glm::vec3(0.0f, 6.0f, 0.0f);
+
+    const auto dropped = makeBox(registry, glm::vec3(0.0f, 8.0f, 0.0f));
+    registry.get<RigidBodyComponent>(dropped).integrateAfterSolve = true;
+
+    bool woke = false;
+    for (int i = 0; i < 90 && !woke; ++i) {
+        PhysicsSystem::Update(registry, 1.0f / 60.0f);
+        woke = !body.isSleeping;
+    }
+    CHECK_MSG(woke, "a box landing on a sleeping flagged one wakes it");
+
+    // And what woke is an ordinary body from then on: the dropped box comes to
+    // rest on it, neither through it nor off it.
+    stepFor(registry, 1.0f);
+    const float restedAt = registry.get<TransformComponent>(dropped).position.y;
+    CHECK_MSG(restedAt > 6.8f && restedAt < 7.3f,
+              "and the dropped box is held up by it rather than passing through: y = " +
+                  std::to_string(restedAt));
+}
+
+// The OBJ text of a prism over a convex polygon, counter-clockwise about +z: the
+// shape a game's ramp or slope is, written the way a hull collider reads it.
+static std::string prismObj(const std::vector<glm::vec2>& ring, float depth) {
+    const size_t n = ring.size();
+    const float half = depth * 0.5f;
+    std::string obj = "# a collision prism\n";
+    char line[96];
+    for (const float z : {half, -half}) {
+        for (const glm::vec2& p : ring) {
+            std::snprintf(line, sizeof line, "v %.9g %.9g %.9g\n", p.x, p.y, z);
+            obj += line;
+        }
+    }
+    const auto face = [&](size_t a, size_t b, size_t c) {
+        std::snprintf(line, sizeof line, "f %zu %zu %zu\n", a, b, c);
+        obj += line;
+    };
+    for (size_t i = 1; i + 1 < n; ++i) face(1, 1 + i, 2 + i);
+    for (size_t i = 1; i + 1 < n; ++i) face(n + 1, n + 2 + i, n + 1 + i);
+    for (size_t i = 0; i < n; ++i) {
+        const size_t j = (i + 1) % n;
+        face(1 + i, n + 1 + j, 1 + j);
+        face(1 + i, n + 1 + i, n + 1 + j);
+    }
+    return obj;
+}
+
+// How far along x a ball of unit mass gets in `seconds` of a step of `step`
+// seconds, rolling down a 14 degree prism with a grip of 1 - the slope and the
+// material of the stone of Magic Portals' level 2-29, at the engine's own scale
+// (a 0.5 m ball, the default gravity), not the game's.
+static float rolledDownARamp(bool movesAfterTheSolve, float step, float seconds) {
+    // In the system's temp directory and not the working directory, which for this
+    // suite is the repository root: a run that dies half way leaves nothing in the tree.
+    const std::string path =
+        (std::filesystem::temp_directory_path() / "supersonic_test_physics_ramp.obj").string();
+    {
+        std::ofstream out(path);
+        // The legs are 4.267 by 1.067: a slope of exactly 1 in 4, whose surface is y = x / 4.
+        out << prismObj({glm::vec2(-2.1333f, -0.5333f), glm::vec2(2.1333f, -0.5333f),
+                         glm::vec2(2.1333f, 0.5333f)}, 2.0f);
+    }
+
+    entt::registry registry;
+    const auto ramp = registry.create();
+    registry.emplace<TransformComponent>(ramp);
+    registry.emplace<ConvexHullColliderComponent>(ramp).sourcePath = path;
+    auto& material = registry.emplace<PhysicsMaterialComponent>(ramp);
+    material.friction = 1.0f;
+    material.restitution = 0.0f;
+
+    // Dropped from 0.12 above the surface, so it arrives with a little speed
+    // and the first contact is a real one rather than a placement.
+    const float startX = 1.0f;
+    const float surfaceY = 0.25f * startX + 0.5f * std::sqrt(1.0f + 0.0625f);
+    const auto ball = makeSphere(registry, glm::vec3(startX, surfaceY + 0.12f, 0.0f), 0.5f);
+    auto& body = registry.get<RigidBodyComponent>(ball);
+    body.friction = 1.0f;
+    body.restitution = 0.0f;
+    body.allowSleep = false;
+    body.integrateAfterSolve = movesAfterTheSolve;
+
+    for (float t = 0.0f; t < seconds; t += step) PhysicsSystem::Update(registry, step);
+    std::remove(path.c_str());
+    return registry.get<TransformComponent>(ball).position.x - startX;
+}
+
+static void testARampIsStillRolledDownWhenTheBodyMovesAfterTheSolve() {
+    // THE ENGINE-SCALE CONTROL, and not the proof of the flag. The creep this
+    // field was added to remove was measured in a GAME, not here: Magic Portals'
+    // 30 u rolling stone, off a 14 degree prism, at that game's 1/30 s step, creeps
+    // at 0.28 u a frame under the engine's order where the original (Box2D) gives
+    // 1.05, and at 1.00 once its body is moved after the solve. A 0.5 m ball rolling
+    // freely down the same 1 in 4 slope at the same step shows none of that: the
+    // flagged and the unflagged ball cover the same distance to within a
+    // millimetre (-0.8398 m against -0.8400 m in a second). This test used to
+    // assert that the flagged one got further down, and it did not. Why the
+    // engine's own ramp has nothing for the flag to remove is not isolated, so no
+    // mechanism is claimed for it here or in the field's comment.
+    //
+    // What is asserted is the thing a ball with nothing to lose to the engine's
+    // order must not lose to the flag either: it still rolls DOWNHILL (towards -x,
+    // the slope falling that way), the unflagged one still does not climb, and the
+    // flagged one covers the same distance as the unflagged one, to a centimetre.
+    // The order itself is proved exactly, in the engine's own units, by
+    // testAFlaggedBodyIsMovedByWhatTheSolveLeavesItAndNotByWhatItBrought.
+    //
+    // The 1/60 s pair is printed for the record and asserts nothing.
+    //
+    // Fails under: a deferred move that is lost (the flagged ball goes nowhere) or
+    // applied twice (it goes about twice as far).
+    const float unflagged = rolledDownARamp(false, 1.0f / 30.0f, 1.0f);
+    const float flagged = rolledDownARamp(true, 1.0f / 30.0f, 1.0f);
+    std::printf("  a ball rolling for 1 s down the 14 degree hull prism at 1/30 s: "
+                "unflagged %.4f m, flagged %.4f m\n", unflagged, flagged);
+    std::printf("  and at 1/60 s: unflagged %.4f m, flagged %.4f m\n",
+                rolledDownARamp(false, 1.0f / 60.0f, 1.0f), rolledDownARamp(true, 1.0f / 60.0f, 1.0f));
+
+    CHECK_MSG(flagged < -0.05f, "the flagged ball rolls downhill, towards -x: " +
+                                    std::to_string(flagged));
+    CHECK_MSG(unflagged <= 0.02f, "and the unflagged one does not climb it: " + std::to_string(unflagged));
+    CHECK_MSG(std::fabs(flagged - unflagged) < 0.01f,
+              "and the flagged ball covers the same distance as the unflagged one, to a centimetre: " +
+                  std::to_string(flagged) + " against " + std::to_string(unflagged));
+}
+
+static void testAFlaggedBodyIsMovedByWhatTheSolveLeavesItAndNotByWhatItBrought() {
+    // THE PROPERTY THE FIELD EXISTS FOR, in the engine's own units and at no
+    // particular scale: a body that moves after the solve is moved by the velocity
+    // the solve LEFT it. A ball falls at a floor with a gap at the start of the
+    // step, once, flagged and not; the contact acts on it, and what is asserted is
+    // where it ends up against the velocity it ends with.
+    //
+    // The ball starts 0.02 above the floor and goes (2, -6, 0) a step of 1/60 s,
+    // so the move it brought into the step is 0.1 down: 0.08 more than the gap.
+    // There is no gravity, the contact has no grip and the floor has no bounce of
+    // its own, so what the solve does to the ball is the contact's normal alone.
+    // The 2 along x is there so that the identity below is not vacuous when the
+    // contact leaves nothing along y: a move that is lost still shows on x.
+    //
+    // FLAGGED. The contact is found from where the ball stands when the solve
+    // begins - 0.02 above the floor, closing at 0.1 a step, so speculative - and
+    // the solve takes the approach out of it. Then the ball is moved by the
+    // velocity that is left. With no bounce that is 0 along y, and the ball ends at
+    // y = 1.02, still above the floor; with a bounce of 0.5 it is +3, and the ball
+    // ends 0.05 higher, at y = 1.07. Either way the displacement of the step is
+    // velocity_after * dt, to float rounding, and the ball is never inside the floor.
+    //
+    // UNFLAGGED. The ball is moved first, by -6 * dt = 0.1 down, to y = 0.92, which
+    // is 0.08 into the surface - and only then does the solve see a contact, now a
+    // real overlap. The positional correction takes 0.8 * (0.08 - 0.005) = 0.06 of
+    // it back, so the ball ends at y = 0.98, still 0.02 inside the floor (0.2 * 0.08
+    // + 0.8 * 0.005), and its displacement is nowhere near velocity_after * dt: it
+    // was moved by the velocity it brought.
+    //
+    // Fails under: the deferred move applied BEFORE the velocity solve (the flagged
+    // ball is moved by -0.1 whatever the solve leaves it, ends 0.08 inside the floor,
+    // and both the identity and the "never inside" check fail, by 0.1 and 0.08);
+    // applied never (the displacement along x is 0, not 2 * dt); the flag ignored, so
+    // that the ball moves first (it ends inside the floor and its displacement is
+    // -0.04, not velocity_after * dt).
+    constexpr float kStep = 1.0f / 60.0f;
+    constexpr float kRadius = 0.5f;
+    constexpr float kFloorTop = 0.5f; // makeFloorWithMaterial: a 20 x 1 x 20 box about the origin
+    constexpr float kGap = 0.02f;
+
+    struct Stepped {
+        glm::vec3 positionBefore;
+        glm::vec3 positionAfter;
+        glm::vec3 velocityBefore;
+        glm::vec3 velocityAfter;
+    };
+    const auto fall = [&](bool flagged, float bounce) {
+        entt::registry registry;
+        PhysicsMaterialComponent surface;
+        surface.friction = 0.0f;
+        surface.restitution = 0.0f;
+        makeFloorWithMaterial(registry, &surface);
+
+        const auto ball = makeSphere(registry, glm::vec3(0.0f, kFloorTop + kRadius + kGap, 0.0f), kRadius);
+        auto& body = registry.get<RigidBodyComponent>(ball);
+        body.useGravity = false;
+        body.allowSleep = false;
+        body.friction = 0.0f;
+        body.restitution = bounce;
+        body.velocity = glm::vec3(2.0f, -6.0f, 0.0f);
+        body.integrateAfterSolve = flagged;
+
+        Stepped step;
+        step.positionBefore = registry.get<TransformComponent>(ball).position;
+        step.velocityBefore = body.velocity;
+        PhysicsSystem::Update(registry, kStep);
+        step.positionAfter = registry.get<TransformComponent>(ball).position;
+        step.velocityAfter = body.velocity;
+        return step;
+    };
+
+    for (const float bounce : {0.0f, 0.5f}) {
+        const std::string which = "bounce " + std::to_string(bounce) + ": ";
+        const Stepped moved = fall(true, bounce);
+        const Stepped plain = fall(false, bounce);
+        std::printf("  a ball 0.02 above a floor, closing at 6 m/s, one step of 1/60 s, bounce %.1f: "
+                    "flagged ends at y %.4f with vy %.4f, unflagged at y %.4f with vy %.4f\n",
+                    bounce, moved.positionAfter.y, moved.velocityAfter.y, plain.positionAfter.y,
+                    plain.velocityAfter.y);
+
+        // The contact did act on both, or the identities below are two bodies in free flight.
+        CHECK_MSG(std::fabs(moved.velocityAfter.y - moved.velocityBefore.y) > 1.0f,
+                  which + "the solve took the approach out of the flagged ball");
+        CHECK_MSG(std::fabs(plain.velocityAfter.y - plain.velocityBefore.y) > 1.0f,
+                  which + "and out of the unflagged one");
+
+        // The flagged ball was moved by what the solve left it.
+        const glm::vec3 displacement = moved.positionAfter - moved.positionBefore;
+        const glm::vec3 byWhatIsLeft = moved.velocityAfter * kStep;
+        CHECK_MSG(glm::length(displacement - byWhatIsLeft) < 1.0e-5f,
+                  which + "a flagged ball is displaced by velocity_after * dt: " +
+                      std::to_string(displacement.y) + " against " + std::to_string(byWhatIsLeft.y));
+        CHECK_MSG(displacement.x > 0.03f, which + "and it did move along x, by 2 * dt");
+        CHECK_MSG(std::fabs(displacement.y - moved.velocityBefore.y * kStep) > 0.01f,
+                  which + "and not by the velocity it brought into the step: " +
+                      std::to_string(displacement.y));
+        CHECK_MSG(moved.positionAfter.y - kRadius - kFloorTop > -1.0e-4f,
+                  which + "so it ends above the floor and not in it: gap " +
+                      std::to_string(moved.positionAfter.y - kRadius - kFloorTop));
+
+        // The unflagged ball was moved first, so it met the floor as an overlap and ends in it.
+        const float inside = kFloorTop - (plain.positionAfter.y - kRadius);
+        CHECK_MSG(inside > 0.01f,
+                  which + "an unflagged ball has been moved into the floor by the time the solve sees it: " +
+                      std::to_string(inside) + " inside");
+        const glm::vec3 plainDisplacement = plain.positionAfter - plain.positionBefore;
+        CHECK_MSG(std::fabs(plainDisplacement.y - plain.velocityAfter.y * kStep) > 0.01f,
+                  which + "and it is not displaced by the velocity the solve left it");
+    }
+}
+
+static void testAFlaggedBobStillHangsFromItsRope() {
+    // A joint holds a body by position and by velocity. A flagged body is moved
+    // after both have been solved, so the rope's error at the end of a step is
+    // what the velocity constraint left - which is, if anything, less than the
+    // integrate-first order's, but it is a different error and this holds it to
+    // the same standard (a little looser than the unflagged test's, since the
+    // joint's position correction sees the bob where the step began).
+    //
+    // Fails under: the joint solved from a stale position the move never
+    // updates; the move applied from the velocity before the joint constrained it.
+    entt::registry registry;
+    const glm::vec3 anchor(0.0f, 5.0f, 0.0f);
+    const auto bob = makeJointBody(registry, glm::vec3(0.0f, 4.0f, 0.0f));
+    registry.get<RigidBodyComponent>(bob).integrateAfterSolve = true;
+    hangFrom(registry, bob, anchor, 2.0f);
+
+    stepFor(registry, 1.0f);
+    const float early = std::fabs(ropeLength(registry, bob, anchor) - 2.0f);
+    stepFor(registry, 9.0f);
+    const float late = std::fabs(ropeLength(registry, bob, anchor) - 2.0f);
+
+    CHECK_MSG(early < 1.0e-2f, "a flagged body hangs within a centimetre of its rope: " +
+                                   std::to_string(early));
+    CHECK_MSG(late <= early + 1.0e-3f, "and it is no worse nine seconds later: " +
+                                           std::to_string(late) + " after " + std::to_string(early));
+    CHECK_MSG(registry.get<TransformComponent>(bob).position.y < anchor.y,
+              "below the anchor, not flung above it");
+}
+
+static void testAFlaggedBobStillSwings() {
+    // Released to one side, it falls in an arc and keeps its length. The check
+    // the unflagged test makes on the speed along the rope is NOT made here, on
+    // purpose: the velocity is solved against the rope as the step began and the
+    // body then moved by it, so at the end of the step a little of the speed lies
+    // along the new rope - the position correction of the next step takes the
+    // length back out, and the length is what is held to account.
+    //
+    // Fails under: the rope not constraining a flagged body.
+    entt::registry registry;
+    const glm::vec3 anchor(0.0f, 5.0f, 0.0f);
+    const auto bob = makeJointBody(registry, glm::vec3(2.0f, 5.0f, 0.0f));
+    registry.get<RigidBodyComponent>(bob).integrateAfterSolve = true;
+    hangFrom(registry, bob, anchor, 2.0f);
+
+    stepFor(registry, 0.5f);
+
+    const glm::vec3 swung = registry.get<TransformComponent>(bob).position;
+    CHECK_MSG(std::fabs(glm::length(swung - anchor) - 2.0f) < 2.0e-2f,
+              "the rope is still the length it was: " +
+                  std::to_string(glm::length(swung - anchor)));
+    CHECK_MSG(swung.y < 4.5f && swung.x < 1.8f, "and the bob has moved along it");
+    CHECK_MSG(glm::length(registry.get<RigidBodyComponent>(bob).velocity) > 3.0f,
+              "briskly");
+}
+
+static void testAFlaggedDoorStillTurnsAboutItsHingeAndNothingElse() {
+    // The unflagged hinge test with the door moved after the solve. The door's
+    // ROTATION is deferred here too, by the spin the solve left it - which, for
+    // a hinge, is the spin about the axis alone.
+    //
+    // Fails under: the rotation applied from the spin before the hinge removed
+    // the other two components (the door tips); the deferred rotation lost.
+    entt::registry registry;
+    const auto door = makeJointBody(registry, glm::vec3(0.5f, 0.0f, 0.0f));
+    auto& collider = registry.emplace<BoxColliderComponent>(door);
+    collider.size = glm::vec3(1.0f, 2.0f, 0.1f);
+    registry.get<RigidBodyComponent>(door).useGravity = false;
+    registry.get<RigidBodyComponent>(door).integrateAfterSolve = true;
+
+    auto& joint = registry.emplace<JointComponent>(door);
+    joint.type = JointComponent::Type::Hinge;
+    joint.connectedBody = entt::null;
+    joint.anchor = glm::vec3(-0.5f, 0.0f, 0.0f);
+    joint.connectedAnchor = glm::vec3(0.0f, 0.0f, 0.0f);
+    joint.axis = glm::vec3(0.0f, 1.0f, 0.0f);
+    joint.connectedAxis = glm::vec3(0.0f, 1.0f, 0.0f);
+
+    registry.get<RigidBodyComponent>(door).angularVelocity = glm::vec3(1.0f, 3.0f, 1.0f);
+    stepFor(registry, 1.0f);
+
+    const auto& transform = registry.get<TransformComponent>(door);
+    const glm::mat3 basis(transform.getModelMatrix());
+    CHECK_MSG(glm::dot(glm::normalize(basis[1]), glm::vec3(0.0f, 1.0f, 0.0f)) > 0.99f,
+              "a flagged door holds its axis");
+
+    const glm::vec3 hinge = glm::vec3(transform.getModelMatrix() * glm::vec4(joint.anchor, 1.0f));
+    CHECK_MSG(glm::length(hinge) < 8.0e-2f,
+              "and its hinge edge stays on the hinge: " + std::to_string(glm::length(hinge)));
+
+    const glm::vec3 spin = registry.get<RigidBodyComponent>(door).angularVelocity;
+    CHECK_MSG(std::fabs(spin.x) < 5.0e-2f && std::fabs(spin.z) < 5.0e-2f,
+              "the two degrees of freedom that are not the axis are gone");
+    CHECK_MSG(std::fabs(spin.y) > 0.3f, "and the one that is has been left alone");
+}
+
+static void testAFlaggedCrateComesToRestOnAFloorAndDoesNotSinkIntoIt() {
+    // The deferred move is applied after a solve that has already removed the
+    // approach, so a body pressed against a floor is moved by what the floor let
+    // it keep: nothing. A crate dropped from a height rests at the floor's top
+    // plus its own half height - not hovering where the first contact froze it,
+    // and not sunk.
+    //
+    // Fails under: the deferred moves not applied after the solve (the crate
+    // stops where the first contact is found, in the air); applied from the
+    // velocity gravity gave it rather than the one the solve left (it sinks).
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    const auto crate = makeBox(registry, glm::vec3(0.0f, 7.2f, 0.0f));
+    auto& body = registry.get<RigidBodyComponent>(crate);
+    body.integrateAfterSolve = true;
+    body.allowSleep = false;
+
+    stepFor(registry, 3.0f);
+
+    const float y = registry.get<TransformComponent>(crate).position.y;
+    CHECK_MSG(std::fabs(y - 6.0f) < 0.02f, "a flagged crate rests on the floor: y = " + std::to_string(y));
+    CHECK_MSG(std::fabs(body.velocity.y) < 0.2f, "at rest: vy = " + std::to_string(body.velocity.y));
+}
+
+static void testAStackOfFlaggedBoxesSettlesInsteadOfSinking() {
+    // The unflagged stack test with every box moving after the solve.
+    //
+    // Fails under: a stack the deferred order lets sink or shiver.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(10.0f, 1.0f, 10.0f));
+    std::vector<entt::entity> stack;
+    for (int i = 0; i < 3; ++i) {
+        stack.push_back(makeBox(registry, glm::vec3(0.0f, 6.0f + static_cast<float>(i), 0.0f)));
+        registry.get<RigidBodyComponent>(stack.back()).integrateAfterSolve = true;
+    }
+
+    stepFor(registry, 3.0f);
+
+    for (size_t i = 0; i < stack.size(); ++i) {
+        const float y = registry.get<TransformComponent>(stack[i]).position.y;
+        CHECK_MSG(y > 5.4f, "flagged box " + std::to_string(i) + " sank into the floor: y = " +
+                                std::to_string(y));
+        CHECK_MSG(glm::length(registry.get<RigidBodyComponent>(stack[i]).velocity) < 0.5f,
+                  "flagged box " + std::to_string(i) + " must have settled");
+    }
+    for (size_t i = 1; i < stack.size(); ++i) {
+        const float below = registry.get<TransformComponent>(stack[i - 1]).position.y;
+        const float above = registry.get<TransformComponent>(stack[i]).position.y;
+        CHECK_MSG(above > below + 0.8f, "flagged box " + std::to_string(i) +
+                                            " must still be stacked on the one below");
+    }
+}
+
+static void testAFlaggedAndAnUnflaggedBodyStillMeet() {
+    // A pair with one side of each kind is the case the field's comment warns
+    // about: the contact is found from where the unflagged body has already moved
+    // to and the flagged one has not. It is not the same as Box2D's, and it must
+    // still be a contact - nothing falls through anything, either way round.
+    //
+    // Fails under: a mixed pair the solver loses (the ball falls through).
+    for (const bool ballFlagged : {true, false}) {
+        entt::registry registry;
+        makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+        const auto crate = makeBox(registry, glm::vec3(0.0f, 6.0f, 0.0f));
+        const auto ball = makeSphere(registry, glm::vec3(0.0f, 8.0f, 0.0f), 0.5f);
+        registry.get<RigidBodyComponent>(crate).integrateAfterSolve = !ballFlagged;
+        registry.get<RigidBodyComponent>(ball).integrateAfterSolve = ballFlagged;
+        registry.get<RigidBodyComponent>(crate).allowSleep = false;
+        registry.get<RigidBodyComponent>(ball).allowSleep = false;
+
+        stepFor(registry, 3.0f);
+
+        const float crateY = registry.get<TransformComponent>(crate).position.y;
+        const float ballY = registry.get<TransformComponent>(ball).position.y;
+        const std::string who = ballFlagged ? "flagged ball on an unflagged crate"
+                                            : "unflagged ball on a flagged crate";
+        CHECK_MSG(crateY > 5.9f && crateY < 6.1f, who + ": the crate rests on the floor, y = " +
+                                                       std::to_string(crateY));
+        CHECK_MSG(ballY > crateY + 0.9f && ballY < crateY + 1.15f,
+                  who + ": the ball rests on the crate, y = " + std::to_string(ballY));
+    }
+}
+
 static void runTests() {
+    testABodyThatTouchesNothingIsMovedTheSameWhetherOrNotItMovesAfterTheSolve();
+    testAParentedSpinningBodyIsMovedTheSameWhetherOrNotItMovesAfterTheSolve();
+    testTheGroundPlaneMakesTheFlagIrrelevant();
+    testAKinematicBodyIgnoresTheFlag();
+    testASleepingBodyIsSkippedAndMovesWhenItIsWoken();
+    testSomethingLandingOnASleepingFlaggedBodyWakesIt();
+    testAFlaggedBodyIsMovedByWhatTheSolveLeavesItAndNotByWhatItBrought();
+    testARampIsStillRolledDownWhenTheBodyMovesAfterTheSolve();
+    testAFlaggedBobStillHangsFromItsRope();
+    testAFlaggedBobStillSwings();
+    testAFlaggedDoorStillTurnsAboutItsHingeAndNothingElse();
+    testAFlaggedCrateComesToRestOnAFloorAndDoesNotSinkIntoIt();
+    testAStackOfFlaggedBoxesSettlesInsteadOfSinking();
+    testAFlaggedAndAnUnflaggedBodyStillMeet();
     testANudgedCapsuleOnItsSideSettlesInsteadOfRocking();
     testACapsuleRestsOnItsOwnBottom();
     testACapsuleShorterThanItsDiameterIsASphere();
@@ -3579,4 +4253,4 @@ static void runTests() {
     testEqualSolveOrdersKeepTheOrderTheyHad();
 }
 
-TEST_MAIN("test_physics", 238)
+TEST_MAIN("test_physics", 278)

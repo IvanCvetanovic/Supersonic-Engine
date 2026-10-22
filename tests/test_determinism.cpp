@@ -23,7 +23,10 @@
 #include "core/PhysicsSettings.hpp"
 #include "core/Components.hpp"
 #include "core/SceneSerializer.hpp"
+#include "core/TransformSystem.hpp"
 
+#include <array>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -68,6 +71,341 @@ uint64_t runFor(int ticks) {
     }
     return StateHash::Compute(registry);
 }
+
+// ---- The default path, recorded before integrateAfterSolve existed ----------
+//
+// kCanonical below pins one scene: boxes and a ball falling onto a floor. It
+// does not reach a joint, a body put to sleep, a platform a script moves, a
+// parented body turning about two axes at once, a hull or a capsule, or the
+// world ground plane - and those are the paths a change to the order of a step
+// can disturb without moving it.
+//
+// The two scenes here are scripted to reach all of them. Their hashes were
+// recorded by running them on the engine as it stood BEFORE a body could ask to
+// be moved after the solve, and they are asserted unchanged by the engine that
+// can. Comparing a second world on the new code would prove nothing: both
+// worlds run the same code, so a default path the change had altered would be
+// altered in both.
+
+// What a script owns in the mixed world: the platform it moves by hand.
+struct MixedWorld {
+    entt::entity platform{entt::null};
+};
+
+MixedWorld buildMixedWorld(entt::registry& registry) {
+    MixedWorld world;
+
+    const auto fixed = [&](const glm::vec3& position, const glm::vec3& rotation,
+                           const glm::vec3& scale) {
+        const auto entity = registry.create();
+        registry.emplace<TransformComponent>(entity, position, rotation, scale);
+        registry.emplace<BoxColliderComponent>(entity);
+        return entity;
+    };
+    const auto crate = [&](const glm::vec3& position, float mass, float restitution) {
+        const auto entity = registry.create();
+        registry.emplace<TransformComponent>(entity, position);
+        auto& body = registry.emplace<RigidBodyComponent>(entity);
+        body.mass = mass;
+        body.restitution = restitution;
+        registry.emplace<BoxColliderComponent>(entity);
+        return entity;
+    };
+    const auto ball = [&](const glm::vec3& position, float restitution) {
+        const auto entity = registry.create();
+        registry.emplace<TransformComponent>(entity, position);
+        registry.emplace<RigidBodyComponent>(entity).restitution = restitution;
+        registry.emplace<SphereColliderComponent>(entity).radius = 0.5f;
+        return entity;
+    };
+
+    // The floor, and a ramp tilted about Z for a ball to roll down.
+    fixed(glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(80.0f, 1.0f, 40.0f));
+    fixed(glm::vec3(9.0f, 1.5f, 0.0f), glm::vec3(0.0f, 0.0f, -0.35f), glm::vec3(5.0f, 0.4f, 3.0f));
+    registry.get<RigidBodyComponent>(ball(glm::vec3(8.0f, 3.4f, 0.0f), 0.1f)).friction = 0.8f;
+
+    // A stack of three, which settles and goes to sleep.
+    for (int i = 0; i < 3; ++i) {
+        crate(glm::vec3(-6.0f, 1.0f + 1.15f * static_cast<float>(i), 0.0f), 1.0f,
+              0.05f * static_cast<float>(i));
+    }
+
+    // Balls: one that bounces, spinning about Z, and one spinning about a diagonal.
+    registry.get<RigidBodyComponent>(ball(glm::vec3(-3.0f, 6.0f, 0.0f), 0.7f)).angularVelocity =
+        glm::vec3(0.0f, 0.0f, 4.0f);
+    registry.get<RigidBodyComponent>(ball(glm::vec3(-1.5f, 7.0f, 0.2f), 0.4f)).angularVelocity =
+        glm::vec3(1.0f, 2.0f, 0.0f);
+
+    // A heavy crate tumbling about all three axes, damped in both senses.
+    const auto tumbler = crate(glm::vec3(0.0f, 3.0f, 0.0f), 2.0f, 0.2f);
+    registry.get<TransformComponent>(tumbler).rotation = glm::vec3(0.3f, 0.5f, 0.2f);
+    auto& tumbling = registry.get<RigidBodyComponent>(tumbler);
+    tumbling.angularVelocity = glm::vec3(2.0f, 1.0f, 3.0f);
+    tumbling.linearDamping = 0.1f;
+    tumbling.angularDamping = 0.1f;
+
+    // A capsule, and a hull cube dropped turned.
+    const auto capsule = registry.create();
+    registry.emplace<TransformComponent>(capsule, glm::vec3(2.5f, 3.0f, 0.0f));
+    registry.emplace<RigidBodyComponent>(capsule);
+    auto& capsuleShape = registry.emplace<CapsuleColliderComponent>(capsule);
+    capsuleShape.radius = 0.4f;
+    capsuleShape.height = 2.0f;
+
+    const auto hull = registry.create();
+    registry.emplace<TransformComponent>(hull, glm::vec3(5.0f, 3.0f, 0.0f),
+                                         glm::vec3(0.4f, 0.0f, 0.3f), glm::vec3(1.0f));
+    registry.emplace<MeshComponent>(hull, std::string("Cube"), std::string(), 0u, 0u);
+    registry.emplace<ConvexHullColliderComponent>(hull);
+    registry.emplace<RigidBodyComponent>(hull);
+
+    // A platform a script slides, with cargo that is not allowed to sleep.
+    world.platform = fixed(glm::vec3(14.0f, 1.5f, 0.0f), glm::vec3(0.0f), glm::vec3(4.0f, 0.5f, 3.0f));
+    auto& platformBody = registry.emplace<RigidBodyComponent>(world.platform);
+    platformBody.isKinematic = true;
+    platformBody.friction = 1.0f;
+    platformBody.restitution = 0.0f;
+    const auto cargo = crate(glm::vec3(14.0f, 2.5f, 0.0f), 1.0f, 0.0f);
+    registry.get<RigidBodyComponent>(cargo).friction = 1.0f;
+    registry.get<RigidBodyComponent>(cargo).allowSleep = false;
+
+    // A box put to sleep directly, and one dropped on it to wake it.
+    const auto sleeper = crate(glm::vec3(20.0f, 1.0f, 0.0f), 1.0f, 0.1f);
+    auto& asleep = registry.get<RigidBodyComponent>(sleeper);
+    asleep.isSleeping = true;
+    asleep.sleepPosition = glm::vec3(20.0f, 1.0f, 0.0f);
+    crate(glm::vec3(20.1f, 4.0f, 0.0f), 1.0f, 0.1f);
+
+    // A child of a parent turned about two axes, spinning about two of its own.
+    const auto parent = registry.create();
+    registry.emplace<TransformComponent>(parent, glm::vec3(24.0f, 6.0f, 0.0f),
+                                         glm::vec3(0.0f, 0.7f, 0.2f), glm::vec3(1.0f));
+    const auto child = crate(glm::vec3(0.0f), 1.0f, 0.3f);
+    registry.emplace<HierarchyComponent>(child, parent);
+    registry.get<RigidBodyComponent>(child).angularVelocity = glm::vec3(1.0f, 2.0f, 0.5f);
+
+    // Bodies with their rotation or position locked.
+    const auto frozen = crate(glm::vec3(28.0f, 3.0f, 0.0f), 1.0f, 0.2f);
+    registry.get<RigidBodyComponent>(frozen).freezeRotation = true;
+    registry.get<RigidBodyComponent>(frozen).angularVelocity = glm::vec3(1.0f, 2.0f, 3.0f);
+    const auto planar = crate(glm::vec3(30.0f, 3.0f, 0.0f), 1.0f, 0.2f);
+    registry.get<RigidBodyComponent>(planar).lockPosition = glm::bvec3(false, false, true);
+    registry.get<RigidBodyComponent>(planar).lockRotation = glm::bvec3(true, true, false);
+    registry.get<RigidBodyComponent>(planar).angularVelocity = glm::vec3(1.0f, 2.0f, 3.0f);
+    registry.get<RigidBodyComponent>(planar).velocity = glm::vec3(0.5f, 0.0f, 0.5f);
+
+    // A pendulum from a point in the world.
+    const auto bob = crate(glm::vec3(-5.0f, 8.0f, 0.0f), 1.0f, 0.2f);
+    registry.get<RigidBodyComponent>(bob).allowSleep = false;
+    auto& rope = registry.emplace<JointComponent>(bob);
+    rope.type = JointComponent::Type::Distance;
+    rope.connectedAnchor = glm::vec3(-10.0f, 8.0f, 0.0f);
+    rope.distance = 5.0f;
+
+    // Two links: the first hung from the world, the second from the first.
+    const auto upper = crate(glm::vec3(-22.0f, 8.0f, 0.0f), 1.0f, 0.2f);
+    registry.get<RigidBodyComponent>(upper).allowSleep = false;
+    registry.get<RigidBodyComponent>(upper).velocity = glm::vec3(2.0f, 0.0f, 0.0f);
+    auto& upperJoint = registry.emplace<JointComponent>(upper);
+    upperJoint.type = JointComponent::Type::Distance;
+    upperJoint.connectedAnchor = glm::vec3(-22.0f, 10.0f, 0.0f);
+    upperJoint.distance = 2.0f;
+    const auto lower = crate(glm::vec3(-22.0f, 6.0f, 0.0f), 1.0f, 0.2f);
+    registry.get<RigidBodyComponent>(lower).allowSleep = false;
+    auto& lowerJoint = registry.emplace<JointComponent>(lower);
+    lowerJoint.type = JointComponent::Type::Distance;
+    lowerJoint.connectedBody = upper;
+    lowerJoint.distance = 2.0f;
+
+    // A door on a hinge, horizontal at the start so it swings down under gravity.
+    const auto door = registry.create();
+    registry.emplace<TransformComponent>(door, glm::vec3(-16.0f, 6.0f, 0.0f));
+    auto& doorBody = registry.emplace<RigidBodyComponent>(door);
+    doorBody.allowSleep = false;
+    doorBody.angularDamping = 0.0f;
+    registry.emplace<BoxColliderComponent>(door).size = glm::vec3(3.0f, 0.3f, 1.0f);
+    auto& hinge = registry.emplace<JointComponent>(door);
+    hinge.type = JointComponent::Type::Hinge;
+    hinge.anchor = glm::vec3(-1.5f, 0.0f, 0.0f);
+    hinge.connectedAnchor = glm::vec3(-17.5f, 6.0f, 0.0f);
+    hinge.axis = glm::vec3(0.0f, 0.0f, 1.0f);
+    hinge.connectedAxis = glm::vec3(0.0f, 0.0f, 1.0f);
+
+    return world;
+}
+
+// No collider anywhere under it: the world ground plane is the floor.
+void buildPlaneWorld(entt::registry& registry) {
+    PhysicsSettings settings;
+    settings.hasGroundPlane = true;
+    settings.groundPlaneY = 0.0f;
+    registry.ctx().insert_or_assign<PhysicsSettings>(std::move(settings));
+
+    const auto crate = [&](const glm::vec3& position, float mass, float restitution) {
+        const auto entity = registry.create();
+        registry.emplace<TransformComponent>(entity, position);
+        auto& body = registry.emplace<RigidBodyComponent>(entity);
+        body.mass = mass;
+        body.restitution = restitution;
+        registry.emplace<BoxColliderComponent>(entity);
+        return entity;
+    };
+
+    const auto turned = crate(glm::vec3(0.0f, 4.0f, 0.0f), 1.0f, 0.5f);
+    registry.get<TransformComponent>(turned).rotation = glm::vec3(0.2f, 0.1f, 0.3f);
+    registry.get<RigidBodyComponent>(turned).angularVelocity = glm::vec3(1.0f, 2.0f, 3.0f);
+    crate(glm::vec3(0.0f, 6.0f, 0.0f), 3.0f, 0.2f);
+    crate(glm::vec3(5.0f, 0.5f, 0.0f), 1.0f, 0.0f); // resting on the plane: goes to sleep
+
+    const auto ball = registry.create();
+    registry.emplace<TransformComponent>(ball, glm::vec3(2.0f, 6.0f, 0.0f));
+    registry.emplace<RigidBodyComponent>(ball).restitution = 0.8f;
+    registry.emplace<SphereColliderComponent>(ball).radius = 0.5f;
+
+    const auto damped = crate(glm::vec3(-3.0f, 5.0f, 0.0f), 1.0f, 0.3f);
+    registry.get<RigidBodyComponent>(damped).velocity = glm::vec3(3.0f, 1.0f, 0.0f);
+    registry.get<RigidBodyComponent>(damped).linearDamping = 0.3f;
+
+    const auto capsule = registry.create();
+    registry.emplace<TransformComponent>(capsule, glm::vec3(-6.0f, 4.0f, 0.0f));
+    registry.emplace<RigidBodyComponent>(capsule);
+    registry.emplace<CapsuleColliderComponent>(capsule);
+
+    const auto hull = registry.create();
+    registry.emplace<TransformComponent>(hull, glm::vec3(-9.0f, 4.0f, 0.0f),
+                                         glm::vec3(0.3f, 0.2f, 0.1f), glm::vec3(1.0f));
+    registry.emplace<MeshComponent>(hull, std::string("Cube"), std::string(), 0u, 0u);
+    registry.emplace<ConvexHullColliderComponent>(hull);
+    registry.emplace<RigidBodyComponent>(hull);
+
+    const auto parent = registry.create();
+    registry.emplace<TransformComponent>(parent, glm::vec3(8.0f, 6.0f, 0.0f),
+                                         glm::vec3(0.0f, 0.9f, 0.0f), glm::vec3(1.0f));
+    const auto child = crate(glm::vec3(0.0f), 1.0f, 0.4f);
+    registry.emplace<HierarchyComponent>(child, parent);
+    registry.get<RigidBodyComponent>(child).angularVelocity = glm::vec3(0.5f, 1.5f, 1.0f);
+}
+
+constexpr std::array<int, 13> kTrailTicks = { 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377 };
+using Trail = std::array<uint64_t, kTrailTicks.size()>;
+
+// The state hash at each checkpoint of a run of the fixed step, with the world's
+// transforms refreshed between steps as a running game refreshes them.
+template <typename Script>
+Trail trailOf(entt::registry& registry, Script&& beforeEachStep) {
+    Trail hashes{};
+    size_t next = 0;
+    TransformSystem::UpdateWorldTransforms(registry);
+    for (int tick = 1; tick <= kTrailTicks.back(); ++tick) {
+        beforeEachStep();
+        PhysicsSystem::Update(registry, 1.0f / 60.0f);
+        TransformSystem::UpdateWorldTransforms(registry);
+        if (tick == kTrailTicks[next]) hashes[next++] = StateHash::Compute(registry);
+    }
+    return hashes;
+}
+
+// Every body asks to be moved after the solve. A kinematic one is flagged too,
+// on purpose: the flag has to be ignored there, and a world that left it out
+// would not say so.
+void flagEveryBody(entt::registry& registry) {
+    for (auto entity : registry.view<RigidBodyComponent>()) {
+        registry.get<RigidBodyComponent>(entity).integrateAfterSolve = true;
+    }
+}
+
+// What a script does to a lift: the transform by a step's worth, and the
+// velocity that says so.
+void slideTheLift(entt::registry& registry, const MixedWorld& world) {
+    registry.get<TransformComponent>(world.platform).position +=
+        glm::vec3(0.8f, 0.0f, 0.0f) * (1.0f / 60.0f);
+    registry.get<RigidBodyComponent>(world.platform).velocity = glm::vec3(0.8f, 0.0f, 0.0f);
+}
+
+Trail mixedWorldTrail(bool flagged = false) {
+    entt::registry registry;
+    const MixedWorld world = buildMixedWorld(registry);
+    if (flagged) flagEveryBody(registry);
+    return trailOf(registry, [&] { slideTheLift(registry, world); });
+}
+
+Trail planeWorldTrail(bool flagged = false) {
+    entt::registry registry;
+    buildPlaneWorld(registry);
+    if (flagged) flagEveryBody(registry);
+    return trailOf(registry, [] {});
+}
+
+// The same fixture scene as runFor, flagged or not, loaded through the file or
+// built in place, and handed back as the hash it ends at.
+uint64_t runForWithTheFlag(int ticks, bool flagged) {
+    entt::registry registry;
+    buildScene(registry);
+    if (flagged) flagEveryBody(registry);
+    for (int i = 0; i < ticks; ++i) PhysicsSystem::Update(registry, 1.0f / 60.0f);
+    return StateHash::Compute(registry);
+}
+
+uint64_t runLoadedFor(const std::string& text, int ticks) {
+    entt::registry registry;
+    const SerializationResult loaded = SceneSerializer::DeserializeFromString(registry, text);
+    if (!loaded.ok) return 0;
+    for (int i = 0; i < ticks; ++i) PhysicsSystem::Update(registry, 1.0f / 60.0f);
+    return StateHash::Compute(registry);
+}
+
+// Reports every checkpoint, and - when any differ - the lines to paste in, so a
+// deliberate change of the default path is a pasted block and not an archaeology
+// of which tick moved first.
+void checkTrail(const char* scene, const Trail& actual, const Trail& recorded) {
+    bool differs = false;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        char line[160];
+        std::snprintf(line, sizeof line, "%s tick %d hashed to 0x%016llx, recorded 0x%016llx", scene,
+                      kTrailTicks[i], static_cast<unsigned long long>(actual[i]),
+                      static_cast<unsigned long long>(recorded[i]));
+        CHECK_MSG(actual[i] == recorded[i], line);
+        differs = differs || actual[i] != recorded[i];
+    }
+    if (!differs) return;
+    std::printf("  %s as it hashes now:\n", scene);
+    for (size_t i = 0; i < actual.size(); ++i) {
+        std::printf("    0x%016llxull, // tick %d\n", static_cast<unsigned long long>(actual[i]),
+                    kTrailTicks[i]);
+    }
+}
+
+// Recorded on the engine at 5781518, the commit before integrateAfterSolve.
+constexpr Trail kRecordedMixedWorld = {{
+    0xff21947b7b88ebecull, // tick 1
+    0x3e1307db1c0e39a7ull, // tick 2
+    0x807750ae67e4a915ull, // tick 3
+    0x38a4762c2801e23bull, // tick 5
+    0x8fcb7faea7087c8aull, // tick 8
+    0xa7fe9991dd9e66abull, // tick 13
+    0x0470988b887e3244ull, // tick 21
+    0x3b9bffd40f088ac4ull, // tick 34
+    0x2bf5a740b25698f3ull, // tick 55
+    0x60fec68f3b1eb408ull, // tick 89
+    0x89597ae8fac55e9dull, // tick 144
+    0xee5a1f7ea2f884efull, // tick 233
+    0x889e68198934e316ull, // tick 377
+}};
+constexpr Trail kRecordedPlaneWorld = {{
+    0xff6a8bc1da27ac5bull, // tick 1
+    0x77a5cfbcbe018f61ull, // tick 2
+    0xd02cf8ee8f86aa6bull, // tick 3
+    0x2b540946484163b7ull, // tick 5
+    0x591daf672637eb34ull, // tick 8
+    0x8cab6aeb7b8f581aull, // tick 13
+    0x13e511022cac31adull, // tick 21
+    0x5fc3b1c7fbc9f185ull, // tick 34
+    0xbb818f5b7e39cd66ull, // tick 55
+    0x4989425f109b9ffbull, // tick 89
+    0x00ff53b4fcd39830ull, // tick 144
+    0x95ec90e6d8f7f7c1ull, // tick 233
+    0xe3516252140896f1ull, // tick 377
+}};
 
 } // namespace
 
@@ -141,6 +479,229 @@ static void testTheCanonicalSceneHashesToTheSameNumberOnEveryBuild() {
     CHECK_MSG(actual == kCanonical,
               "the canonical scene hashed to " + std::to_string(actual) +
                   ", and this build expects " + std::to_string(kCanonical));
+}
+
+static void testTheDefaultPathHashesAsItDidBeforeABodyCouldMoveAfterTheSolve() {
+    // WHAT THIS PINS. Every body in these two scenes is left at its defaults, and
+    // the hashes were recorded by the engine that had no way to say otherwise. If
+    // a change to the order of a step - a body moved after the solve, a branch
+    // added to the integrate loop, a helper pulled out of it - altered one float
+    // of what an ordinary body does, a checkpoint here moves. The first scene
+    // reaches contacts, sleep, joints (to the world and body to body), a hinge, a
+    // hull, a capsule, a kinematic platform, a parented spinning child and the
+    // axis locks; the second reaches the world ground plane.
+    //
+    // WHEN THIS FAILS it is a decision, as with kCanonical: either the default
+    // path changed on purpose and the block printed above is pasted in, or it
+    // changed by accident and that is the bug.
+    //
+    // Fails under: moving any body's integration after the solve when it did not
+    // ask; running the rotation of an ordinary body through a different formula;
+    // applying a deferred move to a body that is asleep, kinematic or under the
+    // ground plane.
+    checkTrail("mixed world", mixedWorldTrail(), kRecordedMixedWorld);
+    checkTrail("plane world", planeWorldTrail(), kRecordedPlaneWorld);
+}
+
+static void testTheGroundPlaneWorldHashesAsItDidWhenEveryBodyIsFlagged() {
+    // The plane is resolved inside the integrate loop, so the flag is ignored
+    // under it: a world in which EVERY body asks for the new order must hash,
+    // tick for tick, to the numbers recorded before the order existed.
+    //
+    // Fails under: honouring the flag when the scene has the ground plane on.
+    checkTrail("plane world, every body flagged", planeWorldTrail(true), kRecordedPlaneWorld);
+}
+
+static void testAFlaggedWorldIsAsReproducibleAsAnyOtherAndIsNotTheSameWorld() {
+    // Both halves, as for the hash itself. The flagged mixed world, run twice,
+    // lands on the same number at every checkpoint - the deferral keeps nothing
+    // between runs - and it is NOT the number the unflagged world lands on,
+    // which is the flag doing something in a scene with contacts, joints and
+    // sleepers. A flag that changed nothing would pass the first half alone.
+    //
+    // Fails under: state kept across steps or runs in the deferral (the two
+    // runs disagree); the flag not read (the flagged world is the recorded one).
+    const Trail first = mixedWorldTrail(true);
+    const Trail second = mixedWorldTrail(true);
+    CHECK_MSG(first == second, "a flagged world run twice must hash the same at every checkpoint");
+    CHECK_MSG(first.back() != kRecordedMixedWorld.back(),
+              "and it must not be the world the flag was not set in");
+    CHECK_MSG(runForWithTheFlag(240, true) == runForWithTheFlag(240, true),
+              "the fixture scene flagged is as reproducible");
+    CHECK_MSG(runForWithTheFlag(240, true) != runForWithTheFlag(240, false),
+              "and is not the unflagged fixture scene");
+}
+
+static void testAFlaggedBodyThatTouchesNothingLeavesTheRestOfTheWorldAlone() {
+    // The deferral is a list that lives for one step. A flagged body far from
+    // everything, in a world full of contacts and joints, must not change what
+    // any OTHER body does by a bit: not through the list (an entry applied to
+    // the wrong body, an entry that outlives its step), and not through the
+    // early return (taken by the solve having nothing to do, which this world
+    // never does).
+    //
+    // Compared body for body against the same world without it.
+    //
+    // Fails under: a deferred entry applied to the wrong entity; entries kept
+    // between steps; the move applied to every body when the list is not empty.
+    entt::registry alone;
+    entt::registry crowded;
+    const MixedWorld aloneWorld = buildMixedWorld(alone);
+    const MixedWorld crowdedWorld = buildMixedWorld(crowded);
+
+    const auto stray = crowded.create();
+    crowded.emplace<TransformComponent>(stray, glm::vec3(300.0f, 300.0f, 0.0f));
+    auto& strayBody = crowded.emplace<RigidBodyComponent>(stray);
+    strayBody.velocity = glm::vec3(0.0f, 30.0f, 1.0f);
+    strayBody.angularVelocity = glm::vec3(1.0f, 2.0f, 3.0f);
+    strayBody.integrateAfterSolve = true;
+    crowded.emplace<BoxColliderComponent>(stray);
+
+    TransformSystem::UpdateWorldTransforms(alone);
+    TransformSystem::UpdateWorldTransforms(crowded);
+    int firstDifference = -1;
+    for (int tick = 0; tick < 240 && firstDifference < 0; ++tick) {
+        slideTheLift(alone, aloneWorld);
+        slideTheLift(crowded, crowdedWorld);
+        PhysicsSystem::Update(alone, 1.0f / 60.0f);
+        PhysicsSystem::Update(crowded, 1.0f / 60.0f);
+        TransformSystem::UpdateWorldTransforms(alone);
+        TransformSystem::UpdateWorldTransforms(crowded);
+
+        for (auto entity : alone.view<RigidBodyComponent>()) {
+            const auto& a = alone.get<TransformComponent>(entity);
+            const auto& b = crowded.get<TransformComponent>(entity);
+            const auto& ra = alone.get<RigidBodyComponent>(entity);
+            const auto& rb = crowded.get<RigidBodyComponent>(entity);
+            if (a.position != b.position || a.rotation != b.rotation || ra.velocity != rb.velocity ||
+                ra.angularVelocity != rb.angularVelocity || ra.isSleeping != rb.isSleeping) {
+                firstDifference = tick;
+                break;
+            }
+        }
+    }
+    CHECK_MSG(firstDifference < 0,
+              "a flagged body that touches nothing must not disturb any other body; first "
+              "difference on tick " + std::to_string(firstDifference));
+    CHECK_MSG(crowded.get<TransformComponent>(stray).position.y > 330.0f,
+              "while it does fly, by its own velocity");
+}
+
+static void testABodyNothingTouchesIsMovedTheSameWhetherOrNotItMovesAfterTheSolve() {
+    // THE EARLY RETURN. Update stops before the solve when there is nothing to
+    // solve - fewer than two colliders, or none that can meet - and a move that
+    // waited for the solve would be lost there. No scene with contacts reaches
+    // that line, which is why the checks above, all of them in worlds the solver
+    // works in, cannot see it: delete the call that applies the moves on the
+    // early return and every one of them stays green, a flagged world still
+    // reproduces and still differs from the unflagged one. This is the test that
+    // goes red.
+    //
+    // Three scenes, each a single body nothing can touch, tumbling about two or
+    // three axes and damped both ways: with no collider anywhere; with a lone
+    // collider; and a child of a parent that is turned about two axes and scaled
+    // unevenly (the basis the move is converted through, kept across the solve).
+    // The flagged body must end every step EXACTLY where its unflagged twin
+    // does, and it must have gone somewhere - a body that never moves is also
+    // "the same" as another that never moves.
+    //
+    // Fails under: the deferred moves not applied on the early return (the
+    // flagged body stays where it started); applied twice; applied from a velocity
+    // the step did not leave it; the move not converted through the parent's
+    // basis; the rotation formula differing from the integrate loop's.
+    for (int variant = 0; variant < 3; ++variant) {
+        const auto build = [variant](entt::registry& registry, bool flagged) {
+            entt::entity parent = entt::null;
+            if (variant == 2) {
+                parent = registry.create();
+                registry.emplace<TransformComponent>(parent, glm::vec3(5.0f, 10.0f, 0.0f),
+                                                     glm::vec3(0.4f, 0.7f, 0.2f),
+                                                     glm::vec3(2.0f, 1.0f, 3.0f));
+            }
+            const auto body = registry.create();
+            auto& transform = registry.emplace<TransformComponent>(body);
+            if (variant != 2) {
+                transform.position = glm::vec3(0.0f, 10.0f, 0.0f);
+                transform.rotation = glm::vec3(0.3f, 0.5f, 0.2f);
+            } else {
+                registry.emplace<HierarchyComponent>(body, parent);
+            }
+            auto& rigid = registry.emplace<RigidBodyComponent>(body);
+            rigid.velocity = glm::vec3(1.0f, 2.0f, 0.5f);
+            rigid.angularVelocity = glm::vec3(2.0f, 1.0f, 3.0f);
+            rigid.linearDamping = 0.1f;
+            rigid.angularDamping = 0.1f;
+            rigid.allowSleep = false;
+            rigid.integrateAfterSolve = flagged;
+            if (variant == 1) registry.emplace<BoxColliderComponent>(body);
+            TransformSystem::UpdateWorldTransforms(registry);
+            return body;
+        };
+
+        entt::registry unflagged;
+        entt::registry flagged;
+        const auto plain = build(unflagged, false);
+        const auto asked = build(flagged, true);
+        const glm::vec3 start = flagged.get<TransformComponent>(asked).position;
+
+        int firstDifference = -1;
+        for (int step = 0; step < 120 && firstDifference < 0; ++step) {
+            PhysicsSystem::Update(unflagged, 1.0f / 60.0f);
+            PhysicsSystem::Update(flagged, 1.0f / 60.0f);
+            TransformSystem::UpdateWorldTransforms(unflagged);
+            TransformSystem::UpdateWorldTransforms(flagged);
+
+            const auto& a = unflagged.get<TransformComponent>(plain);
+            const auto& b = flagged.get<TransformComponent>(asked);
+            const auto& ra = unflagged.get<RigidBodyComponent>(plain);
+            const auto& rb = flagged.get<RigidBodyComponent>(asked);
+            if (a.position != b.position || a.rotation != b.rotation || ra.velocity != rb.velocity ||
+                ra.angularVelocity != rb.angularVelocity) {
+                firstDifference = step;
+            }
+        }
+        CHECK_MSG(firstDifference < 0,
+                  "scene " + std::to_string(variant) + ": a body nothing touches must be moved "
+                  "exactly as the unflagged one is; first difference on step " +
+                      std::to_string(firstDifference));
+        CHECK_MSG(glm::length(flagged.get<TransformComponent>(asked).position - start) > 0.5f,
+                  "scene " + std::to_string(variant) + ": and it must have gone somewhere");
+    }
+}
+
+static void testTheFlagInASceneFileReachesTheSimulationAndIsNotState() {
+    // Two things about a flag that comes in from a file. It survives the file -
+    // a scene saved flagged and loaded plays out as the flagged world does, and
+    // not as the world it was before it was flagged - and it is authored
+    // configuration, like friction, so it is NOT folded into the state hash: a
+    // world's hash before anything has stepped is the same flagged or not. The
+    // second half is a decision, not an accident: a recording only ever
+    // diverges where the flag changes what a step does.
+    //
+    // Fails under: a codec that drops the key (the loaded scene plays out
+    // unflagged); a state hash that includes the flag (the tick-zero hashes
+    // differ).
+    entt::registry flaggedSource;
+    entt::registry plainSource;
+    buildScene(flaggedSource);
+    buildScene(plainSource);
+    flagEveryBody(flaggedSource);
+
+    CHECK_MSG(StateHash::Compute(flaggedSource) == StateHash::Compute(plainSource),
+              "the flag is configuration and not state: tick zero hashes alike");
+
+    const std::string flaggedText = SceneSerializer::SerializeToString(flaggedSource);
+    const std::string plainText = SceneSerializer::SerializeToString(plainSource);
+    CHECK_MSG(flaggedText.find("\"IntegrateAfterSolve\": true") != std::string::npos,
+              "a flagged scene says so in its file");
+    CHECK_MSG(plainText.find("IntegrateAfterSolve") == std::string::npos,
+              "and an unflagged one does not mention it");
+
+    const uint64_t viaFlaggedFile = runLoadedFor(flaggedText, 240);
+    CHECK_MSG(viaFlaggedFile != 0 && viaFlaggedFile == runLoadedFor(flaggedText, 240),
+              "a flagged scene loaded twice plays out the same way");
+    CHECK_MSG(viaFlaggedFile != runLoadedFor(plainText, 240),
+              "and not the way the same scene unflagged does: the flag reached the simulation");
 }
 
 static void testTheHashMovesWhenTheSimulationDoes() {
@@ -1058,6 +1619,12 @@ static void runTests() {
     testTheDefaultRateReproducesTheOldBehaviour();
     testTheSameSceneSteppedTwiceAgreesExactly();
     testTheCanonicalSceneHashesToTheSameNumberOnEveryBuild();
+    testTheDefaultPathHashesAsItDidBeforeABodyCouldMoveAfterTheSolve();
+    testTheGroundPlaneWorldHashesAsItDidWhenEveryBodyIsFlagged();
+    testAFlaggedWorldIsAsReproducibleAsAnyOtherAndIsNotTheSameWorld();
+    testAFlaggedBodyThatTouchesNothingLeavesTheRestOfTheWorldAlone();
+    testABodyNothingTouchesIsMovedTheSameWhetherOrNotItMovesAfterTheSolve();
+    testTheFlagInASceneFileReachesTheSimulationAndIsNotState();
     testTheHashMovesWhenTheSimulationDoes();
     testTheHashDoesNotDependOnEntityCreationOrder();
     testTheSameSceneHashesTheSameHoweverManyLoadsPrecededIt();
@@ -1076,4 +1643,4 @@ static void runTests() {
     testTheClockIsDerivedRatherThanAccumulated();
 }
 
-TEST_MAIN("test_determinism", 50)
+TEST_MAIN("test_determinism", 110)

@@ -352,6 +352,7 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     body.freezeRotation = true;
     body.lockPosition = glm::bvec3(false, false, true);
     body.lockRotation = glm::bvec3(true, true, false);
+    body.integrateAfterSolve = true;
 
     // Ignored by the solver on an entity that has a rigid body, but the codec
     // does not care whose it is: it has to come back either way.
@@ -843,6 +844,8 @@ static void testPrefabRoundTripsEveryField() {
                       "a body locked to its plane has to come back locked to it");
             CHECK_MSG(body->lockRotation == glm::bvec3(true, true, false),
                       "and turning about z only");
+            CHECK_MSG(body->integrateAfterSolve,
+                      "a body that asks to be moved after the solve has to come back asking");
         }
 
         const auto* surface = registry.try_get<PhysicsMaterialComponent>(clone);
@@ -1915,7 +1918,99 @@ static void testATextLabelsAlignmentIsWrittenOnlyWhenChosen() {
               "an unknown alignment loads as Center");
 }
 
+static void testIntegrateAfterSolveIsWrittenOnlyWhenSet() {
+    // RigidBodyComponent::integrateAfterSolve is Box2D's order of a step for one
+    // body, and a body that never asks for it has nothing to say. A scene saved
+    // before the key existed, and every body since that leaves it alone, is the
+    // file it always was - byte for byte, which is what the whole block is
+    // compared against below - and a body that does ask writes the key as the
+    // last member, after the member that used to be last.
+    //
+    // Fails under: a writer that always emits the key (the plain block gains a
+    // member); one that emits it as "false" (the same); a comma moved so the
+    // plain block ends differently; a reader that defaults to true.
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TagComponent>(entity, "Crate");
+    registry.emplace<TransformComponent>(entity);
+    registry.emplace<RigidBodyComponent>(entity);
+
+    // The RigidBody block of a scene's text, whitespace collapsed to single
+    // spaces so the comparison does not depend on how deep the entity is
+    // indented.
+    const auto block = [](const std::string& text) {
+        const size_t begin = text.find("\"RigidBody\": {");
+        if (begin == std::string::npos) return std::string();
+        const size_t end = text.find("},", begin);
+        if (end == std::string::npos) return std::string();
+        std::string collapsed;
+        bool pendingSpace = false;
+        for (size_t i = begin; i < end + 2; ++i) {
+            const char c = text[i];
+            if (c == ' ' || c == '\n' || c == '\r' || c == '\t') {
+                pendingSpace = true;
+                continue;
+            }
+            if (pendingSpace && !collapsed.empty()) collapsed += ' ';
+            pendingSpace = false;
+            collapsed += c;
+        }
+        return collapsed;
+    };
+
+    const std::string plain = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(plain.find("IntegrateAfterSolve") == std::string::npos,
+              "a body that never asks writes no key");
+    CHECK_MSG(block(plain) ==
+                  "\"RigidBody\": { \"Velocity\": [0, 0, 0], \"Mass\": 1, \"UseGravity\": true, "
+                  "\"Restitution\": 0.3, \"Friction\": 0.4, \"LinearDamping\": 0, "
+                  "\"AngularVelocity\": [0, 0, 0], \"AngularDamping\": 0.05, "
+                  "\"FreezeRotation\": false, \"LockPosition\": [false, false, false], "
+                  "\"LockRotation\": [false, false, false], \"AllowSleep\": true, "
+                  "\"IsKinematic\": false },",
+              "and the block is exactly the one written before the key existed: " + block(plain));
+
+    registry.get<RigidBodyComponent>(entity).integrateAfterSolve = true;
+    const std::string flagged = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(block(flagged) ==
+                  "\"RigidBody\": { \"Velocity\": [0, 0, 0], \"Mass\": 1, \"UseGravity\": true, "
+                  "\"Restitution\": 0.3, \"Friction\": 0.4, \"LinearDamping\": 0, "
+                  "\"AngularVelocity\": [0, 0, 0], \"AngularDamping\": 0.05, "
+                  "\"FreezeRotation\": false, \"LockPosition\": [false, false, false], "
+                  "\"LockRotation\": [false, false, false], \"AllowSleep\": true, "
+                  "\"IsKinematic\": false, \"IntegrateAfterSolve\": true },",
+              "a flagged body adds one member, last: " + block(flagged));
+
+    const auto flagAfterLoading = [](const std::string& text) {
+        entt::registry loaded;
+        const auto result = SceneSerializer::DeserializeFromString(loaded, text);
+        bool found = false;
+        bool flag = false;
+        for (auto [e, body] : loaded.view<RigidBodyComponent>().each()) {
+            (void)e;
+            found = true;
+            flag = body.integrateAfterSolve;
+        }
+        return std::make_pair(result.ok && found, flag);
+    };
+
+    const auto onTrip = flagAfterLoading(flagged);
+    CHECK_MSG(onTrip.first && onTrip.second, "a flagged body comes back flagged");
+
+    // A file with no key at all - every scene on disk - is a body that has not
+    // asked, and so is one that says so in as many words.
+    const auto absent = flagAfterLoading(plain);
+    CHECK_MSG(absent.first && !absent.second, "an absent key is false");
+
+    std::string spelledOut = flagged;
+    const std::string key = "\"IntegrateAfterSolve\": true";
+    spelledOut.replace(spelledOut.find(key), key.size(), "\"IntegrateAfterSolve\": false");
+    const auto no = flagAfterLoading(spelledOut);
+    CHECK_MSG(no.first && !no.second, "and a key that says false is false");
+}
+
 static void runTests() {
+    testIntegrateAfterSolveIsWrittenOnlyWhenSet();
     testInstantiatingAPrefabTwiceParsesItOnce();
     testSavingAPrefabInvalidatesWhatWasParsedFromIt();
     testABrokenPrefabIsNotCached();
@@ -1955,4 +2050,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 465)
+TEST_MAIN("test_serialize", 475)

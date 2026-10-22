@@ -1243,6 +1243,49 @@ struct RigidBodyComponent {
     // script that WRITES velocity or position wakes it anyway.
     bool allowSleep{true};
 
+    // ---- Integrate after the solve ----
+    //
+    // Box2D's order of a step for THIS body: gravity and damping, then the
+    // contact and joint solve, THEN the move.
+    //
+    // The engine integrates first. A body is moved by the velocity it carried
+    // into the step and the solver then takes the approach out of what it found,
+    // so a contact acts one step late - and the coarser the step, the later. What
+    // that costs depends on the scene, and it was measured in a game, not by the
+    // engine's own tests: Magic Portals' 30 u rolling stone, off a 14 degree prism
+    // at that game's 1/30 s step, creeps at 0.28 u a frame under this order where
+    // the original, stepped by Box2D, gives 1.05, and at 1.00 with its body moved
+    // after the solve. A 0.5 m ball on the same slope in the engine's tests rolls
+    // as far either way (0.0002 m apart in a second), so how much there is to gain
+    // is a measurement to make in the scene that needs it. That is the engine's
+    // order for every body and it stays so: this is an opt-in for the body that
+    // has to match a world stepped the other way, and a scene that never sets it
+    // is moved, to the bit, as it always was.
+    //
+    // Set, the body still gets its gravity, its damping and its axis locks where
+    // it always did, but its rotation and position are advanced after the
+    // velocity solve, from the velocity and spin the solve left it - so a body
+    // pressed against a surface is moved by what the surface let it keep. A
+    // body that touches nothing and hangs from nothing is moved by exactly the
+    // arithmetic it would be unset, in the same step.
+    //
+    // What it does not do:
+    //  * It is ignored when the scene's PhysicsSettings turn the world ground
+    //    plane on. That plane is resolved inside the integrate loop, against the
+    //    position the loop has just written, so the move cannot wait for the
+    //    solve.
+    //  * It is ignored by a kinematic body, which code moves, and a sleeping body
+    //    is skipped altogether: a body woken by an impact on this very step has
+    //    already missed this step's move, flagged or not, and is moved from the
+    //    next.
+    //  * It says nothing about the OTHER side of a contact. The contact is found
+    //    from where each body stands when the solve begins: a flagged body has
+    //    not moved yet, an unflagged one has. A pair meant to behave as Box2D's
+    //    wants the flag on both sides.
+    //  * The contacts the step reports, and the joint position correction that
+    //    precedes the solve, see a flagged body where the step began.
+    bool integrateAfterSolve{false};
+
     // Runtime state, deliberately not serialised. A scene loads with everything
     // awake and settles again within kSleepTime; storing the flag would mean a
     // scene could be saved with a body asleep in mid-air.
