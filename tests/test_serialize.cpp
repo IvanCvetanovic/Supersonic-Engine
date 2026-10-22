@@ -2050,4 +2050,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 475)
+TEST_MAIN("test_serialize", 491)

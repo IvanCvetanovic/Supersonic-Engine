@@ -1643,4 +1643,4 @@ static void runTests() {
     testTheClockIsDerivedRatherThanAccumulated();
 }
 
-TEST_MAIN("test_determinism", 110)
+TEST_MAIN("test_determinism", 144)

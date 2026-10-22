@@ -3660,8 +3660,9 @@ static void testASleepingBodyIsSkippedAndMovesWhenItIsWoken() {
     // it, and THAT step it is moved by the deferred path - on the early return,
     // since nothing else is here.
     //
-    // Fails under: a sleeping body reaching the deferral and being moved; a
-    // woken body whose move is lost.
+    // Fails under: the integrate loop no longer skipping a sleeper (a sleeper has
+    // exactly zero velocity and spin, so being moved by them changes nothing: this
+    // pins that skip, not the deferral); a woken body whose move is lost.
     entt::registry registry;
     const auto sleeper = makeBox(registry, glm::vec3(0.0f, 5.0f, 0.0f));
     auto& body = registry.get<RigidBodyComponent>(sleeper);

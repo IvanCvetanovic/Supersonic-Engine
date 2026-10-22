@@ -1943,7 +1943,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                      });
 
     // The positional half, exactly where a contact's happens and for the same
-    // reason: positions are integrated BEFORE this solve, so a velocity change
+    // reason: positions are integrated BEFORE this solve (for an unflagged body;
+    // a body with integrateAfterSolve moves after it), so a velocity change
     // alone cannot take out the error this step introduced, and a hanging body
     // would settle a centimetre below where it belongs.
     //

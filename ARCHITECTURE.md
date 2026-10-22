@@ -1283,9 +1283,9 @@ check which joints broke
 Sleeping is decided during integration rather than after the solve, and the
 velocity it judges is therefore the one the *previous* step settled on. That is
 the right question to ask, and it is also the only place the decision can live:
-`Update` returns early when the scene holds fewer than two colliders, and a lone
-body resting on the world plane is exactly the case that has to be able to
-sleep.
+`Update` returns early when there is nothing to solve (no constraint and no
+joint), and a lone body resting on the world plane is exactly the case that has
+to be able to sleep.
 
 **A body can ask to be moved after the solve.** The order above - move, then
 solve - is the engine's for every body, and it is not Box2D's, which solves the
@@ -1306,7 +1306,12 @@ is the opt-in for one body. It is `false` by default, and written to a file only
 when it is `true`, so no scene on disk and no body that leaves it alone changes by
 a bit; `tests/test_determinism.cpp` records the state hashes of two scripted
 worlds - contacts, joints, sleepers, a platform, a parented child, the ground
-plane - from before the field existed and asserts them unchanged.
+plane - from before the field existed and asserts them unchanged. Those hashes
+were recorded on MSVC; `kCanonical` alone was also checked on GCC, so run
+`test_determinism` on Linux before the pin moves anywhere that builds there. A
+reader of an older engine ignores the key (the RigidBody reader looks up only the
+keys it knows, and nothing refuses an unknown one), so a scene written with the
+flag loads there without error and the body keeps the engine's order.
 
 A flagged body still gets its gravity, damping and axis locks in the integrate
 loop, where it always did. What waits is its rotation and its position: they go
