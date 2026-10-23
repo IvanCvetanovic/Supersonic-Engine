@@ -130,7 +130,7 @@ Teardown order is load-bearing: `EditorLayer` must be destroyed before
 | Meshes | `MeshRegistry` | Cube/Sphere/Plane/Terrain primitives, OBJ, and glTF |
 | glTF/GLB | `GltfLoader` (tinygltf) | Bakes each node's transform chain into its primitives |
 | Textures | `TextureRegistry` (stb_image) | Cached by path; one material descriptor set per triple of maps, given back to a freeable pool of 1024 when a texture is dropped |
-| Audio | `AudioClip` | Uncompressed RIFF/WAVE; Ogg Vorbis (stb_vorbis); MP3 on Windows (Media Foundation). All decoded whole to PCM |
+| Audio | `AudioClip` | Uncompressed RIFF/WAVE; Ogg Vorbis (stb_vorbis); MP3 (Media Foundation on Windows, dr_mp3 elsewhere). All decoded whole to PCM |
 
 Both registries cache failures so a missing or broken asset is not reopened
 every frame, and both fall back to something visible (unit cube, checkerboard)
@@ -3110,20 +3110,76 @@ also decode 24-bit samples, which the loader will never hand it.
 `AudioClip::Load` chooses the decoder by extension, case-insensitively, and
 refuses any other name by name rather than handing it to the WAV parser, whose
 "not a RIFF/WAVE file" would send the reader to the wrong place. `.mp3` goes
-through Media Foundation, which ships with Windows — no dependency, and no MP3
-anywhere else. `.ogg` goes through `stb_vorbis`, the one vendored codec: a
-single public-domain file, compiled once in `StbVorbisImplementation.cpp` so its
-warnings are silenced without silencing the loader, and the same on every
-platform. Both decode to 16-bit PCM and take one or two channels, as the WAV
-reader does. `LoadOgg` reads the whole file and decodes it from memory, so a
-missing file, a file that is not Ogg, one cut short after its first page and
-an Ogg stream that is not Vorbis (Opus, FLAC) each say which they are. The
-limits are stb_vorbis's: a chained file decodes only its first stream, floor-0
-files from before 2004 are refused, and a file damaged part way through its
-audio decodes as far as it goes and succeeds, because stb_vorbis reports only
-that the data ended. Decoding either format is real work rather than a copy, so
-the first-play hitch described next is larger for them: a game with long Ogg or
-MP3 clips calls `AudioEngine::LoadClip` for them before it plays them.
+through Media Foundation on Windows, which ships with the system — no
+dependency — and through `dr_mp3` everywhere else (below). `.ogg` goes through
+`stb_vorbis`, a vendored codec: a single public-domain file, compiled once in
+`StbVorbisImplementation.cpp` so its warnings are silenced without silencing the
+loader, and the same on every platform. All decode to 16-bit PCM and take one or
+two channels, as the WAV reader does. `LoadOgg` reads the whole file and decodes
+it from memory, so a missing file, a file that is not Ogg, one cut short after
+its first page and an Ogg stream that is not Vorbis (Opus, FLAC) each say which
+they are. The limits are stb_vorbis's: a chained file decodes only its first
+stream, floor-0 files from before 2004 are refused, and a file damaged part way
+through its audio decodes as far as it goes and succeeds, because stb_vorbis
+reports only that the data ended. Decoding either format is real work rather
+than a copy, so the first-play hitch described next is larger for them: a game
+with long Ogg or MP3 clips calls `AudioEngine::LoadClip` for them before it
+plays them.
+
+Off Windows, `LoadMp3` reads the file whole, as `LoadOgg` does, and hands the
+bytes to `detail::DecodeMp3` (`Mp3Decode.cpp`, internal), which drives `dr_mp3` —
+the second vendored codec, one public-domain / MIT-0 header in
+`third_party/dr_libs/`, compiled once in `DrMp3Implementation.cpp` on the same
+terms as `stb_vorbis`. A game that ships only MP3 therefore no longer gets an
+error from `LoadMp3` off Windows: it gets a clip. That the clip is then heard is
+the audio backend's business, as for any clip.
+
+What has been run: the decoder and the whole test suite on Linux (GCC 13);
+`test_audio`, its directory mode and a fuzz of damaged streams again under ASan
+and UBSan, the rest of the suite not; and a game's 46 files through it there. For
+Android only the NDK compiler's syntax check has been run, for macOS and iOS
+nothing has been built with it, and dr_mp3's NEON path has never executed. The
+decoder is compiled on Windows too, though `LoadMp3` does not call it there:
+`test_audio` decodes the same bytes through both and compares them, and its
+`--mp3-dir <folder>` mode does that over a folder of a game's own files.
+
+Its limits: one or two channels and 8 to 48 kHz; a format that changes part way
+through is refused, as the Media Foundation path refuses it (a stretch of another
+format shorter than about eleven frames never gets that far: dr_mp3
+resynchronises past it and the clip simply lacks it); a file past `INT_MAX`
+bytes is refused, because dr_mp3 counts them in an `int`; and so is a stream that
+decodes to more than 256 MiB. That last is a number because an MP3 can be far
+larger decoded than it is on disk (48 times, at 32 kbit/s and 48 kHz stereo), so
+the limit cannot be whatever the file claims. Nothing the stream says about its own
+length is believed: the Xing frame count steers dr_mp3's trimming, but the output
+is grown from what is actually decoded and never allocated past the cap.
+A file that is cut short or damaged part way through decodes as far as it can be
+followed and succeeds, as an Ogg file does; what is refused is a file that is not
+MPEG audio at all, an empty one, and one that decodes past the cap.
+
+A game that vendors its own copy of dr_mp3 meets this one at link time, because
+`SupersonicCore` now defines the plain C `drmp3_*` symbols. Linked as a static
+library (either order against the engine's), or as an object file placed before the
+engine's archive, the two coexist; an object file placed AFTER the archive is a
+"multiple definition of `drmp3_*`" error (GNU ld, measured against Penumbra's own
+`dr_mp3.c`; MSVC's linker was not tried). Such a game can drop its copy when it
+moves to an engine that has this one.
+
+The two decoders do not trim the same way, and the engine does not make them.
+Where a stream carries a LAME header, dr_mp3 drops its Info frame and trims the
+encoder's delay and padding, which gives a gapless loop its exact length. Media
+Foundation's clip of the same stream comes out as if the header frame had been
+played as a frame of silence and the delay and the padding kept: the test's
+stereo 44.1 kHz stream is 15600 frames there and 13230 under dr_mp3, and its tone
+starts 1729 samples later. For a stream with no header it comes out as if the
+first 528 samples (the decoder's own delay) had been cut, which dr_mp3 does not
+do. Measured over the 46 files of one game, none of which has a header: the same
+rate and channels, every file 528 samples (12 ms at 44.1 kHz) shorter at the
+front on Windows, and otherwise the same waveform to 0.05% RMS error. These are
+frame counts and alignments measured on Windows 11 Pro (10.0.26300), not read out
+of Media Foundation, so the mechanism is inferred. A game that needs the same loop
+point on every platform has to supply its own decoded clip
+(`AudioEngine::AddClip`).
 
 Clips are decoded whole into memory the first time something plays them, on the
 game thread, inside `AudioSystem::Update`. A long ambient track is a hitch on

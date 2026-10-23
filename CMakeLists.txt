@@ -346,6 +346,17 @@ target_include_directories(SupersonicCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imguizmo
 )
 
+# dr_mp3, which decodes MP3 wherever Media Foundation is not. PRIVATE, unlike the
+# paths above: only Mp3Decode.cpp and DrMp3Implementation.cpp include it, and no
+# public header does, so a consumer of SupersonicCore has no use for the path
+# (and a game that wants its own copy of dr_mp3 is not handed this one's include
+# path). That is all PRIVATE keeps apart: the drmp3_* symbols themselves are in
+# SupersonicCore, and a second definition linked after its archive collides
+# (ARCHITECTURE.md, in the audio section, lists the link shapes that do and do not).
+target_include_directories(SupersonicCore PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/dr_libs
+)
+
 # GLM's configuration MUST be identical in every translation unit. Defining
 # these in headers is order-dependent and silently produces an ODR violation
 # where getProjectionMatrix() compiles differently per TU.
@@ -390,6 +401,10 @@ set(VENDORED_SOURCES
     # stb_vorbis, which decodes AudioClip::LoadOgg's files. The loader includes
     # only its declarations, so its warnings are confined to this one TU.
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/StbVorbisImplementation.cpp
+    # dr_mp3, which decodes MP3 wherever Media Foundation is not (Mp3Decode.cpp,
+    # reached from AudioClip::LoadMp3). The same arrangement: the decoder includes
+    # only the declarations.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/DrMp3Implementation.cpp
 )
 
 # PRIVATE, not PUBLIC: the engine's own warning level is the engine's business.

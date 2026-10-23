@@ -1,5 +1,7 @@
 #include "core/AudioClip.hpp"
 
+#include "core/Mp3Decode.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <climits>
@@ -234,10 +236,56 @@ bool AudioClip::LoadMp3(const std::string& path, AudioClip& out, std::string& er
     out = AudioClip{};
 
 #if !defined(_WIN32)
-    (void)path;
-    error = "MP3 is decoded through Media Foundation, which is Windows only; "
-            "convert to WAV for this platform";
-    return false;
+    // dr_mp3 (Mp3Decode.cpp) wherever Media Foundation is not. Windows keeps
+    // Media Foundation, below: it ships with the system, and what it decodes is
+    // what Windows games have always been given.
+    //
+    // The file is read whole and decoded from memory, as LoadOgg does, so the
+    // path is opened the way LoadWav and LoadOgg open it and the same mistakes
+    // read the same: a missing file, an empty one, one too large for the decoder
+    // to count. The decoder's own refusals say what was wrong with the bytes.
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        error = "cannot open " + path;
+        return false;
+    }
+
+    // tellg is -1 on a stream that cannot say where it is. Refused rather than
+    // truncated into a length that is not the file's.
+    const std::streamoff size = file.tellg();
+    if (size < 0) {
+        error = "cannot read the size of " + path;
+        return false;
+    }
+    if (size == 0) {
+        error = path + " is empty";
+        return false;
+    }
+    if (size > INT_MAX) {
+        error = path + " is too large to decode in one piece";
+        return false;
+    }
+
+    std::vector<uint8_t> bytes(static_cast<size_t>(size));
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!file) {
+        error = "read error on " + path;
+        return false;
+    }
+
+    detail::Mp3Pcm decoded;
+    std::string reason;
+    if (!detail::DecodeMp3(bytes.data(), bytes.size(), decoded, reason)) {
+        error = path + " " + reason;
+        return false;
+    }
+
+    out.channels = decoded.channels;
+    out.sampleRate = decoded.sampleRate;
+    out.bitsPerSample = 16;
+    out.pcm = std::move(decoded.pcm);
+    return true;
 #else
     using Microsoft::WRL::ComPtr;
 

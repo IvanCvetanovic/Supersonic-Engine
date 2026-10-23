@@ -53,3 +53,11 @@ CMakeLists.txt text
 # Vendored dependencies are not the project's code: exclude them from language
 # statistics and collapse them in pull request diffs.
 third_party/** linguist-vendored
+
+# dr_mp3 is kept BYTE FOR BYTE as upstream and Penumbra ship it, and
+# THIRD_PARTY_LICENSES.md records its sha256. Without this, `text=auto` plus a
+# Windows checkout's autocrlf rewrites its line endings and the checksum stops
+# naming the file on disk. Five of its lines end in spaces upstream, so
+# `git diff --check` is switched off for it too: trimming them would also stop
+# the checksum naming the file.
+third_party/dr_libs/dr_mp3.h -text -whitespace

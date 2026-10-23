@@ -14,9 +14,10 @@ namespace Supersonic {
 // without pulling in a codec dependency.
 //
 // It has since grown two compressed formats, each decoded whole into the same
-// PCM so nothing downstream learns a new format: MP3 through the platform, and
-// Ogg Vorbis through stb_vorbis - the one vendored codec, public domain, a
-// single file beside stb_image.
+// PCM so nothing downstream learns a new format: MP3 (through Media Foundation
+// on Windows, through the vendored dr_mp3 everywhere else), and Ogg Vorbis
+// through stb_vorbis. Both codecs are single public-domain files compiled in a
+// translation unit of their own, beside stb_image.
 struct AudioClip {
     uint16_t channels{0};
     uint32_t sampleRate{0};
@@ -52,11 +53,22 @@ struct AudioClip {
 
     // Decodes an MP3 to 16-bit PCM.
     //
-    // ON WINDOWS ONLY, through Media Foundation, which ships with the system -
-    // so this adds no third-party dependency, exactly as the XAudio2 backend
-    // adds none. Everywhere else it fails with a reason saying so, which is the
-    // same bargain AudioEngine already strikes for output: a real backend on
-    // Windows, a documented no-op elsewhere.
+    // On Windows through Media Foundation, which ships with the system - so that
+    // path adds no third-party dependency, exactly as the XAudio2 backend adds
+    // none. On every other platform through dr_mp3 (third_party/dr_libs, compiled
+    // in DrMp3Implementation.cpp), because no system decoder is assumed to be
+    // there and a game that ships only MP3 would otherwise have no clips at all.
+    // Off Windows a stream that decodes to more than 256 MiB is refused, and one cut
+    // short or damaged part way through decodes as far as it can be followed.
+    //
+    // The two decoders agree on sample rate, channel count and waveform but not on
+    // where a clip starts or how long it is: Media Foundation's clip comes out as if
+    // the first 528 samples of any stream had been cut and a LAME header's Info
+    // frame played as silence, while dr_mp3 drops the Info frame, trims the delay
+    // and padding the header names, and keeps the first 528 samples of a stream with
+    // no header. ARCHITECTURE.md has the measurements. A game that needs the same
+    // loop point on every platform decodes its own clips and hands them over with
+    // AudioEngine::AddClip.
     //
     // Why at all: the one game in the tree that has recorded audio is Magic
     // Portals, and the original ships 46 mp3s. Converting them would leave
@@ -66,10 +78,11 @@ struct AudioClip {
 
     // Decodes an Ogg Vorbis file to interleaved 16-bit PCM.
     //
-    // Through stb_vorbis rather than the platform, so unlike LoadMp3 it works
-    // the same on every platform the engine builds for and needs no system
-    // decoder to be present. The price is the one vendored codec; it is a single
-    // public-domain file, compiled in its own TU (StbVorbisImplementation.cpp).
+    // Through stb_vorbis rather than the platform, so unlike LoadMp3 on Windows
+    // it needs no system decoder to be present and decodes the same way on every
+    // platform the engine builds for. The price is a vendored codec; it is a
+    // single public-domain file, compiled in its own TU
+    // (StbVorbisImplementation.cpp).
     //
     // Why at all: Penumbra, the second Ethanon port on the engine, ships its
     // sound effects as .ogg, and decoding them where they are keeps the bargain
