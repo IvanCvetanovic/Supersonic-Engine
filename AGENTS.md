@@ -6,6 +6,8 @@ Exact commands for building, testing and running **Supersonic Engine**.
 
 - **Compiler**: C++20 (MSVC 2022, GCC 11+, Clang 13+).
 - **CMake**: 3.20+.
+- **A JDK** (optional; 9 or newer for `javac --release`, measured on 17 only): only for
+  `test_reporttext`, which is Skipped without one (see Test below).
 - **Graphics**: a Vulkan-capable driver.
 - **Vulkan SDK**: strongly recommended, and effectively required for development.
   Without it you get no validation layers and no shader compiler — see below.
@@ -89,6 +91,22 @@ material assets, editor undo/redo, physics, spot and point shadow setup, the UI
 canvas and its input routing, the audio mixer and decoders, the job system,
 the script registry, packaged-game manifests and command-line parsing. Disable
 with `-DSUPERSONIC_BUILD_TESTS=OFF`.
+
+One more test is listed beside them and is not an executable: `test_reporttext`, the
+Android crash report's wording, which is Java (`tests/java/`). It needs a JDK, not a
+compiler: `cmake` looks for `javac` and `java` in `JAVA_HOME`, then on `PATH`, when it
+configures. Without them (or with a `javac` or `java` that does not answer `-version`,
+like the stubs macOS is reported to ship, not tried on a Mac here) ctest lists it as
+**Skipped** and its output says why
+(`SKIPPED: test_reporttext needs a JDK ...`); that is the wording not checked on this
+machine, not a pass. A JDK that answers `-version` and then cannot compile or run it is
+a failure.
+
+```bash
+ctest --test-dir build -R test_reporttext -V     # the one test, with its pins
+# or without CMake's test list, from the repository root:
+cmake -DJAVAC=<javac> -DJAVA=<java> -DENGINE_DIR=. -DWORK=<scratch dir> -P tests/java/run_java_test.cmake
+```
 
 ## Run
 

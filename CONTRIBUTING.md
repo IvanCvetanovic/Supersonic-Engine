@@ -7,8 +7,9 @@ why it is like that".
 ## Before you start
 
 - **Build and run the tests first.** `ctest --test-dir build -C Debug` should be
-  fifty-eight green suites before you change anything. If it is not, that is the
-  bug worth reporting.
+  fifty-eight green suites before you change anything (plus `test_reporttext`,
+  which is green, or Skipped when there is no JDK; see [AGENTS.md](AGENTS.md)). If
+  it is not, that is the bug worth reporting.
 - **Install the Vulkan SDK.** Without the validation layers, invalid Vulkan
   usage does not produce an error — it produces an access violation, or nothing
   at all until the code runs on someone else's driver. Two showstopper bugs

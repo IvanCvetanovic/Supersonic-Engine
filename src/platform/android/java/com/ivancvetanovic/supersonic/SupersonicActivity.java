@@ -49,7 +49,10 @@ import java.io.File;
  * log relative to the files directory): when the system's record says the game's last
  * process crashed, was stopped while on the screen or ended itself with an error, the
  * next start shows what is known (PostMortem.java) and holds the native side's start until
- * the player closes it, so a start that fails again cannot take it off the screen.</li>
+ * the player closes it, so a start that fails again cannot take it off the screen. The
+ * title names the game: {@code supersonic.reportTitle} when the manifest sets it, else the
+ * application's android:label (the system answers its class or package name when there is
+ * none), else a neutral word for a label that cannot be read (ReportText.java).</li>
  * </ul>
  *
  * A game names this class in its manifest instead of android.app.NativeActivity,
@@ -70,6 +73,8 @@ public class SupersonicActivity extends NativeActivity {
     // The game's opt-in to the report of an unexpected end (see the class comment).
     private boolean mReportEnabled;
     private String mReportLog = "";
+    // The name the report's title uses before the application's label does (supersonic.reportTitle); empty for none.
+    private String mReportTitle = "";
     // A file whose presence in the files directory marks a scripted run (the game leaves one for it): its
     // start never meets the report, which nobody would close (supersonic.reportSkipWhenFile).
     private String mReportSkipFile = "";
@@ -288,7 +293,7 @@ public class SupersonicActivity extends NativeActivity {
     private PostMortem.Report collectReport() {
         if (!mReportEnabled || !mLibraryLoaded) return null;
         try {
-            PostMortem.Report report = PostMortem.collect(this, mReportLog);
+            PostMortem.Report report = PostMortem.collect(this, mReportLog, mReportTitle);
             if (report == null) return null;
             if (scriptedStart()) {
                 // Automation never meets a dialog nobody closes: the end is let go as seen.
@@ -398,6 +403,11 @@ public class SupersonicActivity extends NativeActivity {
                 mReportEnabled = info.metaData.getBoolean("supersonic.reportUnexpectedExit", false);
                 String reportLog = info.metaData.getString("supersonic.reportLog");
                 if (reportLog != null) mReportLog = reportLog;
+                // A string, as reportLog and reportSkipWhenFile are: a value the manifest compiler stores as another
+                // type (digits, true, 1.5, a #colour) reads as absent here, and the application's label is used
+                // instead. android:value="@string/name" keeps such a name a string.
+                String reportTitle = info.metaData.getString("supersonic.reportTitle");
+                if (reportTitle != null) mReportTitle = reportTitle;
                 String skipFile = info.metaData.getString("supersonic.reportSkipWhenFile");
                 if (skipFile != null) mReportSkipFile = skipFile;
             }

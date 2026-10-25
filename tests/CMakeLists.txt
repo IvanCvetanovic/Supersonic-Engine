@@ -110,3 +110,25 @@ set_tests_properties(
                        # and bloom_composite.frag, to check its branches are
                        # numbered as RenderSettings::SceneEncoding is
     PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")
+
+# A host test of the Android report's wording, which is Java. Not an add_engine_test: it has no .cpp, links nothing and
+# compiles nothing in this build. ReportText.java has no android import, so tests/java/run_java_test.cmake compiles it
+# and tests/java/ReportTextTest.java with a JDK's javac and runs them with java.
+#
+# Registered whether or not a JDK is found: a test that is not registered cannot be seen to be skipped, and the failure
+# this guards against - the wording of the report's title going wrong - would then be unchecked without a word. It
+# checks ReportText only; the glue that feeds it (PostMortem, SupersonicActivity) is compiled against android.jar.
+# Without a JDK the runner prints "SKIPPED: ..." and ctest lists the test as Skipped. JAVA_HOME is looked in first, then
+# PATH, the order the Android packager (a game's tools/) uses.
+if (DEFINED ENV{JAVA_HOME})
+    file(TO_CMAKE_PATH "$ENV{JAVA_HOME}" _supersonicJavaHome)
+    set(_supersonicJavaHints "${_supersonicJavaHome}/bin")
+endif()
+find_program(SUPERSONIC_JAVAC javac HINTS ${_supersonicJavaHints})
+find_program(SUPERSONIC_JAVA java HINTS ${_supersonicJavaHints})
+add_test(NAME test_reporttext
+    COMMAND ${CMAKE_COMMAND}
+        "-DJAVAC=${SUPERSONIC_JAVAC}" "-DJAVA=${SUPERSONIC_JAVA}"
+        "-DENGINE_DIR=${SUPERSONIC_SRC}" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/test_reporttext"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/java/run_java_test.cmake")
+set_tests_properties(test_reporttext PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED: test_reporttext needs a JDK")

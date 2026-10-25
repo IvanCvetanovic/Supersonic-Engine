@@ -170,7 +170,8 @@ as clicks and loads its first level. What that took, all of it under
 - **A report of how the last run ended**, opt-in: a game that sets the
   manifest meta-data `supersonic.reportUnexpectedExit` (and `supersonic.reportLog`,
   its log relative to the files directory, and optionally
-  `supersonic.reportSkipWhenFile`, a file whose presence marks a scripted run)
+  `supersonic.reportSkipWhenFile`, a file whose presence marks a scripted run, and
+  `supersonic.reportTitle`, the game's name for the dialog's title, below)
   gets `PostMortem.java`. On Android 11 and later `SupersonicActivity` reads the
   system's `ApplicationExitInfo` records of the game's last processes and the
   end of its log before the native thread exists (which is what overwrites the
@@ -181,6 +182,27 @@ as clicks and loads its first level. What that took, all of it under
   `android_main` back (`nativeSetHoldStart`, at most ten minutes, events still
   read) until it is closed, so a start that fails again cannot take it away. An
   end is marked seen once its dialog is up, and given up after three offers.
+  **The title names the game**: `<name> closed unexpectedly last time` (Portuguese:
+  `O <name> fechou sozinho da última vez`), with `<name>` taken in this order from the
+  manifest meta-data `supersonic.reportTitle` when it is present and not blank, else the
+  application's label (`android:label`, as the system's `loadLabel` answers it: the
+  application's class or package name when the manifest declares none), else the neutral
+  word `The game` (Portuguese `O jogo`), which is what is left when the label cannot be
+  read or is blank; both are trimmed. A game whose label is its name sets
+  nothing: Magic Portals Enhanced, labelled `Magic Portals Enhanced`, is titled with that,
+  and a game labelled `Penumbra` gets, to the byte, the title this report had when the
+  name was written into the sentence. The key is read as a string, like `reportLog` and
+  `reportSkipWhenFile` (`reportUnexpectedExit` is a boolean): a value the manifest compiler
+  stores as another type - digits, `true`, `1.5`, a colour such as `#abc` - reads as
+  absent, and the label is used; a name of that kind is given as a string resource
+  (`android:value="@string/title"`). The key is unrelated to the C++ `reportTitle` of
+  `PerfOverlay::Settings`, which titles the performance report. The name is joined to the
+  sentence by plain concatenation, never as a format pattern, so a quote, a percent sign
+  or a brace in it is shown as written.
+  The wording is `ReportText.java`, plain Java with no `android` import, run on a host by
+  `test_reporttext` (Testing, below), whose pins cover that class only; the glue
+  (`PostMortem`, `SupersonicActivity`) is compiled against `android.jar` and no device or
+  emulator has yet shown the dialog with the new title.
   Measured on an API 30 emulator with a released APK: a native crash of the
   foreground game goes to the launcher with no message of its own, and its record
   reads `APP CRASH(NATIVE)`, status 11, importance 100, `trace=null` (Android 11
@@ -484,6 +506,20 @@ ctest --test-dir build -C Release --output-on-failure
 
 Fifty-eight suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
+
+ctest also lists one test that is not an executable and not in the table below:
+`test_reporttext`, the Android crash report's wording, which is Java. It compiles
+`ReportText.java` and `tests/java/ReportTextTest.java` with a JDK's `javac`
+(`--release 8`, `-Xlint:all,-options -Werror`: the Android packager compiles for Java 8,
+measured on JDK 17 only) and runs
+them with `java`; `tests/java/run_java_test.cmake` does it. CMake looks for the JDK when
+it configures, in `JAVA_HOME` and then on `PATH`. **Without one (or with a `javac` or
+`java` that does not answer `-version`, as the stubs macOS ships without a JDK are
+reported to, not tried on a Mac here) the test is still
+registered and ctest lists it as Skipped**, with `SKIPPED: test_reporttext needs a JDK`
+in its output: the wording was not checked on that machine, which is not a pass (ctest's
+percentage line still counts a skipped test among the passed; its "did not run" list is
+where it shows). A JDK that is there and cannot compile or run the test is a failure.
 
 There is also a scene that exists to be rendered rather than to be played:
 

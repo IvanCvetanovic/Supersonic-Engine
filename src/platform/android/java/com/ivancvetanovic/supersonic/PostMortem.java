@@ -85,8 +85,10 @@ final class PostMortem {
      * wrong. The caller shows it and then calls markShown.
      *
      * @param logPath the game's log, relative to the app's files directory ("" for none)
+     * @param titleKey the manifest's supersonic.reportTitle ("" or null for none): the name the report's title uses
+     *                 before the application's label does (ReportText.chooseName)
      */
-    static Report collect(Context context, String logPath) {
+    static Report collect(Context context, String logPath, String titleKey) {
         if (Build.VERSION.SDK_INT < 30) return null;
         try {
             ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
@@ -117,7 +119,7 @@ final class PostMortem {
                 return null;
             }
             prefs.edit().putLong(PENDING_AT, when).putInt(PENDING_TRIES, tries).commit();
-            return build(context, manager, ended, newer, logPath);
+            return build(context, manager, ended, newer, logPath, titleKey);
         } catch (Throwable t) {
             // A report is a courtesy; the game starts without it.
             return null;
@@ -162,7 +164,7 @@ final class PostMortem {
     }
 
     private static Report build(Context context, ActivityManager manager, ApplicationExitInfo ended, int newer,
-                                String logPath) {
+                                String logPath, String titleKey) {
         boolean portuguese = "pt".equals(Locale.getDefault().getLanguage());
         SimpleDateFormat time = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
 
@@ -219,7 +221,10 @@ final class PostMortem {
             logNote.append('\n');
         }
 
-        String title = portuguese ? "O Penumbra fechou sozinho da última vez" : "Penumbra closed unexpectedly last time";
+        // The game's own name, not the engine's first game's: the key the game's manifest sets, else the label it
+        // installs under (the package name when it declares none), else a neutral word for a label that cannot be
+        // read (ReportText).
+        String title = ReportText.title(ReportText.chooseName(titleKey, applicationLabel(context)), portuguese);
         String shareLabel = portuguese ? "Compartilhar" : "Share";
         String english = "Tap Share, or take screenshots (scroll down to the end), then tap OK.";
         String portugueseText = "Toque em Compartilhar, ou tire capturas (role até o fim), depois toque em OK.";
@@ -267,6 +272,21 @@ final class PostMortem {
             return context.getPackageName() + " " + info.versionName + " (build " + code + ")";
         } catch (PackageManager.NameNotFoundException e) {
             return context.getPackageName();
+        }
+    }
+
+    /**
+     * The application's label as the system answers it (android:label of the manifest's application element, in the
+     * phone's language; the class or package name when the manifest declares none), or null when it cannot be read.
+     * A name is a courtesy, so a failure here must not cost the player the report: ReportText then uses its
+     * neutral word.
+     */
+    private static String applicationLabel(Context context) {
+        try {
+            CharSequence label = context.getApplicationInfo().loadLabel(context.getPackageManager());
+            return label == null ? null : label.toString();
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 
