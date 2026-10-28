@@ -10,6 +10,7 @@
 #include "core/MaterialSystem.hpp"
 #include "core/RenderSettings.hpp"
 #include "core/TilemapSystem.hpp"
+#include "renderer/VulkanHandle.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -17,20 +18,17 @@ namespace Supersonic {
 
 namespace {
 
-// A Vulkan handle as the plain number the batcher compares.
+// A Vulkan handle, or a mesh pointer, as the plain number the batcher compares.
 //
 // PlanPass asks only equality of its keys, and it takes numbers rather than
-// handles so a suite with no device can build one. Copied through memcpy
-// rather than cast, because a non-dispatchable handle is a pointer on a
-// 64-bit build and an integer on a 32-bit one, and a reinterpret_cast is
-// ill-formed for one of those two.
+// handles so a suite with no device can build one. Through HandleToU64 rather
+// than a cast, because a non-dispatchable handle is a pointer on a 64-bit
+// build and an integer on a 32-bit one, and a reinterpret_cast is ill-formed
+// for one of those two; a pointer on a 32-bit build is half the key's width
+// and comes back zero-extended.
 template <class Handle>
 uint64_t HandleKey(Handle handle) {
-    static_assert(sizeof(Handle) == sizeof(uint64_t),
-                  "a Vulkan handle is expected to be 64 bits wide here");
-    uint64_t key = 0;
-    std::memcpy(&key, &handle, sizeof(key));
-    return key;
+    return HandleToU64(handle);
 }
 
 // `surface` is the mesh section being drawn, or nullptr for a mesh that has

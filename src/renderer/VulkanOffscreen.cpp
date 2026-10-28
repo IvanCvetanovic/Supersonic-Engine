@@ -1,4 +1,5 @@
 #include "renderer/VulkanOffscreen.hpp"
+#include "renderer/VulkanHandle.hpp"
 #include "core/Profiler.hpp"
 #include "core/Log.hpp"
 
@@ -42,7 +43,7 @@ void VulkanOffscreen::cleanup() {
     vk::Device device = m_deviceRef.GetDevice();
 
     if (m_textureID != 0) {
-        ImGui_ImplVulkan_RemoveTexture(reinterpret_cast<VkDescriptorSet>(m_textureID));
+        ImGui_ImplVulkan_RemoveTexture(HandleFromU64<VkDescriptorSet>(m_textureID));
         m_textureID = 0;
     }
 
@@ -320,7 +321,9 @@ void VulkanOffscreen::createBloom() {
         static_cast<VkImageView>(m_bloom->GetOutputView()),
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     );
-    m_textureID = (ImTextureID)(uintptr_t)ds;
+    // Not through uintptr_t: on a 32-bit build that would keep the low half of
+    // the 64-bit handle and ImGui would draw with the wrong descriptor.
+    m_textureID = static_cast<ImTextureID>(HandleToU64(ds));
 }
 
 void VulkanOffscreen::RecordPostProcess(vk::CommandBuffer commandBuffer) const {

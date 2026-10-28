@@ -77,7 +77,7 @@ bool TilemapSystem::Bake(const TilemapComponent& map, MeshData& out, BakeReport*
     // Resize, Set and Fill refuse the cap themselves, so nothing that went
     // through them arrives here. Logged once per content change rather than
     // once per frame, because Sync records the hash of a refused bake too.
-    const size_t cellCount = map.cellCount();
+    const uint64_t cellCount = map.cellCount();
     if (cellCount > TilemapComponent::kMaxCells) {
         SUPERSONIC_LOG_WARN("Tilemap") << "A " << map.width << "x" << map.height
             << " map is " << cellCount << " cells, over the cap of "
@@ -87,7 +87,8 @@ bool TilemapSystem::Bake(const TilemapComponent& map, MeshData& out, BakeReport*
     }
 
     const uint32_t atlasCells = map.atlasColumns * map.atlasRows;
-    const size_t present = std::min(map.cells.size(), cellCount);
+    // Under the cap (checked above), so the count fits a size_t on every build.
+    const size_t present = std::min(map.cells.size(), static_cast<size_t>(cellCount));
 
     uint32_t occupied = 0;
     for (size_t i = 0; i < present; ++i) {
@@ -188,8 +189,10 @@ uint64_t TilemapSystem::ContentHash(const TilemapComponent& map) {
     // over from a size written directly, holds entries no bake reads and no
     // hash should either - or shrinking a map would rebake it every frame
     // against a hash that never settles.
-    const size_t cellCount = map.cellCount();
-    const size_t present = std::min(map.cells.size(), cellCount);
+    // The count is 64-bit (a map over the cap reaches here too); what is present
+    // is at most the vector's length, so it fits a size_t.
+    const uint64_t cellCount = map.cellCount();
+    const size_t present = static_cast<size_t>(std::min<uint64_t>(map.cells.size(), cellCount));
     if (present > 0) mix(map.cells.data(), present * sizeof(int32_t));
 
     // And every cell the map describes beyond what the vector holds, as the

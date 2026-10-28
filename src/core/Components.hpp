@@ -1960,9 +1960,10 @@ struct TilemapComponent {
     // is bounded by. Never the vector's size: that may be shorter (never
     // touched) or, after a size written directly, laid out for another width.
     //
-    // A size_t product on purpose. As a uint32_t, 65,536 x 65,536 is zero,
-    // and zero is under every cap there is.
-    size_t cellCount() const { return static_cast<size_t>(width) * height; }
+    // A 64-bit product on purpose. As a uint32_t - or as a 32-bit build's
+    // size_t, which is what a size_t product was until the armeabi-v7a build
+    // found it - 65,536 x 65,536 is zero, and zero is under every cap there is.
+    uint64_t cellCount() const { return static_cast<uint64_t>(width) * height; }
 
     // Whether the cells may be allocated at all. False only for a map whose
     // size was written directly past the cap; Resize never produces one.
@@ -1971,8 +1972,11 @@ struct TilemapComponent {
     // Empty for anything outside the map, so a reader need not bounds-check.
     int32_t At(uint32_t column, uint32_t row) const {
         if (column >= width || row >= height) return kEmpty;
-        const size_t index = static_cast<size_t>(row) * width + column;
-        return index < cells.size() ? cells[index] : kEmpty;
+        // 64 bits for the same reason as cellCount: on a 32-bit build a size_t
+        // index into a map whose size was written directly can wrap into the
+        // vector and read another cell.
+        const uint64_t index = static_cast<uint64_t>(row) * width + column;
+        return index < cells.size() ? cells[static_cast<size_t>(index)] : kEmpty;
     }
 
     // False for anything outside the map, and for a map over the cap. Grows
@@ -1981,7 +1985,9 @@ struct TilemapComponent {
     bool Set(uint32_t column, uint32_t row, int32_t cell) {
         if (column >= width || row >= height) return false;
         if (!withinCap()) return false;
-        if (cells.size() < cellCount()) cells.resize(cellCount(), kEmpty);
+        // Under the cap, so the count and the index fit a size_t on every build.
+        const size_t count = static_cast<size_t>(cellCount());
+        if (cells.size() < count) cells.resize(count, kEmpty);
         cells[static_cast<size_t>(row) * width + column] = cell;
         return true;
     }
@@ -1989,7 +1995,7 @@ struct TilemapComponent {
     // False, and untouched, for a map over the cap.
     bool Fill(int32_t cell) {
         if (!withinCap()) return false;
-        cells.assign(cellCount(), cell);
+        cells.assign(static_cast<size_t>(cellCount()), cell);
         return true;
     }
 
@@ -2002,8 +2008,10 @@ struct TilemapComponent {
     // because by then the allocation has happened, and the allocation is the
     // problem.
     bool Resize(uint32_t newWidth, uint32_t newHeight) {
-        if (static_cast<size_t>(newWidth) * newHeight > kMaxCells) return false;
-        std::vector<int32_t> resized(static_cast<size_t>(newWidth) * newHeight, kEmpty);
+        // The 64-bit product, as cellCount's: a 32-bit one wraps past the cap.
+        const uint64_t newCount = static_cast<uint64_t>(newWidth) * newHeight;
+        if (newCount > kMaxCells) return false;
+        std::vector<int32_t> resized(static_cast<size_t>(newCount), kEmpty);
         const uint32_t keepWidth = newWidth < width ? newWidth : width;
         const uint32_t keepHeight = newHeight < height ? newHeight : height;
         for (uint32_t row = 0; row < keepHeight; ++row) {

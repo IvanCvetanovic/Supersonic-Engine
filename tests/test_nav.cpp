@@ -164,6 +164,9 @@ static void testResizeRefusesWhatItCannotHoldAndKeepsWhatItHad() {
     CHECK_MSG(!grid.Resize(0, 4), "a zero side is not a grid");
     CHECK_MSG(!grid.Resize(4, 0), "either way round");
     CHECK_MSG(!grid.Resize(2048, 2048), "four million cells is past the cap");
+    // 65,536 x 65,536 is zero as a 32-bit product, and zero is under the cap:
+    // the check has to multiply in 64 bits on a 32-bit build too.
+    CHECK_MSG(!grid.Resize(65536, 65536), "a product that wraps a 32-bit count is still past the cap");
 
     CHECK_MSG(grid.Width() == 6 && grid.Height() == 5,
               "a refused resize leaves the grid the size it was");

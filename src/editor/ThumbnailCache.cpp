@@ -7,6 +7,7 @@
 
 #include "backends/imgui_impl_vulkan.h"
 #include "renderer/VulkanBuffer.hpp"
+#include "renderer/VulkanHandle.hpp"
 
 // The implementation lives in TextureRegistry.cpp; this only needs the
 // declarations.
@@ -69,7 +70,7 @@ ThumbnailCache::~ThumbnailCache() {
     // ImGui_ImplVulkan_Shutdown, which is why the editor tears down first.
     for (auto& [path, entry] : m_entries) {
         if (entry.id != 0) {
-            ImGui_ImplVulkan_RemoveTexture(reinterpret_cast<VkDescriptorSet>(entry.id));
+            ImGui_ImplVulkan_RemoveTexture(HandleFromU64<VkDescriptorSet>(entry.id));
             entry.id = 0;
         }
     }
@@ -115,7 +116,9 @@ ImTextureID ThumbnailCache::upload(const std::vector<uint8_t>& rgba, uint32_t wi
         static_cast<VkImageView>(entry.image->GetImageView()),
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    return reinterpret_cast<ImTextureID>(set);
+    // Through the helper rather than a cast: on a 64-bit build the handle is a
+    // pointer, on a 32-bit one an integer, and ImTextureID is 64 bits on both.
+    return static_cast<ImTextureID>(HandleToU64(set));
 }
 
 ImTextureID ThumbnailCache::Get(const std::filesystem::path& path) {

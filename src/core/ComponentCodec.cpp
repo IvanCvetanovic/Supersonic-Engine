@@ -1351,7 +1351,8 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
                 // dropped rather than wrapped onto the next row. A cell that
                 // is not a number is empty.
                 const auto& cells = t["Cells"].AsArray();
-                const size_t count = std::min(cells.size(), tilemap.cellCount());
+                // Resize accepted the size, so the count is under the cap and fits a size_t.
+                const size_t count = std::min(cells.size(), static_cast<size_t>(tilemap.cellCount()));
                 for (size_t i = 0; i < count; ++i) {
                     tilemap.cells[i] = static_cast<int32_t>(
                         cells[i].AsNumber(static_cast<double>(TilemapComponent::kEmpty)));

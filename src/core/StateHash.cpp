@@ -228,13 +228,15 @@ uint64_t Compute(const entt::registry& registry) {
         if (const auto* tilemap = registry.try_get<const TilemapComponent>(entity)) {
             hash = mix(hash, &tilemap->width, sizeof(tilemap->width));
             hash = mix(hash, &tilemap->height, sizeof(tilemap->height));
-            const size_t cellCount = tilemap->cellCount();
-            const size_t present = tilemap->cells.size() < cellCount ? tilemap->cells.size()
-                                                                     : cellCount;
+            // The count is 64-bit, because a map whose size was written directly
+            // may be over the cap; what is present is at most the vector's length.
+            const uint64_t cellCount = tilemap->cellCount();
+            const size_t present = static_cast<size_t>(
+                tilemap->cells.size() < cellCount ? tilemap->cells.size() : cellCount);
             if (present > 0) hash = mix(hash, tilemap->cells.data(), present * sizeof(int32_t));
             if (tilemap->withinCap()) {
                 const int32_t empty = TilemapComponent::kEmpty;
-                for (size_t i = present; i < cellCount; ++i) hash = mix(hash, &empty, sizeof(empty));
+                for (uint64_t i = present; i < cellCount; ++i) hash = mix(hash, &empty, sizeof(empty));
             }
         }
 

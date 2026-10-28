@@ -1299,7 +1299,8 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                     if (!TilemapComponent::IsEmpty(tilemap.At(column, row))) ++occupied;
                 }
             }
-            ImGui::Text("%u of %zu cells set", occupied, tilemap.cellCount());
+            ImGui::Text("%u of %llu cells set", occupied,
+                        static_cast<unsigned long long>(tilemap.cellCount()));
             ImGui::TextDisabled("Up to %zu cells; a bigger world is several tilemap entities.",
                                 TilemapComponent::kMaxCells);
             ImGui::TextDisabled("Cell (0, 0) hangs from the entity's origin: the map runs "

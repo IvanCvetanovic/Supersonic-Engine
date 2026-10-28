@@ -92,7 +92,9 @@ VulkanImage::VulkanImage(
         throw std::runtime_error("Failed to allocate 2D Image via VMA! VkResult: " + std::to_string(static_cast<int>(result)));
     }
 
-    m_image = rawImage;
+    // Constructed, not assigned: on a 32-bit build a VkImage is a uint64_t, and
+    // vulkan.hpp makes the conversion from it explicit there.
+    m_image = vk::Image(rawImage);
 
     // Create Image View
     vk::ImageViewCreateInfo viewInfo{};

@@ -51,7 +51,9 @@ constexpr Neighbour kNeighbours[8] = {
 
 bool NavGrid::Resize(uint32_t width, uint32_t height) {
     if (width == 0 || height == 0) return false;
-    if (static_cast<size_t>(width) * height > kMaxCells) return false;
+    // A 64-bit product: on a 32-bit build a size_t one wraps past the cap
+    // (65,536 x 65,536 is zero there), as the tilemap's did.
+    if (static_cast<uint64_t>(width) * height > kMaxCells) return false;
 
     m_width = width;
     m_height = height;

@@ -17,6 +17,7 @@
 #include "core/RenderSystem.hpp"
 #include "renderer/ShadowCache.hpp"
 #include "renderer/Frustum.hpp"
+#include "renderer/VulkanHandle.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -41,9 +42,11 @@ RenderSystem::ShadowCaster makeCaster(const glm::vec3& position, uint32_t meshID
 
 // A descriptor set handle that is merely DIFFERENT. Nothing here dereferences
 // it - the signature hashes the handle, exactly as it hashes the vertex buffer
-// handle - and there is no device to allocate a real one from.
-vk::DescriptorSet fakeDescriptorSet(uintptr_t value) {
-    return vk::DescriptorSet(reinterpret_cast<VkDescriptorSet>(value));
+// handle - and there is no device to allocate a real one from. Through
+// HandleFromU64, because the raw handle is a pointer on a 64-bit build and a
+// uint64_t on a 32-bit one.
+vk::DescriptorSet fakeDescriptorSet(uint64_t value) {
+    return vk::DescriptorSet(HandleFromU64<VkDescriptorSet>(value));
 }
 
 // A light looking down the -z axis from the origin, seeing roughly x,y in
@@ -380,6 +383,32 @@ static void testACutoutTheLightCannotSeeChangesNothing() {
               "and the far one must not be");
 }
 
+// --- the handle behind a key ------------------------------------------------
+
+static void testAHandleRoundTripsThroughItsNumber() {
+    // The number a handle becomes - a pass key, an ImTextureID, UIImageStore's
+    // handle - must give the same handle back on every build. On a 64-bit one
+    // the raw handle is a pointer; on a 32-bit one it is a uint64_t, and a cast
+    // through uintptr_t would keep only its low half: a texture drawn with the
+    // wrong descriptor, which no 64-bit build would ever show.
+    const uint64_t wide = 0x0123456789ABCDEFull;
+    CHECK_MSG(HandleToU64(HandleFromU64<VkDescriptorSet>(wide)) == wide,
+              "a 64-bit handle must survive the trip to a number and back, whatever the build");
+    CHECK_MSG(HandleToU64(static_cast<VkDescriptorSet>(fakeDescriptorSet(0x1234))) == 0x1234ull,
+              "and vk::DescriptorSet carries it unchanged");
+    CHECK_MSG(HandleToU64(HandleFromU64<VkDescriptorSet>(1)) != HandleToU64(HandleFromU64<VkDescriptorSet>(2)),
+              "two handles are two numbers, which is what a key is for");
+
+    // A plain pointer, whatever its width: the batcher keys a mesh by one.
+    int anchor = 0;
+    int* const pointer = &anchor;
+    CHECK_MSG(HandleFromU64<int*>(HandleToU64(pointer)) == pointer,
+              "a pointer comes back as itself");
+    CHECK_MSG(HandleToU64(pointer) == static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pointer)),
+              "and its number is its address, zero-extended");
+    CHECK_MSG(HandleToU64(static_cast<int*>(nullptr)) == 0ull, "a null handle is zero");
+}
+
 // --- what each kind of material asks of the depth pass ----------------------
 
 static void testWhatEachKindOfMaterialCastsIntoTheDepthPass() {
@@ -487,6 +516,8 @@ static void runTests() {
     testTheCutoutInputsAreInTheSignature();
     testACutoutTheLightCannotSeeChangesNothing();
     testTheSameInputsGiveTheSameSignature();
+
+    testAHandleRoundTripsThroughItsNumber();
 
     testWhatEachKindOfMaterialCastsIntoTheDepthPass();
     testAnOpaqueMaterialsAlphaNeverReachesTheDepthPass();

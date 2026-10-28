@@ -72,7 +72,9 @@ void VulkanDevice::createSurface(Window& window) {
     }
 #endif
 
-    m_surface = rawSurface;
+    // Constructed, not assigned: on a 32-bit build a VkSurfaceKHR is a uint64_t,
+    // and vulkan.hpp makes the conversion from it explicit there.
+    m_surface = vk::SurfaceKHR(rawSurface);
     SUPERSONIC_LOG_INFO("VulkanDevice") << "Vulkan Window Surface created successfully." << std::endl;
 }
 

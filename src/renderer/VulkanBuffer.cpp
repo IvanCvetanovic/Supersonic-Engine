@@ -43,7 +43,9 @@ VulkanBuffer::VulkanBuffer(
         throw std::runtime_error("Failed to allocate buffer via VMA! VkResult: " + std::to_string(static_cast<int>(result)));
     }
 
-    m_buffer = rawBuffer;
+    // Constructed, not assigned: on a 32-bit build a VkBuffer is a uint64_t,
+    // and vulkan.hpp makes the conversion from it explicit there.
+    m_buffer = vk::Buffer(rawBuffer);
 }
 
 VulkanBuffer::~VulkanBuffer() {

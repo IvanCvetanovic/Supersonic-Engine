@@ -127,6 +127,17 @@ as clicks and loads its first level. What that took, all of it under
   window, then calls the game's `SupersonicMain(argc, argv)`, and pumps the
   looper from `Window::PollEvents`. A game builds a `SHARED` library instead of
   an executable; everything else links as on desktop.
+- **The ABIs.** The same tree builds for arm64-v8a, armeabi-v7a and x86_64. The
+  32-bit build is where a non-dispatchable Vulkan handle is a `uint64_t` rather
+  than a pointer (`VK_DEFINE_NON_DISPATCHABLE_HANDLE`), so a `reinterpret_cast`
+  through `uintptr_t` is ill-formed there and, where it compiles, keeps half
+  the handle; `renderer/VulkanHandle.hpp` is the one way the engine turns a
+  handle into the 64-bit number an ImGui texture id or a draw key holds, and
+  back, on both builds. A `size_t` product is 32 bits there too: a tilemap's
+  cell count and a nav grid's cap check are computed in `uint64_t` for that
+  reason. Since 28 October 2026 the engine compiles and its suites pass at 32
+  bits (GCC `-m32` on Linux as the stand-in; the NDK's armeabi-v7a links); no
+  32-bit device has run it.
 - **The lifecycle.** The swapchain and surface are destroyed inside
   `APP_CMD_TERM_WINDOW` and rebuilt on the next window; the frame waits while
   the app is paused or has no window, and restarts its clock instead of

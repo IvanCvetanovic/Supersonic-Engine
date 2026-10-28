@@ -3,6 +3,7 @@
 #include "core/Log.hpp"
 #include "renderer/VulkanBuffer.hpp"
 #include "renderer/VulkanDevice.hpp"
+#include "renderer/VulkanHandle.hpp"
 
 #include "backends/imgui_impl_vulkan.h"
 
@@ -54,7 +55,7 @@ uint64_t UIImageStore::Create(const uint8_t* pixels, uint32_t width, uint32_t he
         return 0;
     }
 
-    const uint64_t handle = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(set));
+    const uint64_t handle = HandleToU64(set);
     entry.handle = handle;
     m_images.emplace(handle, std::move(entry));
     return handle;
@@ -95,8 +96,7 @@ void UIImageStore::Destroy(uint64_t handle) {
     const auto it = m_images.find(handle);
     if (it == m_images.end()) return;
 
-    ImGui_ImplVulkan_RemoveTexture(
-        reinterpret_cast<VkDescriptorSet>(static_cast<uintptr_t>(handle)));
+    ImGui_ImplVulkan_RemoveTexture(HandleFromU64<VkDescriptorSet>(handle));
     m_images.erase(it);
 }
 
