@@ -1125,10 +1125,12 @@ static void testAPrefabSaveThatFailsPartWayLeavesThePreviousPrefab() {
 static void testAtomicFileReplacesTheTargetOnlyOnCommit() {
     const std::string path = "test_atomic_file_tmp.txt";
     std::remove(path.c_str());
+    // Binary throughout: slurp reads bytes, and a text-mode stream on Windows
+    // writes "\n" as "\r\n", which is not what this test is about.
 
     // No target yet: committing creates it, and leaves no temporary.
     {
-        AtomicFile file(path);
+        AtomicFile file(path, /*binary*/ true);
         CHECK(file.IsOpen());
         file.Stream() << "first\n";
         CHECK(file.Commit());
@@ -1138,7 +1140,7 @@ static void testAtomicFileReplacesTheTargetOnlyOnCommit() {
 
     // Abandoned: the target is untouched, and the temporary is gone.
     {
-        AtomicFile file(path);
+        AtomicFile file(path, /*binary*/ true);
         file.Stream() << "never committed";
     }
     CHECK_MSG(slurp(path) == "first\n", "an abandoned write does not touch the target");
@@ -1146,7 +1148,7 @@ static void testAtomicFileReplacesTheTargetOnlyOnCommit() {
 
     // Until the commit, the OLD content is what a reader sees.
     {
-        AtomicFile file(path);
+        AtomicFile file(path, /*binary*/ true);
         file.Stream() << "second\n";
         file.Stream().flush();
         CHECK_MSG(slurp(path) == "first\n", "a reader sees the old file until the commit");
@@ -1157,7 +1159,7 @@ static void testAtomicFileReplacesTheTargetOnlyOnCommit() {
 
     // A second Commit is refused rather than renaming a file that is gone.
     {
-        AtomicFile file(path);
+        AtomicFile file(path, /*binary*/ true);
         file.Stream() << "third\n";
         CHECK(file.Commit());
         CHECK(!file.Commit());

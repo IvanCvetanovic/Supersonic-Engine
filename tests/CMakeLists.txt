@@ -91,6 +91,15 @@ add_engine_test(test_blending)
 add_engine_test(test_skeletal)
 add_engine_test(test_particles)
 add_engine_test(test_hotreload)
+# The library test_hotreload loads as "a plugin that cannot work": built here so it
+# exists on every platform and generator, and handed to the suite by its path. A
+# system library stood in before; on Windows that was a renamed copy of
+# kernel32.dll, and loading the copy crashed the suite (hotreload_stub.cpp says why).
+add_library(test_hotreload_stub SHARED hotreload_stub.cpp)
+set_target_properties(test_hotreload_stub PROPERTIES PREFIX "" OUTPUT_NAME "hotreload_stub")
+target_compile_definitions(test_hotreload PRIVATE
+    SUPERSONIC_TEST_STUB_LIBRARY="$<TARGET_FILE:test_hotreload_stub>")
+add_dependencies(test_hotreload test_hotreload_stub)
 add_engine_test(test_log)
 add_engine_test(test_platform)
 

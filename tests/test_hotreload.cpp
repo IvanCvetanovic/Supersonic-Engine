@@ -7,14 +7,19 @@
 // be given a different file, not copy and re-open the broken one every other frame
 // for as long as the game runs.
 //
-// The "plugin" here is a real shared library that is not a plugin: the maths library
-// (the C library where they are one), or kernel32 on Windows. It loads fine and has
-// none of the entry points, which is exactly a plugin that fails for a reason no retry
-// will cure.
+// The "plugin" here is a real shared library that is not a plugin: hotreload_stub,
+// built beside this suite (tests/CMakeLists.txt hands its path over as
+// SUPERSONIC_TEST_STUB_LIBRARY). It loads fine and has none of the entry points,
+// which is exactly a plugin that fails for a reason no retry will cure.
 //
-// Not a function the sanitizers intercept: under ASan the address of printf is inside
-// libasan, and loading a second copy of the sanitizer runtime aborts the process
-// ("Shadow memory range interleaves with an existing memory mapping").
+// A system library stood in before - the maths library, or kernel32 on Windows -
+// and that was wrong on Windows: the engine loads a COPY of the file, and a second
+// kernel32 initialising in one process is unsupported and crashed the suite. The
+// fallback below is kept for a build of this file without the definition. Not a
+// function the sanitizers intercept, for the fallback: under ASan the address of
+// printf is inside libasan, and loading a second copy of the sanitizer runtime
+// aborts the process ("Shadow memory range interleaves with an existing memory
+// mapping").
 
 #include "TestHarness.hpp"
 #include "core/HotReloadEngine.hpp"
@@ -25,10 +30,12 @@
 #include <filesystem>
 #include <string>
 
+#if !defined(SUPERSONIC_TEST_STUB_LIBRARY)
 #if defined(_WIN32)
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#endif
 #endif
 
 using namespace Supersonic;
@@ -39,7 +46,9 @@ namespace {
 // The path of some shared library on this machine that is not a script plugin, or
 // empty if there is no way to find one.
 std::string aSharedLibraryThatIsNotAPlugin() {
-#if defined(_WIN32)
+#if defined(SUPERSONIC_TEST_STUB_LIBRARY)
+    return SUPERSONIC_TEST_STUB_LIBRARY;
+#elif defined(_WIN32)
     char buffer[MAX_PATH] = {0};
     const HMODULE module = GetModuleHandleA("kernel32.dll");
     if (!module || GetModuleFileNameA(module, buffer, MAX_PATH) == 0) return {};
