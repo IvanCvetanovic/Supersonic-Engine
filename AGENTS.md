@@ -4,7 +4,10 @@ Exact commands for building, testing and running **Supersonic Engine**.
 
 ## Requirements
 
-- **Compiler**: C++20 (MSVC 2022, GCC 11+, Clang 13+).
+- **Compiler**: C++20 (MSVC 2022, GCC 11+, Clang 13+). What has actually been
+  built: MSVC on CI's `windows-latest`, GCC 13.3 (every suite builds and passes,
+  Release, measured on 1 October 2026) and Clang 18 (compiles; not run). GCC 11
+  and Clang 13 are the stated floor, and no leg or local run has tested them.
 - **CMake**: 3.20+.
 - **A JDK** (optional; 9 or newer for `javac --release`, measured on 17 only): only for
   `test_reporttext`, which is Skipped without one (see Test below).
@@ -26,6 +29,41 @@ ignored. CMake prints a warning when this happens.
 The build **works** without the SDK: it falls back to the vendored Vulkan
 headers plus the loader that ships with the driver, generating an import library
 from the loader's export table at configure time.
+
+### Linux
+
+Everything is vendored, but GLFW needs the X11 development headers to configure
+and the Vulkan loader library to link, and ALSA's headers are what decide whether
+the engine gets real audio or its documented no-op. What CI installs:
+
+```bash
+sudo apt-get install -y libvulkan-dev libx11-dev libxrandr-dev \
+  libxinerama-dev libxcursor-dev libxi-dev libxkbcommon-dev \
+  pkg-config libasound2-dev
+```
+
+GLFW 3.4 builds a Wayland backend by default, and used to stop the configure with
+`Failed to find wayland-scanner` where the Wayland toolchain was absent. The
+configure now defaults that backend off when `wayland-scanner` is not found, and
+says so. `-DGLFW_BUILD_WAYLAND=ON` or `=OFF` is always honoured, which is what
+CI passes explicitly.
+
+### CMake options
+
+| Option | Default | What it does |
+|---|---|---|
+| `SUPERSONIC_BUILD_EDITOR` | ON when the engine is the top-level project | The `SupersonicEngine` editor executable |
+| `SUPERSONIC_BUILD_SCRIPT_PLUGIN` | same | `GameScripts`, the sample hot-reload plugin |
+| `SUPERSONIC_BUILD_TESTS` | same | The engine's own suites |
+| `SUPERSONIC_WERROR` | OFF | Warnings in the engine's own code and suites are errors (vendored code is compiled with its warnings off, so it is not held to this). PRIVATE where applied, so it costs a game nothing. `tools/check.sh build` turns it on |
+| `SUPERSONIC_ENABLE_VALIDATION` | `AUTO` | `ON`, `OFF` or `AUTO`. `AUTO` requests the validation layers on Debug only; `ON` validates in every configuration (CI's Release validation leg), `OFF` in none. A missing layer is a loud warning, not an error |
+| `SUPERSONIC_ASSET_ROOT` | empty at the top level; the engine checkout as a subproject | Where a game finds the engine's runtime files when run from elsewhere. Baked into `ExecutablePath.cpp` only |
+| `SUPERSONIC_MOLTENVK_LIBRARY` | empty | A MoltenVK library to link directly on Apple targets instead of finding a loader |
+| `GLFW_BUILD_WAYLAND` | defaulted off if `wayland-scanner` is missing | GLFW's own option, above |
+
+`SUPERSONIC_ENGINE_DIR` is not an option: it is the engine checkout's root,
+published for a game's suites. The contract a game builds against is in
+[README.md](README.md#building-a-game-against-the-engine).
 
 ## Build
 
@@ -73,7 +111,7 @@ subproject build would define twice.
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Fifty-eight suites. Rather than repeat the list here - the copy that used to
+Sixty-two suites. Rather than repeat the list here - the copy that used to
 live in this file had fallen thirteen entries behind - see the table in
 [README.md](README.md#testing), or read it from the build, which is where CI
 gets it:
@@ -294,6 +332,23 @@ and floats are written as their bits.
 > scene, not of the feature; `test_replay` carries the claim that recorded input
 > drives state.
 
+### Running CI's checks locally
+
+```bash
+tools/check.sh                # docs, shaders, build + every suite
+tools/check.sh asan           # ASan + UBSan + LSan over every suite
+tools/check.sh --help         # all of them: tsan, tidy, options, all
+```
+
+CI is dispatch-only (the repository is private, so every automatic run is
+charged), which means a check that lives only there reports on request. This runs
+the same ones on a Linux or macOS machine. The `docs` and `shaders` steps are the
+code CI itself runs, not a copy of it. Build trees go under `build-check/`
+(ignored); set `JOBS=2` on a small machine.
+
+It does not include the replay round trip below, which needs a window and a
+Vulkan device.
+
 ### Checking the determinism claim before a push
 
 ```powershell
@@ -364,7 +419,17 @@ rm -rf build            # or: Remove-Item -Recurse -Force build
 
 ## Other platforms
 
-Android and iOS scripts exist under `platform/` but **do not produce runnable
-apps yet** — the engine creates its window and surface through GLFW, which has
-no backend on either. Each script explains what is missing. See the platform
-table in `ARCHITECTURE.md`.
+Windows is the primary target; Linux builds from the same tree. macOS and Android
+run a game (Android not the editor, which needs GLFW), and iOS builds one and
+starts it. None of that comes from the scripts under `platform/`: Android and iOS
+have a native-surface window backend of their own (`src/platform/android/`,
+`src/platform/ios/`), and a game builds the engine as a subproject with its own
+`SupersonicMain`. The working Android and Apple builds live in that game's
+repository. See the platform table in `ARCHITECTURE.md` and the Platforms section
+of `README.md`.
+
+The scripts in `platform/` are older scaffolding. Their headers still say that
+GLFW has no Android or iOS backend, which is no longer the reason a build from
+them would fail. Whether they are repaired or removed is undecided; it is item
+3.10 of
+[docs/planning/2026-10-01-engine-hardening-plan.md](docs/planning/2026-10-01-engine-hardening-plan.md).

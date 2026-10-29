@@ -11,15 +11,20 @@
 #include "core/PrefabSerializer.hpp"
 #include "core/ComponentCodec.hpp"
 #include "core/AssetVersion.hpp"
+#include "core/AtomicFile.hpp"
+#include "core/FiniteNumbers.hpp"
 #include "core/Components.hpp"
 #include "core/PhysicsSettings.hpp"
 #include "core/RenderSettings.hpp"
 
 #include <array>
+#include <limits>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -1009,6 +1014,415 @@ static void testMissingPrefabReturnsNull() {
 
     CHECK_MSG(entity == entt::null, "a missing prefab must not produce an entity");
     CHECK(!result.ok);
+}
+
+// A save that fails part-way must leave the file that was there.
+//
+// Every writer in this file opened its target with std::ofstream, which
+// truncates it before a byte of the new content exists. A crash, a full disk or
+// an exception anywhere after that left a short file where a scene used to be.
+// The failure is made here with a component whose writer throws: it is the one
+// way to stop a real save part-way through that does not need a full disk.
+
+namespace {
+
+// A member, because EnTT stores no value for an empty type and try_get cannot return one.
+struct Boom {
+    int unused{0};
+};
+
+std::string slurp(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    std::ostringstream text;
+    text << file.rdbuf();
+    return text.str();
+}
+
+bool exists(const std::string& path) {
+    std::error_code ec;
+    return std::filesystem::exists(path, ec);
+}
+
+// Registered for the length of one test: registration is global by design, so a
+// leak would make the next suite's saves throw.
+struct ScopedThrowingComponent {
+    ScopedThrowingComponent() {
+        ComponentCodec::RegisterComponent(
+            "Boom",
+            [](const entt::registry& registry, entt::entity entity, std::ostream&) -> bool {
+                if (registry.try_get<Boom>(entity)) throw std::runtime_error("disk went away");
+                return false;
+            },
+            [](entt::registry&, entt::entity, const Json::Value&) {});
+    }
+    ~ScopedThrowingComponent() { ComponentCodec::ClearRegisteredComponents(); }
+};
+
+} // namespace
+
+static void testASceneSaveThatFailsPartWayLeavesThePreviousScene() {
+    const std::string path = "test_atomic_scene_tmp.scene";
+    std::remove(path.c_str());
+
+    entt::registry registry;
+    const entt::entity cube = registry.create();
+    registry.emplace<TagComponent>(cube, "cube");
+    registry.emplace<TransformComponent>(cube);
+    CHECK(SceneSerializer::Serialize(registry, path).ok);
+    const std::string before = slurp(path);
+    CHECK_MSG(!before.empty(), "the first save wrote a scene");
+
+    {
+        ScopedThrowingComponent boom;
+        const entt::entity extra = registry.create();
+        registry.emplace<TagComponent>(extra, "extra");
+        registry.emplace<Boom>(extra);
+
+        bool threw = false;
+        try {
+            SceneSerializer::Serialize(registry, path);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK_MSG(threw, "the save was stopped part-way, which is the failure under test");
+    }
+
+    CHECK_MSG(slurp(path) == before,
+              "the scene on disk is still the one before the failed save, not a truncated one");
+    CHECK_MSG(!exists(path + ".tmp"), "and no half-written temporary is left beside it");
+    std::remove(path.c_str());
+}
+
+static void testAPrefabSaveThatFailsPartWayLeavesThePreviousPrefab() {
+    const std::string path = "test_atomic_prefab_tmp.prefab";
+    std::remove(path.c_str());
+
+    entt::registry registry;
+    const entt::entity cube = registry.create();
+    registry.emplace<TagComponent>(cube, "cube");
+    registry.emplace<TransformComponent>(cube);
+    CHECK(PrefabSerializer::SavePrefab(registry, cube, path).ok);
+    const std::string before = slurp(path);
+    CHECK(!before.empty());
+
+    {
+        ScopedThrowingComponent boom;
+        registry.emplace<Boom>(cube);
+        bool threw = false;
+        try {
+            PrefabSerializer::SavePrefab(registry, cube, path);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK(threw);
+    }
+
+    CHECK_MSG(slurp(path) == before, "the prefab on disk is still the previous one");
+    CHECK(!exists(path + ".tmp"));
+    std::remove(path.c_str());
+}
+
+static void testAtomicFileReplacesTheTargetOnlyOnCommit() {
+    const std::string path = "test_atomic_file_tmp.txt";
+    std::remove(path.c_str());
+
+    // No target yet: committing creates it, and leaves no temporary.
+    {
+        AtomicFile file(path);
+        CHECK(file.IsOpen());
+        file.Stream() << "first\n";
+        CHECK(file.Commit());
+    }
+    CHECK(slurp(path) == "first\n");
+    CHECK(!exists(path + ".tmp"));
+
+    // Abandoned: the target is untouched, and the temporary is gone.
+    {
+        AtomicFile file(path);
+        file.Stream() << "never committed";
+    }
+    CHECK_MSG(slurp(path) == "first\n", "an abandoned write does not touch the target");
+    CHECK(!exists(path + ".tmp"));
+
+    // Until the commit, the OLD content is what a reader sees.
+    {
+        AtomicFile file(path);
+        file.Stream() << "second\n";
+        file.Stream().flush();
+        CHECK_MSG(slurp(path) == "first\n", "a reader sees the old file until the commit");
+        CHECK(file.Commit());
+    }
+    CHECK(slurp(path) == "second\n");
+    CHECK(!exists(path + ".tmp"));
+
+    // A second Commit is refused rather than renaming a file that is gone.
+    {
+        AtomicFile file(path);
+        file.Stream() << "third\n";
+        CHECK(file.Commit());
+        CHECK(!file.Commit());
+    }
+    CHECK(slurp(path) == "third\n");
+    std::remove(path.c_str());
+}
+
+static void testASaveToAnUnwritablePathFailsAndCreatesNothing() {
+    // The directory does not exist, so neither the temporary nor the in-place
+    // fallback can open: the caller must hear "not open", as it did before.
+    AtomicFile file("test_atomic_no_such_dir_tmp/inner/file.txt");
+    CHECK(!file.IsOpen());
+    CHECK(!exists("test_atomic_no_such_dir_tmp"));
+}
+
+// A file the reader cannot read must not be writable.
+//
+// `<< float` writes NaN as "nan" and infinity as "inf", Json::Parse rejects both,
+// and so a single non-finite number anywhere made the WHOLE scene unreadable:
+// Play/Stop could not restore it, undo dropped the snapshot, and a saved scene
+// could not be opened. ComponentCodec guards about thirty-five of its writes and
+// about a hundred more go straight to the stream.
+
+static void testTheFacetFormatsEveryFiniteNumberAsTheStandardOneDoes() {
+    // The property that makes it safe to install anywhere: for a number that is
+    // already fine the text is not merely equivalent but IDENTICAL, under every
+    // flag and precision a caller might have set, so no file that loaded
+    // changes by a byte.
+    const double values[] = {0.0, -0.0, 0.1, -0.1, 1.0, 3.14159265358979, 1e-30, 1e30, 123456789.0,
+                             16777216.0, 3.4028234663852886e38, 1.17549435e-38, 5e-324, 0.5, 100.0,
+                             static_cast<double>(0.1f), static_cast<double>(1.0f / 3.0f)};
+
+    for (const double v : values) {
+        for (int mode = 0; mode < 4; ++mode) {
+            std::ostringstream plain;
+            std::ostringstream guarded;
+            if (mode == 1) { plain << std::fixed; guarded << std::fixed; }
+            if (mode == 2) { plain.precision(12); guarded.precision(12); }
+            if (mode == 3) { plain << std::scientific; guarded << std::scientific; }
+
+            {
+                FiniteNumbersOnly only(guarded);
+                plain << v << " " << static_cast<float>(v) << " " << static_cast<long double>(v);
+                guarded << v << " " << static_cast<float>(v) << " " << static_cast<long double>(v);
+            }
+            CHECK_MSG(plain.str() == guarded.str(),
+                      "a finite number is written exactly as the standard facet writes it: " +
+                          plain.str() + " vs " + guarded.str());
+        }
+    }
+
+    // Integers and text are not the facet's business at all.
+    std::ostringstream guarded;
+    {
+        FiniteNumbersOnly only(guarded);
+        guarded << 42 << " " << -7 << " " << 18446744073709551615ull << " " << true << " abc";
+    }
+    CHECK(guarded.str() == "42 -7 18446744073709551615 1 abc");
+}
+
+static void testTheFacetWritesNothingAJsonReaderRefuses() {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+
+    std::ostringstream out;
+    {
+        FiniteNumbersOnly only(out);
+        out << nan << " " << inf << " " << -inf << " " << static_cast<double>(nan) << " "
+            << static_cast<long double>(-inf);
+    }
+    const std::string text = out.str();
+    CHECK_MSG(text.find("nan") == std::string::npos && text.find("inf") == std::string::npos,
+              "no 'nan' or 'inf' reaches the text: " + text);
+
+    // And what does reach it is a number that parses and means what it should:
+    // zero for NaN, and a huge number of the right sign for infinity, so "far
+    // away" is not silently "at the origin".
+    std::istringstream in(text);
+    double a = 1, b = 0, c = 0, d = 1, e = 0;
+    in >> a >> b >> c >> d >> e;
+    CHECK_MSG(a == 0.0 && d == 0.0, "NaN becomes zero");
+    CHECK_MSG(b > 1e38 && std::isfinite(b), "+infinity becomes the largest finite value");
+    CHECK_MSG(c < -1e38 && std::isfinite(c) && e < -1e38, "and -infinity the most negative");
+}
+
+static void testTheGuardLeavesTheStreamAsItFoundIt() {
+    std::ostringstream out;
+    const std::locale before = out.getloc();
+    {
+        FiniteNumbersOnly outer(out);
+        const std::locale during = out.getloc();
+        CHECK_MSG(during != before, "the facet is installed while the guard lives");
+
+        // A nested guard changes nothing and restores nothing: the outer one owns it.
+        {
+            FiniteNumbersOnly inner(out);
+            CHECK(out.getloc() == during);
+        }
+        CHECK_MSG(out.getloc() == during, "so leaving the inner one leaves the facet in place");
+    }
+    CHECK_MSG(out.getloc() == before, "the caller's locale is put back");
+
+    // Writing after the guard is the standard behaviour again.
+    out << std::numeric_limits<float>::infinity();
+    CHECK(out.str() == "inf");
+}
+
+static void testASceneWithANonFiniteNumberStillLoads() {
+    // Three fields the codec writes straight to the stream, in three different
+    // components, and the one scene-level setting that is not an entity's.
+    entt::registry registry;
+    registry.ctx().emplace<PhysicsSettings>().gravity =
+        glm::vec3(0.0f, -std::numeric_limits<float>::infinity(), 0.0f);
+
+    const entt::entity lamp = registry.create();
+    registry.emplace<TagComponent>(lamp, "lamp");
+    registry.emplace<TransformComponent>(lamp);
+    registry.emplace<LightComponent>(lamp).intensity = std::numeric_limits<float>::quiet_NaN();
+
+    const entt::entity crate = registry.create();
+    registry.emplace<TagComponent>(crate, "crate");
+    registry.emplace<TransformComponent>(crate);
+    registry.emplace<RigidBodyComponent>(crate).mass = std::numeric_limits<float>::infinity();
+
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("nan") == std::string::npos && text.find("inf") == std::string::npos,
+              "the scene text has no nan or inf in it");
+
+    entt::registry loaded;
+    const SerializationResult result = SceneSerializer::DeserializeFromString(loaded, text);
+    CHECK_MSG(result.ok, "a scene that held a NaN and two infinities loads: " + result.message);
+    if (!result.ok) return;
+
+    int lights = 0;
+    for (const entt::entity e : loaded.view<LightComponent>()) {
+        ++lights;
+        CHECK_MSG(loaded.get<LightComponent>(e).intensity == 0.0f, "NaN came back as zero");
+    }
+    CHECK_EQ(lights, 1);
+    for (const entt::entity e : loaded.view<RigidBodyComponent>()) {
+        const float mass = loaded.get<RigidBodyComponent>(e).mass;
+        CHECK_MSG(std::isfinite(mass) && mass > 1e38f, "infinity came back as the largest finite mass");
+    }
+    const PhysicsSettings* physics = loaded.ctx().find<PhysicsSettings>();
+    CHECK(physics != nullptr);
+    if (physics) {
+        CHECK_MSG(std::isfinite(physics->gravity.y) && physics->gravity.y < -1e38f,
+                  "and -infinity gravity the most negative finite value");
+    }
+}
+
+static void testAPrefabWithANonFiniteNumberIsStillReadable() {
+    const std::string path = "test_finite_prefab_tmp.prefab";
+    std::remove(path.c_str());
+
+    entt::registry registry;
+    const entt::entity lamp = registry.create();
+    registry.emplace<TagComponent>(lamp, "lamp");
+    registry.emplace<TransformComponent>(lamp);
+    registry.emplace<LightComponent>(lamp).range = std::numeric_limits<float>::infinity();
+
+    CHECK(PrefabSerializer::SavePrefab(registry, lamp, path).ok);
+    std::ifstream file(path);
+    std::ostringstream text;
+    text << file.rdbuf();
+    CHECK_MSG(text.str().find("inf") == std::string::npos && text.str().find("nan") == std::string::npos,
+              "the prefab text has no inf or nan in it");
+
+    Json::Value root;
+    std::string error;
+    CHECK_MSG(Json::Parse(text.str(), root, error), "the prefab parses: " + error);
+    std::remove(path.c_str());
+}
+
+// A scene's integers are doubles until something converts them, and converting a
+// double to an integer type it does not fit is undefined behaviour. About thirty
+// casts in the codec did that to whatever a scene said.
+//
+// What the cast DID on x86, which is what every existing scene was loaded with, is
+// kept - for unsigned a value that fits in 64 bits wraps modulo 2^32, so a hand-written
+// "Layer": -1 is every bit set - and made defined. What changes is only the signed
+// case that was never meaningful: INT_MIN for anything out of range, which is now
+// saturation toward the end the number is past.
+
+namespace {
+
+BoxColliderComponent boxWith(const std::string& layer, const std::string& collidesWith) {
+    const std::string text = R"({"Version": 2, "Entities": [{"Tag": "e", "BoxCollider": {"Layer": )" +
+                             layer + R"(, "CollidesWith": )" + collidesWith + "}}]}";
+    entt::registry registry;
+    const SerializationResult result = SceneSerializer::DeserializeFromString(registry, text);
+    CHECK_MSG(result.ok, result.message);
+    for (const entt::entity e : registry.view<BoxColliderComponent>()) {
+        return registry.get<BoxColliderComponent>(e);
+    }
+    return BoxColliderComponent{};
+}
+
+int maxLengthWith(const std::string& number) {
+    const std::string text = R"({"Version": 2, "Entities": [{"Tag": "e", "UITextField": {"MaxLength": )" +
+                             number + "}}]}";
+    entt::registry registry;
+    const SerializationResult result = SceneSerializer::DeserializeFromString(registry, text);
+    CHECK_MSG(result.ok, result.message);
+    for (const entt::entity e : registry.view<UITextFieldComponent>()) {
+        return registry.get<UITextFieldComponent>(e).maxLength;
+    }
+    return -999;
+}
+
+} // namespace
+
+static void testAnUnsignedFieldKeepsWhatTheCastAlwaysGaveItAndNowDefinesIt() {
+    CHECK_MSG(boxWith("-1", "1").layer == 0xFFFFFFFFu, "-1 is every bit set, the hand-written 'all layers'");
+    CHECK(boxWith("-5", "1").layer == 4294967291u);
+    CHECK(boxWith("4294967295", "1").layer == 4294967295u);
+    CHECK_MSG(boxWith("4294967296", "1").layer == 0u, "2^32 wraps to 0");
+    CHECK_MSG(boxWith("1e20", "1").layer == 0u, "past 64 bits is 0, as it was");
+    CHECK(boxWith("1", "-1e20").collidesWith == 0u);
+    CHECK_MSG(boxWith("3.9", "1").layer == 3u, "a fraction truncates toward zero");
+    CHECK(boxWith("7", "5").layer == 7u && boxWith("7", "5").collidesWith == 5u);
+}
+
+static void testASignedFieldSaturatesInsteadOfBecomingTheMostNegativeNumber() {
+    CHECK_EQ(maxLengthWith("24"), 24);
+    CHECK_EQ(maxLengthWith("3.7"), 3);
+    CHECK_EQ(maxLengthWith("-3.7"), -3);
+    CHECK_MSG(maxLengthWith("1e10") == std::numeric_limits<int>::max(),
+              "a field a scene says is ten billion long is very long, not negative");
+    CHECK_MSG(maxLengthWith("-1e10") == std::numeric_limits<int>::min(), "and the other end");
+    CHECK_EQ(maxLengthWith("2147483647"), std::numeric_limits<int>::max());
+}
+
+static void testAVersionNoBuildCouldHaveWrittenIsNewerNotAncient() {
+    // 1e20 as an int was INT_MIN - far below every real version, so "an old file,
+    // migrate it". It is plainly not old.
+    const std::string path = "test_hugever_tmp.scene";
+    {
+        std::ofstream f(path);
+        f << R"({"Version": 1e20, "Entities": [{"Tag": "Ghost"}]})";
+    }
+    entt::registry registry;
+    const auto result = SceneSerializer::Deserialize(registry, path);
+    std::remove(path.c_str());
+    CHECK_MSG(!result.ok, "a version of 1e20 is refused as newer than this build");
+}
+
+static void testAParentThatIsNotAnIndexIsRefusedRatherThanReadAsEntityZero() {
+    // The validation pass range-checks a Parent before anything is loaded, with a cast
+    // to size_t. That cast is undefined past 64 bits, and on x86 GCC 1e20 came out as 0
+    // - an index that is IN range - so the file was accepted and the entity silently
+    // parented to the first one in the scene.
+    for (const char* parent : {"-1", "-7", "1e20", "9999", "18446744073709551616"}) {
+        const std::string text = std::string(R"({"Version": 2, "Entities": [{"Tag": "a"}, {"Tag": "b", "Parent": )") +
+                                 parent + "}]}";
+        entt::registry registry;
+        const SerializationResult result = SceneSerializer::DeserializeFromString(registry, text);
+        CHECK_MSG(!result.ok, std::string("a Parent of ") + parent + " is out of range and is refused");
+        CHECK_MSG(registry.view<HierarchyComponent>().size() == 0, "and nothing was parented");
+    }
+    const std::string text = R"({"Version": 2, "Entities": [{"Tag": "a"}, {"Tag": "b", "Parent": 0}]})";
+    entt::registry registry;
+    CHECK(SceneSerializer::DeserializeFromString(registry, text).ok);
+    CHECK_MSG(registry.view<HierarchyComponent>().size() == 1, "and a real index still parents");
 }
 
 static void testReadLayersOverAnEntityThatAlreadyHasComponents() {
@@ -2032,6 +2446,19 @@ static void runTests() {
     testAFutureSceneIsRefusedAndChangesNothing();
     testSavedScenesCarryTheCurrentVersion();
     testReadLayersOverAnEntityThatAlreadyHasComponents();
+    testASceneSaveThatFailsPartWayLeavesThePreviousScene();
+    testAnUnsignedFieldKeepsWhatTheCastAlwaysGaveItAndNowDefinesIt();
+    testASignedFieldSaturatesInsteadOfBecomingTheMostNegativeNumber();
+    testAVersionNoBuildCouldHaveWrittenIsNewerNotAncient();
+    testAParentThatIsNotAnIndexIsRefusedRatherThanReadAsEntityZero();
+    testTheFacetFormatsEveryFiniteNumberAsTheStandardOneDoes();
+    testTheFacetWritesNothingAJsonReaderRefuses();
+    testTheGuardLeavesTheStreamAsItFoundIt();
+    testASceneWithANonFiniteNumberStillLoads();
+    testAPrefabWithANonFiniteNumberIsStillReadable();
+    testAPrefabSaveThatFailsPartWayLeavesThePreviousPrefab();
+    testAtomicFileReplacesTheTargetOnlyOnCommit();
+    testASaveToAnUnwritablePathFailsAndCreatesNothing();
     testJsonRoundTrip();
     testJsonRejectsGarbage();
     testTagEscaping();

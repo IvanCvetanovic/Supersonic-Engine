@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -34,6 +35,11 @@ public:
     const std::string& GetPluginPath() const { return m_pluginPath; }
     uint32_t GetReloadCount() const { return m_reloadCount; }
 
+    // How many times a load has been ATTEMPTED, successful or not. A failed attempt
+    // copies the whole plugin and opens it, so this is what a retry storm is
+    // measured in; a reload count only moves when one works.
+    uint32_t GetLoadAttempts() const { return m_loadAttempts; }
+
     // Forces a reload attempt regardless of timestamps. Returns false when the
     // attempt failed; a locked file is retryable and Poll will try again.
     bool ReloadNow();
@@ -57,6 +63,17 @@ private:
     std::filesystem::file_time_type m_lastWriteTime{};
     bool m_haveWriteTime{false};
     uint32_t m_reloadCount{0};
+    uint32_t m_loadAttempts{0};
+
+    // Set by a failed openPlugin when the failure is in the FILE - a missing entry
+    // point, a different API version - rather than in getting at it. The same file
+    // fails the same way every time, so retrying it is not patience, it is a copy and
+    // an open per retry for as long as the game runs.
+    bool m_failureIsPermanent{false};
+
+    // A retryable failure (a locked file, a library that will not open) is tried
+    // again, but not on every second frame.
+    std::chrono::steady_clock::time_point m_nextRetry{};
 
     // Debounce: a linker writes its output in passes, so the timestamp and size
     // must hold steady across two polls before the file is considered complete.

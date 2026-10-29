@@ -336,10 +336,17 @@ struct CameraComponent {
     }
 
     void updateCameraVectors() {
+        // An angle that is not a number gives NaN from sin and cos, and from there a
+        // NaN front, right, up and view matrix: a black screen with nothing in the
+        // log. A scene can say 1e999 (infinity) and a script can write NaN. It looks
+        // along the axis instead, which for every real angle changes nothing.
+        const float yawDegrees = std::isfinite(yaw) ? yaw : 0.0f;
+        const float pitchDegrees = std::isfinite(pitch) ? pitch : 0.0f;
+
         glm::vec3 newFront;
-        newFront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-        newFront.y = sin(glm::radians(pitch));
-        newFront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+        newFront.x = cos(glm::radians(yawDegrees)) * cos(glm::radians(pitchDegrees));
+        newFront.y = sin(glm::radians(pitchDegrees));
+        newFront.z = sin(glm::radians(yawDegrees)) * cos(glm::radians(pitchDegrees));
         front = glm::normalize(newFront);
         right = glm::normalize(glm::cross(front, worldUp));
         up = glm::normalize(glm::cross(right, front));
@@ -1070,7 +1077,14 @@ struct MeshComponent {
     // would resolve to nothing on load, which is worse than a scene that says
     // the entity has no mesh - so ComponentCodec writes the primitive and the
     // path and deliberately not this.
-    std::string meshKey;
+    //
+    // `{}` here and on the two members below it is not decoration: a member with no default
+    // initialiser that an aggregate initialiser leaves out draws -Wmissing-field-initializers,
+    // and EnTT's emplace<T>(args...) aggregate-initialises, so every emplace of these types
+    // that did not spell out every member warned (thirteen of them, in six files). With the
+    // initialiser it neither warns nor changes anything: the layout, and what a member
+    // left out is initialised to, are the same.
+    std::string meshKey{};
 
     // Set when a user ASSIGNS a model, cleared as soon as the material behind
     // it has been copied onto this entity's MaterialComponent. Runtime state,
@@ -1776,7 +1790,7 @@ struct ScriptComponent {
     // parameter then needs no ABI change and no recompile of the engine.
     //
     // Serialised, because they are authored data.
-    std::vector<std::pair<std::string, float>> parameters;
+    std::vector<std::pair<std::string, float>> parameters{};
 
     // Scratch the script owns between frames.
     //
@@ -1789,7 +1803,7 @@ struct ScriptComponent {
     // NOT serialised: this is where a script is, not what it was authored as.
     // Writing it into the scene would make a save depend on how long the game
     // had been running when it was taken.
-    std::vector<std::pair<std::string, float>> state;
+    std::vector<std::pair<std::string, float>> state{};
 };
 
 struct Particle {
@@ -1856,9 +1870,15 @@ struct SpriteAnimationComponent {
     // How many cells this animation actually plays, resolved once so the system
     // and the inspector cannot disagree about what zero means.
     uint32_t resolvedFrameCount() const {
-        const uint32_t grid = (columns == 0 || rows == 0) ? 0u : columns * rows;
+        // 64-bit: a grid is a number a scene writes, and 65536 x 65536 is 2^32 cells,
+        // which as a uint32 product was zero - an animation that played nothing.
+        // Clamped to what a frame count can hold. Identical for every grid whose
+        // cells fit.
+        const uint64_t grid = (columns == 0 || rows == 0) ? 0u : static_cast<uint64_t>(columns) * rows;
         if (frameCount != 0) return frameCount;
-        return firstFrame < grid ? grid - firstFrame : 0u;
+        if (firstFrame >= grid) return 0u;
+        const uint64_t left = grid - firstFrame;
+        return left > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(left);
     }
 };
 

@@ -448,9 +448,15 @@ static void writeRaw(const std::string& path, const std::string& text) {
 }
 
 // Filesystem write times are coarse, so a test that depends on a file looking
-// CHANGED has to outlive one tick. See test_assetwatcher for the same helper.
-static void letTheClockMove() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+// CHANGED needs a write time that differs. Waiting for the clock to tick cost 1.1
+// seconds a time; moving the write time costs nothing and is exact. See
+// test_assetwatcher for the same reasoning.
+static void moveWriteTime(const std::string& path, int seconds) {
+    std::error_code ec;
+    const auto current = std::filesystem::last_write_time(path, ec);
+    if (!ec) {
+        std::filesystem::last_write_time(path, current + std::chrono::seconds(seconds), ec);
+    }
 }
 
 // THE SPRITE-ONLY SPECIALISATION (VulkanPipelineOptions::spritesOnly): constant 0 of the scene fragment shader, which a
@@ -581,6 +587,16 @@ static void testSavingFromTheEditorDoesNotFireTheWatcher() {
     library.Create(kPathA, makeAsset("Tuned", 0.3f));
 
     const uint32_t id = library.Acquire(kPathA);
+
+    // The watcher records the file's write time when it starts watching, and this
+    // test only means something if the engine's own save lands on a DIFFERENT one:
+    // if they matched, the poll below would report nothing whether or not Save
+    // acknowledged its write, and the test would pass with the acknowledgement
+    // deleted. The file used to be made to differ by sleeping 1.1 seconds before the
+    // save; instead it is aged two seconds, and the watcher - which the library
+    // already registered it with when it was created - adopts the aged time.
+    moveWriteTime(kPathA, -2);
+    watcher.Acknowledge(kPathA);
     watcher.Watch(kPathA);
     CHECK_EQ(watcher.Poll(), size_t{0});
 
@@ -588,7 +604,6 @@ static void testSavingFromTheEditorDoesNotFireTheWatcher() {
     // the acknowledgement the next poll reads the file back over the values
     // still being dragged: harmless while they match, wrong on the first frame
     // where the slider has moved on.
-    letTheClockMove();
     if (MaterialAsset* asset = library.Get(id)) asset->roughness = 0.9f;
     library.Save(id);
 
@@ -596,8 +611,8 @@ static void testSavingFromTheEditorDoesNotFireTheWatcher() {
     CHECK_EQ(fired, 0);
 
     // And it is still watching: an edit made ELSEWHERE still fires.
-    letTheClockMove();
     writeRaw(kPathA, MaterialLibrary::Serialize(makeAsset("External", 0.11f)));
+    moveWriteTime(kPathA, +2);   // a later edit than the save the watcher acknowledged
     CHECK_MSG(watcher.Poll() == size_t{1}, "an edit from outside must still fire");
 
     cleanup();
@@ -1371,6 +1386,86 @@ static void testAFilesMetaDecidesItsUpload() {
     // every sampler before this was linear between levels.
     CHECK(VulkanImage::MipmapModeFor(vk::Filter::eNearest) == vk::SamplerMipmapMode::eNearest);
     CHECK(VulkanImage::MipmapModeFor(vk::Filter::eLinear) == vk::SamplerMipmapMode::eLinear);
+}
+
+// The layout pairs VulkanImage::TransitionLayout can record, read as a table
+// because no suite here has a device to record one with.
+//
+// UIImageStore::Update re-uploads an image in place - it is what a fog-of-war
+// texture needs - by moving it ShaderReadOnly -> TransferDst, copying, and moving
+// it back. The first of those pairs was not in the table, so TransitionLayout
+// threw, and a throw out of a game's tick ends the process. Nothing built a
+// UIImageStore, so nothing saw it: every call to Update failed the same way.
+
+static void testEveryTransitionAnUploadAsksForIsInTheTable() {
+    using L = vk::ImageLayout;
+    using Access = vk::AccessFlagBits;
+    using Stage = vk::PipelineStageFlagBits;
+
+    // The first upload of an image: nothing in it yet, written, then read.
+    const auto toWrite = VulkanImage::BarrierFor(L::eUndefined, L::eTransferDstOptimal);
+    CHECK_MSG(toWrite.has_value(), "Undefined -> TransferDst");
+    if (toWrite) {
+        CHECK(toWrite->srcAccess == vk::AccessFlags{});
+        CHECK(toWrite->dstAccess == vk::AccessFlags{Access::eTransferWrite});
+        CHECK(toWrite->srcStage == vk::PipelineStageFlags{Stage::eTopOfPipe});
+        CHECK(toWrite->dstStage == vk::PipelineStageFlags{Stage::eTransfer});
+    }
+
+    const auto toRead = VulkanImage::BarrierFor(L::eTransferDstOptimal, L::eShaderReadOnlyOptimal);
+    CHECK_MSG(toRead.has_value(), "TransferDst -> ShaderReadOnly");
+    if (toRead) {
+        CHECK(toRead->srcAccess == vk::AccessFlags{Access::eTransferWrite});
+        CHECK(toRead->dstAccess == vk::AccessFlags{Access::eShaderRead});
+        CHECK(toRead->srcStage == vk::PipelineStageFlags{Stage::eTransfer});
+        CHECK(toRead->dstStage == vk::PipelineStageFlags{Stage::eFragmentShader});
+    }
+
+    // Writing it AGAIN, which is what UIImageStore::Update does: an image a
+    // shader has been sampling goes back to being a transfer target. A write
+    // after a read is an execution dependency and nothing more - the copy has to
+    // wait for the fragment shader that was reading, and there are no earlier
+    // writes to make available, so the source access is empty.
+    const auto again = VulkanImage::BarrierFor(L::eShaderReadOnlyOptimal, L::eTransferDstOptimal);
+    CHECK_MSG(again.has_value(),
+              "ShaderReadOnly -> TransferDst: UIImageStore::Update asks for it on every call");
+    if (again) {
+        CHECK(again->srcAccess == vk::AccessFlags{});
+        CHECK(again->dstAccess == vk::AccessFlags{Access::eTransferWrite});
+        CHECK(again->srcStage == vk::PipelineStageFlags{Stage::eFragmentShader});
+        CHECK(again->dstStage == vk::PipelineStageFlags{Stage::eTransfer});
+    }
+}
+
+static void testAPairNobodyHasWrittenABarrierForIsRefused() {
+    using L = vk::ImageLayout;
+
+    // Refused, not guessed at: a barrier with the wrong stages is a hazard
+    // validation may or may not catch, where a refusal is seen at once.
+    CHECK_MSG(!VulkanImage::BarrierFor(L::eUndefined, L::eShaderReadOnlyOptimal).has_value(),
+              "an image cannot go from nothing to readable without being written");
+    CHECK(!VulkanImage::BarrierFor(L::eShaderReadOnlyOptimal, L::eShaderReadOnlyOptimal).has_value());
+    CHECK(!VulkanImage::BarrierFor(L::eTransferDstOptimal, L::eTransferDstOptimal).has_value());
+    CHECK(!VulkanImage::BarrierFor(L::eShaderReadOnlyOptimal, L::eUndefined).has_value());
+    CHECK(!VulkanImage::BarrierFor(L::eColorAttachmentOptimal, L::eShaderReadOnlyOptimal).has_value());
+}
+
+// Whether a decoded image is one the device can hold, decided before anything is
+// created (TextureRegistry::FitsTheDevice). A PNG can be any size, and the device's
+// answer to one past maxImageDimension2D was an exception out of the image
+// constructor - fatal - with the decoded pixels never freed. The refusal itself
+// needs a device; the boundary does not.
+static void testAnImagePastTheDeviceLimitIsRefusedBeforeItIsMade() {
+    constexpr uint32_t kVulkanMinimum = 4096;   // the least a device may report
+    CHECK(TextureRegistry::FitsTheDevice(1, 1, kVulkanMinimum));
+    CHECK(TextureRegistry::FitsTheDevice(4096, 4096, kVulkanMinimum));
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(4097, 1, kVulkanMinimum), "one pixel too wide");
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(1, 4097, kVulkanMinimum), "one pixel too tall");
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(40000, 40000, 16384), "a 40000 x 40000 PNG on a 16384 device");
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(0, 16, 16384), "an empty axis is not an image");
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(16, 0, 16384), "either axis");
+    CHECK(TextureRegistry::FitsTheDevice(16384, 16384, 16384));
+    CHECK_MSG(!TextureRegistry::FitsTheDevice(0xFFFFFFFFu, 0xFFFFFFFFu, 16384), "and the largest a uint32 can say");
 }
 
 static void testTheSameMapsReadBothWaysAreTwoSetsAndBothGo() {
@@ -2207,6 +2302,9 @@ static void runTests() {
     testThePoolHoldsTheWalkWithRoomToSpare();
     testAMaterialReadsEachTexturesOwnWrapUnlessItClamps();
     testAFilesMetaDecidesItsUpload();
+    testEveryTransitionAnUploadAsksForIsInTheTable();
+    testAnImagePastTheDeviceLimitIsRefusedBeforeItIsMade();
+    testAPairNobodyHasWrittenABarrierForIsRefused();
     testTheSameMapsReadBothWaysAreTwoSetsAndBothGo();
     testClampToEdgeSurvivesASaveAndLoadAndIsWrittenOnlyWhenSet();
     testAnOverrideReplacesOnlyTheSurfaceItNames();

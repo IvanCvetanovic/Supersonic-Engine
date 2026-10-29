@@ -179,8 +179,14 @@ void AudioMixer::Mix(float* out, size_t frames) {
 
     // Clamp after summing, not per voice: two half-volume sounds must be able
     // to add up to full scale.
+    //
+    // A NaN is made silence first. std::clamp compares, and both of its comparisons
+    // are false for NaN, so it hands NaN straight back - and a float WAV can hold
+    // one. MixInt16 then took lround() of it, a domain error, and one bad sample
+    // poisons everything summed with it.
     for (size_t i = 0; i < samples; ++i) {
-        out[i] = std::clamp(out[i], -1.0f, 1.0f);
+        const float sample = out[i];
+        out[i] = (sample != sample) ? 0.0f : std::clamp(sample, -1.0f, 1.0f);
     }
 }
 

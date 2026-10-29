@@ -10,8 +10,12 @@
 
 #include "TestHarness.hpp"
 #include "core/ImagePixels.hpp"
+#include "renderer/ScreenCapture.hpp"
+
+#include <stb_image.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -222,7 +226,58 @@ static void testNothingInReachLeavesATexelAsItWas() {
 }
 
 
+// The PNG a capture writes, read back by the same decoder the engine loads textures
+// with. --screenshot's whole value is that somebody looks at the file, and until now
+// nothing had checked that the file written is the image that was handed over: the
+// packing above is pinned, the writer after it was not.
+
+static void testAWrittenPngDecodesToTheSamePixels() {
+    const std::string path = "test_capture_tmp.png";
+    std::remove(path.c_str());
+
+    // 3 x 2, every channel of every pixel different, alpha included, so a swapped
+    // channel, a transposed image or a dropped alpha is each a different failure.
+    const uint8_t rgba[3 * 2 * 4] = {
+        255, 0,   0,   255,   0,   255, 0,   200,   0,   0,   255, 150,
+        10,  20,  30,  40,    50,  60,  70,  80,    90,  100, 110, 120};
+
+    std::string error;
+    CHECK_MSG(ScreenCapture::WriteRgbaPng(rgba, 3, 2, path, error), error);
+
+    int width = 0, height = 0, channels = 0;
+    unsigned char* decoded = stbi_load(path.c_str(), &width, &height, &channels, 4);
+    CHECK_MSG(decoded != nullptr, "the file decodes");
+    if (decoded) {
+        CHECK_EQ(width, 3);
+        CHECK_EQ(height, 2);
+        bool same = true;
+        for (size_t i = 0; i < sizeof(rgba); ++i) same = same && decoded[i] == rgba[i];
+        CHECK_MSG(same, "and every byte of every pixel is the one that went in");
+        stbi_image_free(decoded);
+    }
+    std::remove(path.c_str());
+}
+
+static void testAPngThatCannotBeWrittenSaysSo() {
+    std::string error;
+    const uint8_t pixel[4] = {1, 2, 3, 4};
+
+    CHECK_MSG(!ScreenCapture::WriteRgbaPng(nullptr, 1, 1, "test_capture_tmp.png", error), "no pixels");
+    CHECK_MSG(!error.empty(), "and it says so");
+    error.clear();
+    CHECK(!ScreenCapture::WriteRgbaPng(pixel, 0, 1, "test_capture_tmp.png", error));
+    CHECK(!ScreenCapture::WriteRgbaPng(pixel, 1, 0, "test_capture_tmp.png", error));
+
+    error.clear();
+    CHECK_MSG(!ScreenCapture::WriteRgbaPng(pixel, 1, 1, "test_capture_no_such_dir_tmp/inner/x.png", error),
+              "a path that cannot be written is a failure, not a crash");
+    CHECK_MSG(error.find("test_capture_no_such_dir_tmp") != std::string::npos,
+              "that names the path: " + error);
+}
+
 static void runTests() {
+    testAWrittenPngDecodesToTheSamePixels();
+    testAPngThatCannotBeWrittenSaysSo();
     testBgraComesOutAsRgba();
     testRgbaIsCopiedAsItIs();
     testEveryAlphaComesOutOpaque();

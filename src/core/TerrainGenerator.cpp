@@ -106,6 +106,18 @@ bool TerrainGenerator::GenerateHeightfield(uint32_t width, uint32_t height, floa
         return false;
     }
 
+    // The size is a scene file's claim (see kMaxHeightfieldSide), so it is checked
+    // before anything is sized from it. Refusing is the answer HeightfieldCache
+    // already handles - a collider with a bad size is one rejected build, kept as
+    // an invalid entry, not one per fixed step.
+    if (width > kMaxHeightfieldSide || height > kMaxHeightfieldSide ||
+        static_cast<uint64_t>(width) * height > kMaxHeightfieldCells) {
+        SUPERSONIC_LOG_ERROR("TerrainGenerator") << "Heightfield of " << width << "x" << height
+                  << " is larger than the " << kMaxHeightfieldSide << " a side ("
+                  << kMaxHeightfieldCells << " cells) this builds." << std::endl;
+        return false;
+    }
+
     const float halfW = static_cast<float>(width) * 0.5f;
     const float halfH = static_cast<float>(height) * 0.5f;
 

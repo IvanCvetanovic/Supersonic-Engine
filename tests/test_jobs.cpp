@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <numeric>
 #include <stdexcept>
@@ -108,8 +109,21 @@ static void testGroupsCoverContiguousRanges() {
 }
 
 static void testWorkActuallySpreadsAcrossThreads() {
-    // Not a timing test - it counts distinct thread ids, so it cannot fail
-    // spuriously on a slow machine, only on a machine with one core.
+    // Counts distinct thread ids, and does not leave it to the scheduler to
+    // produce a second one.
+    //
+    // This used to rely on the groups overlapping "genuinely" in time. They
+    // do not on a busy machine: one thread can drain all sixty-four groups
+    // before another is scheduled, and the check failed in roughly one run in
+    // five on a two-core CI runner and most runs with the cores busy - with
+    // nothing wrong in the pool. So each job now holds its thread until a
+    // second thread has started a job too, which turns "did the work spread"
+    // into something the pool itself decides rather than the machine's load.
+    //
+    // The wait is bounded by one deadline shared by every job. A pool that
+    // really did run everything on one thread therefore costs the test one
+    // deadline and then fails the check, rather than costing it a deadline per
+    // group.
     if (std::thread::hardware_concurrency() < 2) {
         CHECK_MSG(true, "single-core host, nothing to spread");
         return;
@@ -118,13 +132,21 @@ static void testWorkActuallySpreadsAcrossThreads() {
     std::vector<std::atomic<size_t>> ids(64);
     for (auto& id : ids) id.store(0);
 
-    JobSystem::Dispatch(2048, 32, [&ids](JobSystem::JobArgs args) {
+    std::atomic<size_t> firstThread{0};
+    std::atomic<bool> secondThreadSeen{false};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+
+    JobSystem::Dispatch(2048, 32, [&](JobSystem::JobArgs args) {
         const size_t hash = std::hash<std::thread::id>{}(std::this_thread::get_id());
         ids[args.groupIndex % ids.size()].store(hash);
-        // Enough work that groups genuinely overlap in time.
-        volatile double sink = 0.0;
-        for (int k = 0; k < 200; ++k) sink += static_cast<double>(k);
-        (void)sink;
+
+        size_t expected = 0;
+        if (!firstThread.compare_exchange_strong(expected, hash) && expected != hash) {
+            secondThreadSeen.store(true);
+        }
+        while (!secondThreadSeen.load() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
     });
     JobSystem::Wait();
 

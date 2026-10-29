@@ -127,26 +127,39 @@ VulkanImage::VulkanImage(
     }
 #endif
 
-    m_imageView = m_deviceRef.GetDevice().createImageView(viewInfo);
+    // The image exists by now, and a destructor does not run for an object whose
+    // constructor throws: so a createImageView that fails here (out of memory, a
+    // lost device) used to leave the allocation, and any views already made, with
+    // nobody to free them. Everything made so far is released, then the error goes on.
+    try {
+        m_imageView = m_deviceRef.GetDevice().createImageView(viewInfo);
 
-    // Per-layer views for framebuffer attachments. Only worth creating for an
-    // array image; a single-layer image's own view already is one.
-    if (m_arrayLayers > 1) {
-        m_layerViews.reserve(m_arrayLayers);
-        for (uint32_t layer = 0; layer < m_arrayLayers; ++layer) {
-            vk::ImageViewCreateInfo layerInfo = viewInfo;
+        // Per-layer views for framebuffer attachments. Only worth creating for an
+        // array image; a single-layer image's own view already is one.
+        if (m_arrayLayers > 1) {
+            m_layerViews.reserve(m_arrayLayers);
+            for (uint32_t layer = 0; layer < m_arrayLayers; ++layer) {
+                vk::ImageViewCreateInfo layerInfo = viewInfo;
 #if defined(__APPLE__)
-            layerInfo.pNext = nullptr;   // these ARE the attachments: the image's full usage
+                layerInfo.pNext = nullptr;   // these ARE the attachments: the image's full usage
 #endif
-            layerInfo.viewType = vk::ImageViewType::e2D;
-            layerInfo.subresourceRange.baseArrayLayer = layer;
-            layerInfo.subresourceRange.layerCount = 1;
-            m_layerViews.push_back(m_deviceRef.GetDevice().createImageView(layerInfo));
+                layerInfo.viewType = vk::ImageViewType::e2D;
+                layerInfo.subresourceRange.baseArrayLayer = layer;
+                layerInfo.subresourceRange.layerCount = 1;
+                m_layerViews.push_back(m_deviceRef.GetDevice().createImageView(layerInfo));
+            }
         }
+    } catch (...) {
+        releaseResources();
+        throw;
     }
 }
 
 VulkanImage::~VulkanImage() {
+    releaseResources();
+}
+
+void VulkanImage::releaseResources() noexcept {
     vk::Device device = m_deviceRef.GetDevice();
 
     if (m_sampler) {
@@ -221,12 +234,44 @@ vk::Sampler VulkanImage::makeSampler(vk::Filter filter, vk::SamplerAddressMode a
     return m_deviceRef.GetDevice().createSampler(samplerInfo);
 }
 
+std::optional<VulkanImage::LayoutBarrier> VulkanImage::BarrierFor(vk::ImageLayout oldLayout,
+                                                                  vk::ImageLayout newLayout) {
+    if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
+        return LayoutBarrier{vk::AccessFlagBits::eNone, vk::AccessFlagBits::eTransferWrite,
+                             vk::PipelineStageFlagBits::eTopOfPipe,
+                             vk::PipelineStageFlagBits::eTransfer};
+    }
+    if (oldLayout == vk::ImageLayout::eTransferDstOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+        return LayoutBarrier{vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
+                             vk::PipelineStageFlagBits::eTransfer,
+                             vk::PipelineStageFlagBits::eFragmentShader};
+    }
+    // An image a shader has been sampling, written again (UIImageStore::Update).
+    // A write after a read needs an execution dependency and nothing more: reads
+    // leave no writes to make available, so the source access is empty and the
+    // source stage is the point. The copy must not begin until the fragment
+    // shader that was sampling the old pixels has finished with them.
+    if (oldLayout == vk::ImageLayout::eShaderReadOnlyOptimal && newLayout == vk::ImageLayout::eTransferDstOptimal) {
+        return LayoutBarrier{vk::AccessFlags{}, vk::AccessFlagBits::eTransferWrite,
+                             vk::PipelineStageFlagBits::eFragmentShader,
+                             vk::PipelineStageFlagBits::eTransfer};
+    }
+    return std::nullopt;
+}
+
 void VulkanImage::TransitionLayout(
     VulkanDevice& device,
     vk::CommandPool commandPool,
     vk::Image image,
     vk::ImageLayout oldLayout,
     vk::ImageLayout newLayout) {
+
+    // Before anything is allocated: refusing a pair after the command buffer is
+    // allocated and begun used to leave it recording and never freed.
+    const std::optional<LayoutBarrier> table = BarrierFor(oldLayout, newLayout);
+    if (!table) {
+        throw std::invalid_argument("Unsupported layout transition!");
+    }
 
     vk::CommandBufferAllocateInfo allocInfo{};
     allocInfo.level = vk::CommandBufferLevel::ePrimary;
@@ -254,22 +299,10 @@ void VulkanImage::TransitionLayout(
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
 
-    vk::PipelineStageFlags sourceStage;
-    vk::PipelineStageFlags destinationStage;
-
-    if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
-        barrier.srcAccessMask = vk::AccessFlagBits::eNone;
-        barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-        sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
-        destinationStage = vk::PipelineStageFlagBits::eTransfer;
-    } else if (oldLayout == vk::ImageLayout::eTransferDstOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
-        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-        sourceStage = vk::PipelineStageFlagBits::eTransfer;
-        destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
-    } else {
-        throw std::invalid_argument("Unsupported layout transition!");
-    }
+    barrier.srcAccessMask = table->srcAccess;
+    barrier.dstAccessMask = table->dstAccess;
+    const vk::PipelineStageFlags sourceStage = table->srcStage;
+    const vk::PipelineStageFlags destinationStage = table->dstStage;
 
     commandBuffer.pipelineBarrier(
         sourceStage, destinationStage,

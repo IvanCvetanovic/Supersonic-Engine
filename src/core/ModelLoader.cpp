@@ -379,8 +379,19 @@ bool ModelLoader::LoadOBJ(const std::string& filepath, MeshData& out) {
             Vertex& a = out.vertices[out.indices[i]];
             Vertex& b = out.vertices[out.indices[i + 1]];
             Vertex& c = out.vertices[out.indices[i + 2]];
-            const glm::vec3 n = glm::normalize(glm::cross(b.pos - a.pos, c.pos - a.pos));
-            a.normal = b.normal = c.normal = n;
+            const glm::vec3 area = glm::cross(b.pos - a.pos, c.pos - a.pos);
+
+            // A triangle whose corners are in a line has no normal. glm::normalize
+            // of the zero vector is NaN, and writing it onto the three vertices
+            // overwrote the good normal of any vertex a sound triangle shares with
+            // it. Such a triangle is skipped; a vertex nothing sound reached gets the
+            // fallback below.
+            if (!(glm::dot(area, area) > 1e-30f) || !std::isfinite(glm::dot(area, area))) continue;
+            a.normal = b.normal = c.normal = glm::normalize(area);
+        }
+        for (Vertex& vertex : out.vertices) {
+            // Essentially zero only: every normal set above is a unit vector.
+            if (glm::dot(vertex.normal, vertex.normal) < 1e-12f) vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
         }
     }
 

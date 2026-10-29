@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <limits>
 #include <vector>
 
 using namespace Supersonic;
@@ -277,6 +278,37 @@ static void testEmptyClipIsRejected() {
     CHECK_EQ(mixer.VoiceCount(), size_t{0});
 }
 
+static void testANonNumberSampleDoesNotReachTheOutput() {
+    // A float WAV can hold anything. std::clamp passes NaN straight through
+    // (both comparisons are false), so a single NaN sample came out of Mix as NaN
+    // and into lround() in MixInt16, which is a domain error, and into every
+    // later sum. It is silence, not a click and not a poisoned mix.
+    AudioClip clip;
+    clip.channels = 1;
+    clip.sampleRate = 48000;
+    clip.bitsPerSample = 32;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    const float samples[] = {nan, 0.5f, inf, -0.25f, nan, -inf};
+    clip.pcm.resize(sizeof(samples));
+    std::memcpy(clip.pcm.data(), samples, sizeof(samples));
+
+    AudioMixer mixer(48000, 1);
+    CHECK(mixer.Add(clip, false, 1.0f, 1.0f) != AudioMixer::kInvalidVoice);
+
+    std::vector<float> out(6, 123.0f);
+    mixer.Mix(out.data(), 6);
+    for (const float v : out) CHECK_MSG(std::isfinite(v) && v >= -1.0f && v <= 1.0f,
+                                       "every output sample is a real number inside [-1, 1]");
+
+    // And through the integer path the device reads.
+    AudioMixer mixer16(48000, 1);
+    mixer16.Add(clip, false, 1.0f, 1.0f);
+    std::vector<int16_t> pcm(6, 12345);
+    mixer16.MixInt16(pcm.data(), 6);
+    CHECK_MSG(pcm[0] == 0, "a NaN sample is silent in the integer output too");
+}
+
 static void runTests() {
     testSilenceWithNoVoices();
     testASingleVoiceReachesTheOutput();
@@ -292,6 +324,7 @@ static void runTests() {
     testMonoClipFeedsBothChannels();
     testEightBitClipsAreUnsigned();
     testEmptyClipIsRejected();
+    testANonNumberSampleDoesNotReachTheOutput();
 }
 
 TEST_MAIN("test_mixer", 190)

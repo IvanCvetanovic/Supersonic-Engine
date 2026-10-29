@@ -16,12 +16,40 @@ std::vector<char> readFile(const std::string& path) {
     if (!file.is_open()) {
         throw std::runtime_error("BloomPass could not open shader: " + path);
     }
-    const auto size = static_cast<size_t>(file.tellg());
+    // SPIR-V is a stream of 32-bit words, and a shader module is created from a
+    // pointer to uint32_t: a file whose size is not a multiple of four (a truncated
+    // copy, an LFS pointer, an HTML error page saved under the right name) was read
+    // past its end by the driver. VulkanPipeline's own loader has the same two checks.
+    const std::streamoff end = file.tellg();
+    if (end <= 0 || end % 4 != 0) {
+        throw std::runtime_error("BloomPass: " + path + " is not SPIR-V (" +
+                                 std::to_string(static_cast<long long>(end)) + " bytes)");
+    }
+    const auto size = static_cast<size_t>(end);
     std::vector<char> buffer(size);
     file.seekg(0);
     file.read(buffer.data(), static_cast<std::streamsize>(size));
+    if (!file) {
+        throw std::runtime_error("BloomPass: could not read " + path);
+    }
     return buffer;
 }
+
+// A shader module that is destroyed when it goes out of scope, however that happens.
+// buildPipeline made two and destroyed them on its last line, so a throw from the
+// second createShaderModule - or from createGraphicsPipeline - leaked the first, or
+// both.
+struct ShaderModuleGuard {
+    vk::Device device;
+    vk::ShaderModule module{};
+
+    explicit ShaderModuleGuard(vk::Device d) : device(d) {}
+    ~ShaderModuleGuard() {
+        if (module) device.destroyShaderModule(module);
+    }
+    ShaderModuleGuard(const ShaderModuleGuard&) = delete;
+    ShaderModuleGuard& operator=(const ShaderModuleGuard&) = delete;
+};
 
 // A colour-only pass whose result is immediately sampled by the next one.
 //
@@ -299,8 +327,12 @@ vk::Pipeline BloomPass::buildPipeline(const std::string& fragmentPath, vk::Rende
         return device.createShaderModule(info);
     };
 
-    vk::ShaderModule vertModule = makeModule("assets/shaders/fullscreen_vert.spv");
-    vk::ShaderModule fragModule = makeModule(fragmentPath);
+    ShaderModuleGuard vertGuard(device);
+    vertGuard.module = makeModule("assets/shaders/fullscreen_vert.spv");
+    ShaderModuleGuard fragGuard(device);
+    fragGuard.module = makeModule(fragmentPath);
+    const vk::ShaderModule vertModule = vertGuard.module;
+    const vk::ShaderModule fragModule = fragGuard.module;
 
     std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
     stages[0].stage = vk::ShaderStageFlagBits::eVertex;
@@ -362,12 +394,10 @@ vk::Pipeline BloomPass::buildPipeline(const std::string& fragmentPath, vk::Rende
     info.subpass = 0;
 
     // Named before the driver is asked, as VulkanPipeline names its own: the line a log ends on if the
-    // driver dies compiling it.
+    // driver dies compiling it. The guards destroy both modules on the way out, including when this
+    // throws.
     SUPERSONIC_LOG_INFO("BloomPass") << "Creating pipeline: " << fragmentPath << "..." << std::endl;
     const auto result = device.createGraphicsPipeline(m_pipelineCache, info);
-
-    device.destroyShaderModule(vertModule);
-    device.destroyShaderModule(fragModule);
 
     if (result.result != vk::Result::eSuccess) {
         throw std::runtime_error("BloomPass failed to create a pipeline for " + fragmentPath);

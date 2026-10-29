@@ -1,4 +1,5 @@
 #include "core/AssetDatabase.hpp"
+#include "core/AtomicFile.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -189,8 +190,12 @@ AssetDatabase::TextureSettings AssetDatabase::TextureSettingsForAsset(const std:
 }
 
 bool AssetDatabase::WriteMeta(const std::string& metaPath, const Entry& entry) {
-    std::ofstream file(metaPath, std::ios::binary | std::ios::trunc);
-    if (!file.is_open()) return false;
+    // Through a temporary: a truncated .meta fails its guid check, the asset is
+    // minted a NEW identity on the next import, and every scene that named the old
+    // one is orphaned. Binary, as it always was.
+    AtomicFile atomic(metaPath, /*binary*/ true);
+    if (!atomic.IsOpen()) return false;
+    std::ostream& file = atomic.Stream();
 
     file << "{\n"
          << "  \"Guid\": \"" << entry.guid << "\",\n"
@@ -214,7 +219,7 @@ bool AssetDatabase::WriteMeta(const std::string& metaPath, const Entry& entry) {
     }
 
     file << "\n}\n";
-    return file.good();
+    return atomic.Commit();
 }
 
 void AssetDatabase::Remember(const Entry& entry) {

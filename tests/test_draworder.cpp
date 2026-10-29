@@ -22,6 +22,9 @@
 
 #include <algorithm>
 #include <string>
+#include <cmath>
+#include <limits>
+#include <random>
 #include <vector>
 
 using namespace Supersonic;
@@ -491,6 +494,104 @@ void testSortingIsAPermutationAndLosesNothing() {
     CHECK_MSG(before == after, "every draw that went in comes out, exactly once");
 }
 
+// --- numbers that are not depths --------------------------------------------
+//
+// An entity at NaN is culled as VISIBLE (a comparison against NaN is false, and the
+// frustum test reads "not outside"), so a NaN depth reaches the sort. The comparators
+// said `if (a != b) return a > b`, which is false in both directions against NaN: NaN
+// "equals" every number while the numbers differ from each other. That is not a
+// strict weak ordering, so std::sort's behaviour is undefined, and in practice the
+// FINITE draws around it come out of order - a visible flicker in the blended pass.
+
+void testANaNDepthSortsAfterEveryNumber() {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    std::vector<RenderSystem::TransparentDraw> draws{
+        blended(3.0f, 0, 0), blended(nan, 0, 1), blended(5.0f, 0, 2), blended(nan, 0, 3),
+        blended(1.0f, 0, 4), blended(9.0f, 0, 5), blended(nan, 0, 6), blended(7.0f, 0, 7)};
+
+    RenderSystem::SortTransparentDraws(draws);
+
+    const float expected[] = {9.0f, 7.0f, 5.0f, 3.0f, 1.0f};
+    for (size_t i = 0; i < 5; ++i) {
+        CHECK_MSG(draws[i].viewDepth == expected[i],
+                  "every real depth comes first, still back to front");
+    }
+    for (size_t i = 5; i < 8; ++i) CHECK_MSG(std::isnan(draws[i].viewDepth), "and the NaNs last");
+    CHECK_MSG(draws[5].gathered == 1 && draws[6].gathered == 3 && draws[7].gathered == 6,
+              "in gather order, so the order is total and nothing flickers");
+}
+
+void testANaNParticleDepthSortsAfterEveryNumber() {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const auto particle = [](float depth, uint32_t gathered) {
+        RenderSystem::ParticleDraw draw;
+        draw.viewDepth = depth;
+        draw.gathered = gathered;
+        return draw;
+    };
+    std::vector<RenderSystem::ParticleDraw> draws{
+        particle(2.0f, 0), particle(nan, 1), particle(8.0f, 2), particle(4.0f, 3), particle(nan, 4)};
+
+    RenderSystem::SortParticleDraws(draws);
+
+    CHECK(draws[0].viewDepth == 8.0f && draws[1].viewDepth == 4.0f && draws[2].viewDepth == 2.0f);
+    CHECK(std::isnan(draws[3].viewDepth) && std::isnan(draws[4].viewDepth));
+    CHECK(draws[3].gathered == 1 && draws[4].gathered == 4);
+}
+
+void testAManyDrawSortWithNaNsIsStillOrdered() {
+    // Past the size where std::sort stops using insertion sort, where a comparator
+    // that is not a strict weak ordering can run the partition off the end of the
+    // range. A fixed seed, so a failure is the same failure every time.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    std::mt19937 rng(20261001u);
+    std::uniform_real_distribution<float> depth(-50.0f, 500.0f);
+
+    std::vector<RenderSystem::TransparentDraw> draws;
+    for (uint32_t i = 0; i < 4000; ++i) {
+        const bool isNaN = rng() % 10 == 0;
+        draws.push_back(blended(isNaN ? nan : depth(rng), static_cast<int32_t>(rng() % 3), i));
+    }
+    RenderSystem::SortTransparentDraws(draws);
+
+    bool seenNaN = false;
+    bool ordered = true;
+    for (size_t i = 0; i < draws.size(); ++i) {
+        if (std::isnan(draws[i].viewDepth)) { seenNaN = true; continue; }
+        if (seenNaN) ordered = false;                                   // a number after a NaN
+        if (i > 0 && !std::isnan(draws[i - 1].viewDepth) && draws[i - 1].viewDepth < draws[i].viewDepth) {
+            ordered = false;                                           // not back to front
+        }
+    }
+    CHECK_MSG(ordered, "4000 draws with 10% NaN: every number before every NaN, back to front");
+    CHECK_EQ(static_cast<int>(draws.size()), 4000);
+}
+
+void testFiniteDepthsSortExactlyAsTheyAlwaysDid() {
+    // The NaN handling must cost real data nothing. On finite depths the old
+    // comparator was a total order, so its result is unique: compare against it,
+    // copied here, over data full of ties on depth and on sortKey.
+    std::mt19937 rng(7u);
+    std::vector<RenderSystem::TransparentDraw> draws;
+    for (uint32_t i = 0; i < 3000; ++i) {
+        draws.push_back(blended(static_cast<float>(rng() % 40) * 0.5f - 3.0f,
+                                static_cast<int32_t>(rng() % 4), i));
+    }
+    std::vector<RenderSystem::TransparentDraw> reference = draws;
+    std::sort(reference.begin(), reference.end(),
+              [](const RenderSystem::TransparentDraw& lhs, const RenderSystem::TransparentDraw& rhs) {
+                  if (lhs.viewDepth != rhs.viewDepth) return lhs.viewDepth > rhs.viewDepth;
+                  if (lhs.sortKey != rhs.sortKey) return lhs.sortKey < rhs.sortKey;
+                  return lhs.gathered < rhs.gathered;
+              });
+
+    RenderSystem::SortTransparentDraws(draws);
+
+    bool same = true;
+    for (size_t i = 0; i < draws.size(); ++i) same = same && draws[i].gathered == reference[i].gathered;
+    CHECK_MSG(same, "3000 finite draws, heavy in ties, come out in exactly the old order");
+}
+
 void testTheBlendedSortIsAPermutationToo() {
     // Same claim for the pass where losing one is least visible: a blended
     // draw that vanished leaves the scene behind it looking correct.
@@ -562,6 +663,10 @@ void runTests() {
     testAMultiSurfaceModelCostsOneCallPerSurface();
     testSortingIsAPermutationAndLosesNothing();
     testTheBlendedSortIsAPermutationToo();
+    testANaNDepthSortsAfterEveryNumber();
+    testANaNParticleDepthSortsAfterEveryNumber();
+    testAManyDrawSortWithNaNsIsStillOrdered();
+    testFiniteDepthsSortExactlyAsTheyAlwaysDid();
     testAnUntouchedStatsBlockIsAllZeroes();
 }
 

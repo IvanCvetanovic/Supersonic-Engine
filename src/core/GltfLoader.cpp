@@ -1,4 +1,5 @@
 #include "core/GltfLoader.hpp"
+#include "core/SafeNormalize.hpp"
 #include "core/Log.hpp"
 
 #include <algorithm>
@@ -197,12 +198,25 @@ std::string extractEmbeddedImage(const tinygltf::Model& model, int imageIndex,
     return outPath.lexically_normal().string();
 }
 
-// Reads one scalar out of an accessor, normalising the component type.
+// Where an accessor's data starts, or null if the accessor cannot be read.
 //
-// Returns null for an accessor with no buffer view. tinygltf defaults
+// Null for an accessor with no buffer view. tinygltf defaults
 // Accessor::bufferView to -1, and the cast to size_t made that index element
 // SIZE_MAX - latent while only positions and UVs came through here, and reached
 // the moment inverse bind matrices and four animation samplers did too.
+//
+// And null for one whose ELEMENTS do not fit the buffer. This used to check only
+// that the data STARTED inside it, so an accessor claiming a thousand elements
+// of a buffer that holds three was handed back as readable and every caller
+// then read `count` elements past the end. tinygltf checks neither that an
+// accessor fits its buffer view nor that a view fits its buffer, so this is the
+// only place it can be checked. The test is against the BUFFER, not the view:
+// that is what memory safety needs, and an exporter whose accessor runs a few
+// bytes past a view it declared too short still loads, as it always did.
+//
+// A caller must still check that `count` is the number of elements IT needs - an
+// attribute with fewer elements than the primitive has vertices is in range and
+// still too short.
 template <typename T>
 const T* accessorData(const tinygltf::Model& model, const tinygltf::Accessor& accessor, size_t& strideOut) {
     strideOut = 0;
@@ -217,15 +231,69 @@ const T* accessorData(const tinygltf::Model& model, const tinygltf::Accessor& ac
     }
     const tinygltf::Buffer& buffer = model.buffers[static_cast<size_t>(view.buffer)];
 
-    const size_t elementSize = static_cast<size_t>(
-        tinygltf::GetComponentSizeInBytes(static_cast<uint32_t>(accessor.componentType)) *
-        tinygltf::GetNumComponentsInType(static_cast<uint32_t>(accessor.type)));
+    // Both are -1 for a type or component the format does not define, which the
+    // cast to size_t used to turn into an element roughly the size of the
+    // address space.
+    const int componentSize = tinygltf::GetComponentSizeInBytes(static_cast<uint32_t>(accessor.componentType));
+    const int componentCount = tinygltf::GetNumComponentsInType(static_cast<uint32_t>(accessor.type));
+    if (componentSize <= 0 || componentCount <= 0) return nullptr;
+    const size_t elementSize = static_cast<size_t>(componentSize) * static_cast<size_t>(componentCount);
 
+    // Written so that no sum can wrap: each term is compared against what is
+    // left, never added to something that could already be near SIZE_MAX.
+    const size_t bufferSize = buffer.data.size();
+    if (view.byteOffset > bufferSize) return nullptr;
+    if (accessor.byteOffset > bufferSize - view.byteOffset) return nullptr;
     const size_t offset = view.byteOffset + accessor.byteOffset;
-    if (offset > buffer.data.size()) return nullptr;
 
-    strideOut = view.byteStride != 0 ? view.byteStride : elementSize;
+    const size_t stride = view.byteStride != 0 ? view.byteStride : elementSize;
+
+    if (accessor.count > 0) {
+        const size_t room = bufferSize - offset;
+        // One element, and then (count - 1) strides to the start of the last.
+        if (elementSize > room) return nullptr;
+        if (accessor.count - 1 > (room - elementSize) / stride) return nullptr;
+    }
+
+    strideOut = stride;
     return reinterpret_cast<const T*>(buffer.data.data() + offset);
+}
+
+// The accessor an index names, or null if the file names one it does not have.
+// Every index in a glTF file is the file's own claim, and a negative one, or one
+// past the table, was used to subscript `model.accessors` directly.
+const tinygltf::Accessor* accessorAt(const tinygltf::Model& model, int index) {
+    if (index < 0 || static_cast<size_t>(index) >= model.accessors.size()) return nullptr;
+    return &model.accessors[static_cast<size_t>(index)];
+}
+
+// The accessor a primitive names for an attribute, if it is usable for
+// `vertexCount` vertices: it exists, and it has an element for every vertex.
+//
+// Null otherwise, with a warning when the file named something wrong - the
+// attribute is then treated as absent, which is what every optional attribute
+// already does, rather than read past its end. An attribute with MORE elements
+// than vertices is accepted: the surplus is never read.
+const tinygltf::Accessor* attributeAccessor(const tinygltf::Model& model,
+                                            const tinygltf::Primitive& primitive,
+                                            const char* attribute, size_t vertexCount,
+                                            const std::string& nodeName) {
+    const auto it = primitive.attributes.find(attribute);
+    if (it == primitive.attributes.end()) return nullptr;
+
+    const tinygltf::Accessor* accessor = accessorAt(model, it->second);
+    if (!accessor) {
+        SUPERSONIC_LOG_WARN("GltfLoader") << "'" << nodeName << "' names accessor " << it->second
+            << " for " << attribute << ", which does not exist; ignoring it." << std::endl;
+        return nullptr;
+    }
+    if (accessor->count < vertexCount) {
+        SUPERSONIC_LOG_WARN("GltfLoader") << "'" << nodeName << "' has " << accessor->count
+            << " " << attribute << " elements for " << vertexCount << " vertices; ignoring it."
+            << std::endl;
+        return nullptr;
+    }
+    return accessor;
 }
 
 // One component, widened to float and de-normalised where the spec says it is
@@ -328,47 +396,70 @@ void appendPrimitive(const tinygltf::Model& model,
     const auto positionIt = primitive.attributes.find("POSITION");
     if (positionIt == primitive.attributes.end()) return;
 
-    const tinygltf::Accessor& posAccessor = model.accessors[static_cast<size_t>(positionIt->second)];
-    const size_t vertexCount = posAccessor.count;
+    const tinygltf::Accessor* posAccessor = accessorAt(model, positionIt->second);
+    if (!posAccessor) {
+        SUPERSONIC_LOG_ERROR("GltfLoader") << "'" << nodeName << "' names accessor "
+            << positionIt->second << " for POSITION, which does not exist." << std::endl;
+        return;
+    }
+    const size_t vertexCount = posAccessor->count;
     if (vertexCount == 0) return;
+
+    // Read as three floats a vertex, so it has to BE three floats a vertex: any
+    // other type was reinterpreted, and a SCALAR byte accessor read twelve bytes
+    // of a one-byte element. (KHR_mesh_quantization writes other types; this
+    // importer does not read them, and says so rather than draw noise.)
+    if (posAccessor->componentType != TINYGLTF_COMPONENT_TYPE_FLOAT ||
+        posAccessor->type != TINYGLTF_TYPE_VEC3) {
+        SUPERSONIC_LOG_ERROR("GltfLoader") << "'" << nodeName
+            << "' has POSITION data that is not float VEC3, which is the only form read."
+            << std::endl;
+        return;
+    }
+
+    // Before the vertex array is sized, not after: the count is the file's claim,
+    // and sizing from it first turned four billion into a length_error - or a
+    // 240 GB allocation - from a file of a few hundred bytes. Once the accessor is
+    // known to fit the buffer, the count is bounded by what the buffer holds.
+    size_t posStride = 0;
+    const auto* positions = accessorData<float>(model, *posAccessor, posStride);
+    if (!positions) {
+        SUPERSONIC_LOG_ERROR("GltfLoader") << "'" << nodeName << "' has an unreadable POSITION accessor." << std::endl;
+        return;
+    }
 
     GltfLoader::Submesh submesh;
     submesh.name = nodeName;
     submesh.skinIndex = skinIndex;
     submesh.mesh.vertices.resize(vertexCount);
 
-    size_t posStride = 0;
-    const auto* positions = accessorData<float>(model, posAccessor, posStride);
-    if (!positions) {
-        SUPERSONIC_LOG_ERROR("GltfLoader") << "'" << nodeName << "' has an unreadable POSITION accessor." << std::endl;
-        return;
-    }
-
+    // Each optional attribute: named correctly, one element per vertex, and in
+    // the form it is read in. Anything else is treated as absent.
     const float* normals = nullptr;
     size_t normalStride = 0;
-    if (const auto it = primitive.attributes.find("NORMAL"); it != primitive.attributes.end()) {
-        normals = accessorData<float>(model, model.accessors[static_cast<size_t>(it->second)], normalStride);
+    if (const auto* acc = attributeAccessor(model, primitive, "NORMAL", vertexCount, nodeName)) {
+        if (acc->componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && acc->type == TINYGLTF_TYPE_VEC3) {
+            normals = accessorData<float>(model, *acc, normalStride);
+        }
     }
 
     const float* tangents = nullptr;
     size_t tangentStride = 0;
-    if (const auto it = primitive.attributes.find("TANGENT"); it != primitive.attributes.end()) {
-        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(it->second)];
+    if (const auto* acc = attributeAccessor(model, primitive, "TANGENT", vertexCount, nodeName)) {
         // glTF TANGENT is vec4: xyz plus a handedness sign in w, which is
         // exactly the layout Vertex::tangent uses.
-        if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && acc.type == TINYGLTF_TYPE_VEC4) {
-            tangents = accessorData<float>(model, acc, tangentStride);
+        if (acc->componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && acc->type == TINYGLTF_TYPE_VEC4) {
+            tangents = accessorData<float>(model, *acc, tangentStride);
         }
     }
 
     const float* uvs = nullptr;
     size_t uvStride = 0;
-    if (const auto it = primitive.attributes.find("TEXCOORD_0"); it != primitive.attributes.end()) {
-        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(it->second)];
+    if (const auto* acc = attributeAccessor(model, primitive, "TEXCOORD_0", vertexCount, nodeName)) {
         // Only float UVs are handled; normalised byte/short variants are rare
-        // and would need unpacking.
-        if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT) {
-            uvs = accessorData<float>(model, acc, uvStride);
+        // and would need unpacking. Two floats an element, so a VEC2.
+        if (acc->componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && acc->type == TINYGLTF_TYPE_VEC2) {
+            uvs = accessorData<float>(model, *acc, uvStride);
         }
     }
 
@@ -386,12 +477,11 @@ void appendPrimitive(const tinygltf::Model& model,
     size_t colorStride = 0;
     int colorComponentType = 0;
     bool colorNormalized = false;
-    if (const auto it = primitive.attributes.find("COLOR_0"); it != primitive.attributes.end()) {
-        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(it->second)];
-        if (acc.type == TINYGLTF_TYPE_VEC3 || acc.type == TINYGLTF_TYPE_VEC4) {
-            colorBytes = accessorData<uint8_t>(model, acc, colorStride);
-            colorComponentType = acc.componentType;
-            colorNormalized = acc.normalized;
+    if (const auto* acc = attributeAccessor(model, primitive, "COLOR_0", vertexCount, nodeName)) {
+        if (acc->type == TINYGLTF_TYPE_VEC3 || acc->type == TINYGLTF_TYPE_VEC4) {
+            colorBytes = accessorData<uint8_t>(model, *acc, colorStride);
+            colorComponentType = acc->componentType;
+            colorNormalized = acc->normalized;
         }
     }
 
@@ -400,21 +490,27 @@ void appendPrimitive(const tinygltf::Model& model,
     const uint8_t* jointBytes = nullptr;
     size_t jointStride = 0;
     int jointComponentType = 0;
-    if (const auto it = primitive.attributes.find("JOINTS_0"); it != primitive.attributes.end()) {
-        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(it->second)];
-        jointBytes = accessorData<uint8_t>(model, acc, jointStride);
-        jointComponentType = acc.componentType;
+    //
+    // Both are read four components an element, so both have to BE four
+    // components an element: as SCALAR the last element read three bytes past the
+    // end of the buffer.
+    if (const auto* acc = attributeAccessor(model, primitive, "JOINTS_0", vertexCount, nodeName)) {
+        if (acc->type == TINYGLTF_TYPE_VEC4) {
+            jointBytes = accessorData<uint8_t>(model, *acc, jointStride);
+            jointComponentType = acc->componentType;
+        }
     }
 
     const uint8_t* weightBytes = nullptr;
     size_t weightStride = 0;
     int weightComponentType = 0;
     bool weightNormalized = false;
-    if (const auto it = primitive.attributes.find("WEIGHTS_0"); it != primitive.attributes.end()) {
-        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(it->second)];
-        weightBytes = accessorData<uint8_t>(model, acc, weightStride);
-        weightComponentType = acc.componentType;
-        weightNormalized = acc.normalized;
+    if (const auto* acc = attributeAccessor(model, primitive, "WEIGHTS_0", vertexCount, nodeName)) {
+        if (acc->type == TINYGLTF_TYPE_VEC4) {
+            weightBytes = accessorData<uint8_t>(model, *acc, weightStride);
+            weightComponentType = acc->componentType;
+            weightNormalized = acc->normalized;
+        }
     }
 
     // Normals must be transformed by the inverse-transpose, not the matrix, or
@@ -431,7 +527,11 @@ void appendPrimitive(const tinygltf::Model& model,
         if (normals) {
             const auto* n = reinterpret_cast<const float*>(
                 reinterpret_cast<const uint8_t*>(normals) + i * normalStride);
-            v.normal = glm::normalize(normalMatrix * glm::vec3(n[0], n[1], n[2]));
+            // A zero normal (an exporter's marker for a degenerate vertex), or a
+            // node scaled to zero that makes the normal matrix singular, is NaN
+            // under glm::normalize. It gets what an absent normal gets.
+            v.normal = NormalizeOr(normalMatrix * glm::vec3(n[0], n[1], n[2]),
+                                   glm::vec3(0.0f, 1.0f, 0.0f));
         } else {
             v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
         }
@@ -509,29 +609,48 @@ void appendPrimitive(const tinygltf::Model& model,
 
     // Indices. glTF permits ubyte/ushort/uint; all widen to uint32 here.
     if (primitive.indices >= 0) {
-        const tinygltf::Accessor& idxAccessor = model.accessors[static_cast<size_t>(primitive.indices)];
-        submesh.mesh.indices.reserve(idxAccessor.count);
+        const tinygltf::Accessor* idxAccessor = accessorAt(model, primitive.indices);
+        if (!idxAccessor) {
+            SUPERSONIC_LOG_ERROR("GltfLoader") << "'" << nodeName << "' names accessor "
+                << primitive.indices << " for its indices, which does not exist." << std::endl;
+            return;
+        }
 
+        // Checked before anything is reserved: the count is the file's claim, and
+        // `reserve(count)` of four billion was a crash from a few hundred bytes.
         size_t idxStride = 0;
-        const auto* base = accessorData<uint8_t>(model, idxAccessor, idxStride);
+        const auto* base = accessorData<uint8_t>(model, *idxAccessor, idxStride);
         if (!base) return;
+        const int indexType = idxAccessor->componentType;
+        if (indexType != TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE &&
+            indexType != TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT &&
+            indexType != TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
+            return;
+        }
 
-        for (size_t i = 0; i < idxAccessor.count; ++i) {
-            const uint8_t* element = base + i * idxStride;
-            uint32_t index = 0;
-            switch (idxAccessor.componentType) {
-                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
-                    index = *element; break;
-                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-                    index = *reinterpret_cast<const uint16_t*>(element); break;
-                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
-                    index = *reinterpret_cast<const uint32_t*>(element); break;
-                default:
-                    continue;
+        // Whole triangles only. An index no vertex answers to used to be dropped
+        // ON ITS OWN, which left a triangle short by one and shifted every
+        // triangle after it by one index - a file with one bad index drew noise
+        // from there to the end. Now the triangle that named it goes, and the rest
+        // stay where they were. A trailing one or two indices are not a triangle.
+        submesh.mesh.indices.reserve(idxAccessor->count - idxAccessor->count % 3);
+        for (size_t first = 0; first + 2 < idxAccessor->count; first += 3) {
+            uint32_t triangle[3] = {0, 0, 0};
+            bool inRange = true;
+            for (size_t corner = 0; corner < 3; ++corner) {
+                const uint8_t* element = base + (first + corner) * idxStride;
+                switch (indexType) {
+                    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+                        triangle[corner] = *element; break;
+                    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+                        triangle[corner] = *reinterpret_cast<const uint16_t*>(element); break;
+                    default:
+                        triangle[corner] = *reinterpret_cast<const uint32_t*>(element); break;
+                }
+                if (triangle[corner] >= vertexCount) inRange = false;
             }
-            if (index < vertexCount) {
-                submesh.mesh.indices.push_back(index);
-            }
+            if (!inRange) continue;
+            submesh.mesh.indices.insert(submesh.mesh.indices.end(), triangle, triangle + 3);
         }
     } else {
         // Non-indexed primitive: synthesise a sequential index list.
@@ -840,7 +959,15 @@ Skeleton buildSkeleton(const tinygltf::Model& model, const tinygltf::Skin& skin,
     if (skin.inverseBindMatrices >= 0 &&
         static_cast<size_t>(skin.inverseBindMatrices) < model.accessors.size()) {
         const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(skin.inverseBindMatrices)];
-        if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && acc.type == TINYGLTF_TYPE_MAT4) {
+        // One matrix per joint, read for every joint below. An accessor with fewer
+        // read the rest from past its end; it is treated as absent instead, which
+        // is what the glTF spec says an absent array means: every inverse bind
+        // matrix is the identity.
+        if (acc.count < jointNodes.size()) {
+            SUPERSONIC_LOG_WARN("GltfLoader") << "A skin has " << jointNodes.size()
+                << " joints but " << acc.count << " inverse bind matrices; ignoring them."
+                << std::endl;
+        } else if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && acc.type == TINYGLTF_TYPE_MAT4) {
             size_t stride = 0;
             if (const float* data = accessorData<float>(model, acc, stride)) {
                 inverseBinds.reserve(jointNodes.size());
@@ -988,6 +1115,14 @@ std::vector<AnimationClip> buildClips(const tinygltf::Model& model,
             const tinygltf::Accessor& inputAcc = model.accessors[static_cast<size_t>(sampler.input)];
             const tinygltf::Accessor& outputAcc = model.accessors[static_cast<size_t>(sampler.output)];
 
+            // The loop below reads one component of a key time and three or four
+            // of a value, so the accessors have to have that many. A rotation
+            // output of VEC3, or any output of SCALAR, read bytes of the NEXT
+            // element - or, for the last key, of nothing at all.
+            const auto wantedOutputType = out.path == AnimPath::Rotation ? TINYGLTF_TYPE_VEC4
+                                                                         : TINYGLTF_TYPE_VEC3;
+            if (inputAcc.type != TINYGLTF_TYPE_SCALAR || outputAcc.type != wantedOutputType) continue;
+
             size_t inputStride = 0;
             const auto* times = accessorData<uint8_t>(model, inputAcc, inputStride);
             size_t outputStride = 0;
@@ -1055,57 +1190,87 @@ struct NodeRig {
     }
 };
 
-void visitNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& parentMatrix,
+// Walks the node graph from `root`, handing each mesh to appendPrimitive with the
+// matrix that places it, in the order a depth-first recursion would.
+//
+// ITERATIVE, with an explicit stack. This used to recurse once per level, so a
+// chain of tens of thousands of nodes - each the only child of the last, from a
+// file with nothing malformed in it - overflowed the stack: a crash, not an error.
+// The first fix capped the depth at 1024, and the sanitizer build showed that was
+// not enough: an instrumented frame is large enough that 1024 of them overflow an
+// ordinary stack, and so does an MSVC Debug frame against Windows' one megabyte.
+// There is no depth at which a recursive walk is safe on every build, so there is
+// no recursion, and so no limit: a deep hierarchy is simply walked.
+//
+// The order is the recursion's. A node's children are pushed in reverse, so the
+// first is popped next and its whole subtree is finished before the second is
+// reached; and `visited` is checked when a node is POPPED, as it was when it was
+// entered, so a node reached twice (a cycle, or a child listed by two parents) is
+// taken by whichever path gets there first, exactly as before.
+void visitNode(const tinygltf::Model& model, int root, const glm::mat4& rootParent,
                const std::string& sourcePath, std::vector<GltfLoader::Submesh>& out,
                std::vector<bool>& visited, const NodeRig& rig,
                const std::vector<int>& parents) {
 
-    if (nodeIndex < 0 || nodeIndex >= static_cast<int>(model.nodes.size())) return;
+    struct Pending {
+        int node;
+        glm::mat4 parent;
+    };
+    std::vector<Pending> pending;
+    pending.push_back({root, rootParent});
 
-    // Defensive: a malformed file can describe a cycle, which would recurse
-    // until the stack runs out.
-    if (visited[static_cast<size_t>(nodeIndex)]) return;
-    visited[static_cast<size_t>(nodeIndex)] = true;
+    while (!pending.empty()) {
+        const Pending current = pending.back();
+        pending.pop_back();
+        const int nodeIndex = current.node;
 
-    const tinygltf::Node& node = model.nodes[static_cast<size_t>(nodeIndex)];
-    const glm::mat4 world = parentMatrix * nodeLocalMatrix(node);
+        if (nodeIndex < 0 || nodeIndex >= static_cast<int>(model.nodes.size())) continue;
 
-    if (node.mesh >= 0 && node.mesh < static_cast<int>(model.meshes.size())) {
-        const tinygltf::Mesh& mesh = model.meshes[static_cast<size_t>(node.mesh)];
-        const std::string name = !node.name.empty() ? node.name
-                               : (!mesh.name.empty() ? mesh.name : "GltfMesh");
-        for (const auto& primitive : mesh.primitives) {
-            // THREE cases, and conflating any two of them is a mesh in the
-            // wrong place.
-            //
-            // A real skin is handed the IDENTITY, not its node's world matrix:
-            // the inverse bind matrices are authored in the skin's own space,
-            // and the glTF spec requires the skinned mesh node's own transform
-            // to be ignored. Baking it in transforms the mesh twice.
-            //
-            // A NODE RIG is the opposite: its inverse binds are the inverse of
-            // exactly these world matrices, so the bake is what they cancel.
-            // Handing it identity here - which is what reusing "is it skinned"
-            // as the test would do - collapses every animated prop onto the
-            // origin. So bake-or-not is its own question, asked separately from
-            // which skeleton the primitive belongs to.
-            //
-            // And a plain rigid primitive in a file with no animation at all is
-            // baked and unskinned, exactly as before any of this existed.
-            const int32_t skin = static_cast<int32_t>(node.skin);
-            const bool rigged = skin < 0 && rig.active();
+        // Defensive: a malformed file can describe a cycle, which would walk
+        // forever.
+        if (visited[static_cast<size_t>(nodeIndex)]) continue;
+        visited[static_cast<size_t>(nodeIndex)] = true;
 
-            const glm::mat4 primitiveMatrix = skin >= 0 ? glm::mat4(1.0f) : world;
-            const int32_t submeshSkin = rigged ? 0 : skin;
-            const int32_t rigidJoint = rigged ? rig.JointFor(nodeIndex, parents) : -1;
+        const tinygltf::Node& node = model.nodes[static_cast<size_t>(nodeIndex)];
+        const glm::mat4 world = current.parent * nodeLocalMatrix(node);
 
-            appendPrimitive(model, primitive, primitiveMatrix, sourcePath, name, out,
-                            submeshSkin, rigidJoint);
+        if (node.mesh >= 0 && node.mesh < static_cast<int>(model.meshes.size())) {
+            const tinygltf::Mesh& mesh = model.meshes[static_cast<size_t>(node.mesh)];
+            const std::string name = !node.name.empty() ? node.name
+                                   : (!mesh.name.empty() ? mesh.name : "GltfMesh");
+            for (const auto& primitive : mesh.primitives) {
+                // THREE cases, and conflating any two of them is a mesh in the
+                // wrong place.
+                //
+                // A real skin is handed the IDENTITY, not its node's world matrix:
+                // the inverse bind matrices are authored in the skin's own space,
+                // and the glTF spec requires the skinned mesh node's own transform
+                // to be ignored. Baking it in transforms the mesh twice.
+                //
+                // A NODE RIG is the opposite: its inverse binds are the inverse of
+                // exactly these world matrices, so the bake is what they cancel.
+                // Handing it identity here - which is what reusing "is it skinned"
+                // as the test would do - collapses every animated prop onto the
+                // origin. So bake-or-not is its own question, asked separately from
+                // which skeleton the primitive belongs to.
+                //
+                // And a plain rigid primitive in a file with no animation at all is
+                // baked and unskinned, exactly as before any of this existed.
+                const int32_t skin = static_cast<int32_t>(node.skin);
+                const bool rigged = skin < 0 && rig.active();
+
+                const glm::mat4 primitiveMatrix = skin >= 0 ? glm::mat4(1.0f) : world;
+                const int32_t submeshSkin = rigged ? 0 : skin;
+                const int32_t rigidJoint = rigged ? rig.JointFor(nodeIndex, parents) : -1;
+
+                appendPrimitive(model, primitive, primitiveMatrix, sourcePath, name, out,
+                                submeshSkin, rigidJoint);
+            }
         }
-    }
 
-    for (const int child : node.children) {
-        visitNode(model, child, world, sourcePath, out, visited, rig, parents);
+        for (auto child = node.children.rbegin(); child != node.children.rend(); ++child) {
+            pending.push_back({*child, world});
+        }
     }
 }
 

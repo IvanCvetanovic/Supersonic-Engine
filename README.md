@@ -9,11 +9,24 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-58%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-62%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT-0](https://img.shields.io/badge/license-MIT--0-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
+[![Free to use](https://img.shields.io/badge/price-free-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#license)
+[![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](https://claude.com/claude-code)
 
 </div>
+
+> **Free to use, with no guarantees.** Supersonic Engine is completely free: use
+> it, change it, ship it, sell it. It is provided **as is**, and Ivan Cvetanović
+> takes **no responsibility** for anything that happens through its use — to your
+> code, your game, your machine or your data. See [License](#license).
+>
+> **Built with Claude Code.** This engine was made using
+> [Claude Code](https://claude.com/claude-code), Anthropic's AI coding assistant.
+> It has tests and it is documented, but treat it like any code you did not write
+> yourself: read it, build it, and check that it does what you need before you
+> rely on it.
 
 ---
 
@@ -25,7 +38,8 @@ stateless systems over those components; every byte of GPU memory is allocated
 through VMA. The editor is part of the engine rather than a separate application:
 it edits the same registry the renderer draws and the physics steps.
 
-It is a solo project, built to be read as much as to be run. Where the
+It is a solo project, written with [Claude Code](https://claude.com/claude-code),
+and built to be read as much as to be run. Where the
 implementation departs from the design, the departure is written down in
 [ARCHITECTURE.md](ARCHITECTURE.md) instead of being left as an aspiration the
 code quietly contradicts.
@@ -330,7 +344,7 @@ notarising a Mac build, the editor on iOS.
 
 | | |
 |---|---|
-| **Compiler** | C++20 — MSVC 2022, GCC 11+, or Clang 13+ |
+| **Compiler** | C++20 — MSVC 2022, GCC 11+, or Clang 13+ (built and tested: MSVC, GCC 13.3; Clang 18 compiles — [AGENTS.md](AGENTS.md#requirements)) |
 | **CMake** | 3.20 or newer |
 | **GPU** | Any Vulkan 1.2 capable driver (a game can accept 1.1 with `GameManifest::minimumVulkanMinor`) |
 | **Vulkan SDK** | Strongly recommended — see below |
@@ -484,6 +498,7 @@ assets/
 plugins/       Hot-reloadable C++ gameplay scripts
 platform/      Android and Apple target scaffolding
 tests/         Pure-logic regression suites
+tools/         check.sh, CI's checks run locally; verify-replay.ps1, which proves a corrupted replay checkpoint is caught
 docs/          Screenshots, and the planning records under docs/planning/
 cmake/         The suite rule and harness a game builds against, the Vulkan import library
 .github/       CI: manual-dispatch only (Actions -> CI -> Run workflow)
@@ -503,9 +518,10 @@ and its planning records:
 How they build against the engine: [Building a game against the
 engine](#building-a-game-against-the-engine).
 
-Roughly 19,200 lines of engine source across 73 translation units, or 26,700
-lines counting headers — excluding vendored dependencies and the two
-translation units that exist only to compile VMA and tinygltf.
+Roughly 39,500 lines of engine source across 101 translation units, or 57,000
+lines counting headers — the desktop build, editor included, excluding
+vendored dependencies, the Android and iOS backends, and the four translation
+units that exist only to compile VMA, tinygltf, stb_vorbis and stb_image.
 
 ---
 
@@ -515,7 +531,7 @@ translation units that exist only to compile VMA and tinygltf.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Fifty-eight suites, each a plain executable with no test framework behind it —
+Sixty-two suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 ctest also lists one test that is not an executable and not in the table below:
@@ -600,13 +616,26 @@ verified by a screenshot of geometry it never touched.
 | `test_layerstack` | The seam a game lives in: attach, detach, fixed and per-frame callbacks |
 | `test_codecextension` | Serialising a game's own components alongside the engine's |
 | `test_packaging` | That a packaged folder has a binary, a manifest, and the scene it was asked for |
+| `test_bitmapfont` | The BMFont reader and the glyph quads a string becomes, on fonts the suite writes itself so it runs on any machine, and the refusals a malformed descriptor gets |
+| `test_clustergrid` | The froxel grid that lifted the eight-light cap: that a light lands in every cluster it reaches, and where the depth slices fall |
+| `test_detmath` | The simulation's transcendental functions against a golden table any conforming platform must reproduce bit for bit |
+| `test_draworder` | Explicit draw order for surfaces depth cannot separate: that a scene setting no key records in exactly the order it always did, and one that does is re-ordered by it |
+| `test_uilayer` | When the HUD is drawn rather than where: the order the coloured rectangles appear in ImGui's vertex buffer, with no device |
+| `test_userdata` | Where a game writes what belongs to the player: the name sanitiser, and a per-user directory that is absolute, exists afterwards and does not collide |
+| `test_particles` | What an emitter is allowed to ask for: a scene's maxParticles is clamped to a ceiling rather than becoming a 200 GB allocation, and an ordinary emitter is left exactly as it asked |
+| `test_hotreload` | What the script-plugin reloader does with a plugin that cannot work: tried once and then left alone until the file changes, not copied and re-opened every other frame |
+| `test_log` | The engine log: bounded with a count of what it dropped (oldest first), a file sink that is flushed per line, and four threads logging at once losing nothing that was kept |
+| `test_platform` | What a desktop window answers about a screen it does not have: zero safe-area insets, every frame |
+| `test_worldshapes` | The world-space shape buffer's tessellation and accumulation; the pixels need a device and are not covered here |
 
 Every suite is a regression test for a bug that actually happened. The header
 comment on each one says which.
 
 ### Code standards
 
-- MSVC `/W4` and GCC/Clang `-Wall -Wextra -Wpedantic`, **zero warnings**
+- MSVC `/W4` and GCC/Clang `-Wall -Wextra -Wpedantic`, **zero warnings** - held by
+  `-DSUPERSONIC_WERROR=ON`, which `tools/check.sh build` sets (GCC 13 and Clang 18
+  measured clean on 1 October 2026; MSVC is the platform it is developed on)
 - Vendored sources are excluded from the warning level, never the project's own
 - Validation layers and synchronization validation clean before any commit that
   touches the renderer
@@ -1361,20 +1390,29 @@ Built on the work of others, all vendored in `third_party/`:
 
 ## License
 
-[MIT No Attribution](LICENSE) (MIT-0). Use it, change it, ship it, sell it —
-commercially or otherwise, with or without credit. There are no conditions: not
-even the copyright notice has to travel with copies of the engine's own source.
+**The engine is completely free to use.** It is under the
+[MIT No Attribution](LICENSE) licence (MIT-0). Use it, change it, ship it, sell
+it — commercially or otherwise, with or without credit. There are no conditions:
+not even the copyright notice has to travel with copies of the engine's own
+source.
 
-It comes with **no warranty of any kind, and no liability**: Ivan Cvetanović is
-not responsible for anything that happens through its use. If you build
-something with it and that something breaks, that is yours to own, not the
+It comes with **no warranty of any kind, and no liability**: Ivan Cvetanović
+takes no responsibility for anything that happens through its use, whether that
+is a crash, lost work, a broken build, damaged hardware or anything else. If you
+build something with it and that something breaks, that is yours to own, not the
 author's.
+
+**Made with Claude Code.** The engine was written using
+[Claude Code](https://claude.com/claude-code), Anthropic's AI coding assistant.
+That is stated here so nobody has to guess. It does not change the licence or
+the lack of a warranty above.
 
 The licence covers the engine's own source, shaders, branding and
 documentation.
 
-Every vendored dependency under `third_party/` is permissive too — MIT, zlib or
-Apache-2.0 — and none of them puts a condition on what you may build. Unlike
+Every vendored dependency under `third_party/` is permissive too — MIT, zlib,
+Apache-2.0, public domain, or for the typefaces the SIL Open Font License — and
+none of them puts a condition on what you may build. Unlike
 the engine's own licence, theirs ask for their notices to travel with copies of
 them.
 Attributions and full licence texts are in

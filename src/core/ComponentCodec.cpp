@@ -1,4 +1,6 @@
 #include "core/ComponentCodec.hpp"
+#include "core/FiniteNumbers.hpp"
+#include "core/JsonInts.hpp"
 #include <vector>
 #include <sstream>
 #include "core/Log.hpp"
@@ -137,7 +139,7 @@ glm::vec2 readVec2(const Json::Value& value, const glm::vec2& fallback) {
 // at whatever happened to be in memory after it.
 UIAnchor readAnchor(const Json::Value& value, UIAnchor fallback) {
     if (!value.IsNumber()) return fallback;
-    const int raw = static_cast<int>(value.AsNumber(0.0));
+    const int raw = asI32(value.AsNumber(0.0));
     return static_cast<UIAnchor>(std::clamp(raw, 0, static_cast<int>(UIAnchor::BottomRight)));
 }
 
@@ -156,6 +158,11 @@ namespace ComponentCodec {
 
 void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
            const std::string& indent) {
+    // The backstop under jsonSafe: about a hundred fields below write straight to
+    // the stream, and a NaN or infinity in any of them made the file unreadable.
+    // A no-op when writeScene has already installed it.
+    FiniteNumbersOnly finiteOnly(out);
+
     if (const auto* tag = registry.try_get<TagComponent>(entity)) {
         out << indent << "\"Tag\": \"" << Json::Escape(tag->tag) << "\",\n";
     }
@@ -827,7 +834,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
     if (node.Has("Light")) {
         const auto& l = node["Light"];
         auto& light = registry.emplace_or_replace<LightComponent>(entity);
-        light.type = static_cast<int>(l["Type"].AsNumber(0.0));
+        light.type = asI32(l["Type"].AsNumber(0.0));
         light.direction = readVec3(l["Direction"], glm::vec3(0.6f, 1.0f, 0.5f));
         light.color = readVec3(l["Color"], glm::vec3(1.0f));
         light.ambient = readVec3(l["Ambient"], glm::vec3(0.12f));
@@ -1010,9 +1017,9 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         box.isTrigger = node["BoxCollider"]["IsTrigger"].AsBool(false);
         // The defaults matter: a scene written before layers existed has
         // neither key, and must keep colliding with everything.
-        box.layer = static_cast<uint32_t>(
+        box.layer = asU32(
             node["BoxCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
-        box.collidesWith = static_cast<uint32_t>(
+        box.collidesWith = asU32(
             node["BoxCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
     }
 
@@ -1021,9 +1028,9 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         sphere.radius = node["SphereCollider"]["Radius"].AsFloat(0.5f);
         sphere.center = readVec3(node["SphereCollider"]["Center"], glm::vec3(0.0f));
         sphere.isTrigger = node["SphereCollider"]["IsTrigger"].AsBool(false);
-        sphere.layer = static_cast<uint32_t>(
+        sphere.layer = asU32(
             node["SphereCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
-        sphere.collidesWith = static_cast<uint32_t>(
+        sphere.collidesWith = asU32(
             node["SphereCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
     }
 
@@ -1033,15 +1040,15 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         capsule.height = node["CapsuleCollider"]["Height"].AsFloat(2.0f);
         capsule.center = readVec3(node["CapsuleCollider"]["Center"], glm::vec3(0.0f));
         capsule.isTrigger = node["CapsuleCollider"]["IsTrigger"].AsBool(false);
-        capsule.layer = static_cast<uint32_t>(
+        capsule.layer = asU32(
             node["CapsuleCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
-        capsule.collidesWith = static_cast<uint32_t>(
+        capsule.collidesWith = asU32(
             node["CapsuleCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
     }
 
     if (node.Has("Joint")) {
         auto& joint = registry.emplace_or_replace<JointComponent>(entity);
-        const auto type = static_cast<uint32_t>(node["Joint"]["Type"].AsNumber(0.0));
+        const auto type = asU32(node["Joint"]["Type"].AsNumber(0.0));
         // Clamped rather than cast blindly: a scene from a later build naming a
         // joint type this one has never heard of should be a point joint, not a
         // switch that falls through to whatever the enum happens to hold.
@@ -1061,7 +1068,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         joint.useLimit = node["Joint"]["UseLimit"].AsBool(false);
         joint.minAngle = node["Joint"]["MinAngle"].AsFloat(-1.5707963f);
         joint.maxAngle = node["Joint"]["MaxAngle"].AsFloat(1.5707963f);
-        joint.solveOrder = static_cast<int32_t>(node["Joint"]["SolveOrder"].AsFloat(0.0f));
+        joint.solveOrder = asI32(node["Joint"]["SolveOrder"].AsFloat(0.0f));
         joint.useSpring = node["Joint"]["UseSpring"].AsBool(false);
         joint.springFrequency = node["Joint"]["SpringFrequency"].AsFloat(0.0f);
         // Defaulting to critical rather than to zero: a scene written before
@@ -1088,8 +1095,8 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         hull.sourcePath = readAssetRef(h, "Source");
         hull.sourcePrimitive = h["Primitive"].AsString("");
         hull.isTrigger = h["IsTrigger"].AsBool(false);
-        hull.layer = static_cast<uint32_t>(h["Layer"].AsNumber(CollisionLayer::kDefault));
-        hull.collidesWith = static_cast<uint32_t>(h["CollidesWith"].AsNumber(CollisionLayer::kAll));
+        hull.layer = asU32(h["Layer"].AsNumber(CollisionLayer::kDefault));
+        hull.collidesWith = asU32(h["CollidesWith"].AsNumber(CollisionLayer::kAll));
     }
 
     if (node.Has("HeightfieldCollider")) {
@@ -1097,17 +1104,17 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // The defaults are TerrainGenerator::kPrimitive*, so a scene file that
         // only says the collider exists gets one that matches the "Terrain"
         // mesh primitive rather than a 0 x 0 grid that silently has no surface.
-        terrain.width = static_cast<uint32_t>(
+        terrain.width = asU32(
             node["HeightfieldCollider"]["Width"].AsNumber(TerrainGenerator::kPrimitiveWidth));
-        terrain.depth = static_cast<uint32_t>(
+        terrain.depth = asU32(
             node["HeightfieldCollider"]["Depth"].AsNumber(TerrainGenerator::kPrimitiveDepth));
         terrain.heightScale = node["HeightfieldCollider"]["HeightScale"].AsFloat(
             TerrainGenerator::kPrimitiveHeightScale);
         terrain.thickness = node["HeightfieldCollider"]["Thickness"].AsFloat(4.0f);
         terrain.isTrigger = node["HeightfieldCollider"]["IsTrigger"].AsBool(false);
-        terrain.layer = static_cast<uint32_t>(
+        terrain.layer = asU32(
             node["HeightfieldCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
-        terrain.collidesWith = static_cast<uint32_t>(
+        terrain.collidesWith = asU32(
             node["HeightfieldCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
     }
 
@@ -1188,7 +1195,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         field.size = readVec2(f["Size"], field.size);
         field.fontSize = f["FontSize"].AsFloat(26.0f);
         field.cornerRadius = f["CornerRadius"].AsFloat(8.0f);
-        field.maxLength = static_cast<int>(f["MaxLength"].AsFloat(24.0f));
+        field.maxLength = asI32(f["MaxLength"].AsFloat(24.0f));
         field.color = readVec4(f["Color"], field.color);
         field.focusColor = readVec4(f["FocusColor"], field.focusColor);
         field.borderColor = readVec4(f["BorderColor"], field.borderColor);
@@ -1232,7 +1239,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // Clamped rather than trusted. An out-of-range kind read straight into
         // the enum is a switch that falls through to nothing, which draws an
         // empty marker and looks like the entity was never reached.
-        const int kind = static_cast<int>(sh["Kind"].AsFloat(0.0f));
+        const int kind = asI32(sh["Kind"].AsFloat(0.0f));
         shape.kind = (kind >= 0 && kind <= 2) ? static_cast<UIShapeComponent::Kind>(kind)
                                               : UIShapeComponent::Kind::Ring;
 
@@ -1242,7 +1249,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         shape.radius = sh["Radius"].AsFloat(24.0f);
         shape.endpoint = readVec3(sh["Endpoint"], shape.endpoint);
         shape.thickness = sh["Thickness"].AsFloat(3.0f);
-        shape.segments = static_cast<int32_t>(sh["Segments"].AsFloat(40.0f));
+        shape.segments = asI32(sh["Segments"].AsFloat(40.0f));
         shape.color = readVec4(sh["Color"], shape.color);
         shape.visible = sh["Visible"].AsBool(true);
     }
@@ -1259,8 +1266,8 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("UIOrder")) {
         auto& ordering = registry.emplace_or_replace<UIOrderComponent>(entity);
-        ordering.order = static_cast<int32_t>(node["UIOrder"]["Order"].AsFloat(0.0f));
-        ordering.layer = static_cast<int32_t>(node["UIOrder"]["Layer"].AsFloat(0.0f));
+        ordering.order = asI32(node["UIOrder"]["Order"].AsFloat(0.0f));
+        ordering.layer = asI32(node["UIOrder"]["Layer"].AsFloat(0.0f));
     }
 
     if (node.Has("Script")) {
@@ -1285,7 +1292,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // the fallback, so those still load - they just get the defaults,
         // which is exactly what they stored.
         if (e.IsObject()) {
-            emitter.maxParticles = static_cast<uint32_t>(e["MaxParticles"].AsNumber(100.0));
+            emitter.maxParticles = asU32(e["MaxParticles"].AsNumber(100.0));
             emitter.emitRate = e["EmitRate"].AsFloat(10.0f);
             emitter.particleLifetime = e["ParticleLifetime"].AsFloat(2.0f);
             emitter.startColor = readVec4(e["StartColor"], glm::vec4(1.0f, 0.6f, 0.1f, 1.0f));
@@ -1304,14 +1311,14 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             // has to mean. Zero would be a division, and a key missing from an
             // older scene must never be the difference between a picture and a
             // crash.
-            sprite.columns = static_cast<uint32_t>(s["Columns"].AsNumber(1.0));
-            sprite.rows = static_cast<uint32_t>(s["Rows"].AsNumber(1.0));
-            sprite.firstFrame = static_cast<uint32_t>(s["FirstFrame"].AsNumber(0.0));
-            sprite.frameCount = static_cast<uint32_t>(s["FrameCount"].AsNumber(0.0));
+            sprite.columns = asU32(s["Columns"].AsNumber(1.0));
+            sprite.rows = asU32(s["Rows"].AsNumber(1.0));
+            sprite.firstFrame = asU32(s["FirstFrame"].AsNumber(0.0));
+            sprite.frameCount = asU32(s["FrameCount"].AsNumber(0.0));
             sprite.framesPerSecond = s["FramesPerSecond"].AsFloat(12.0f);
             sprite.loop = s["Loop"].AsBool(true);
             sprite.playing = s["Playing"].AsBool(true);
-            sprite.frame = static_cast<uint32_t>(s["Frame"].AsNumber(0.0));
+            sprite.frame = asU32(s["Frame"].AsNumber(0.0));
             sprite.elapsed = s["Elapsed"].AsFloat(0.0f);
         }
     }
@@ -1323,12 +1330,12 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             // The atlas defaults to one cell, as a sprite sheet does: the whole
             // texture, which is what a grid the file says nothing about must
             // mean. The map defaults to the component's own default size.
-            tilemap.atlasColumns = static_cast<uint32_t>(t["AtlasColumns"].AsNumber(1.0));
-            tilemap.atlasRows = static_cast<uint32_t>(t["AtlasRows"].AsNumber(1.0));
+            tilemap.atlasColumns = asU32(t["AtlasColumns"].AsNumber(1.0));
+            tilemap.atlasRows = asU32(t["AtlasRows"].AsNumber(1.0));
 
             const TilemapComponent defaults;
-            const auto width = static_cast<uint32_t>(t["Width"].AsNumber(defaults.width));
-            const auto height = static_cast<uint32_t>(t["Height"].AsNumber(defaults.height));
+            const auto width = asU32(t["Width"].AsNumber(defaults.width));
+            const auto height = asU32(t["Height"].AsNumber(defaults.height));
 
             // A file can say any size, and the cells are allocated by the
             // size it says, so the cap is checked HERE and not left to the
@@ -1354,7 +1361,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
                 // Resize accepted the size, so the count is under the cap and fits a size_t.
                 const size_t count = std::min(cells.size(), static_cast<size_t>(tilemap.cellCount()));
                 for (size_t i = 0; i < count; ++i) {
-                    tilemap.cells[i] = static_cast<int32_t>(
+                    tilemap.cells[i] = asI32(
                         cells[i].AsNumber(static_cast<double>(TilemapComponent::kEmpty)));
                 }
             }
@@ -1379,7 +1386,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             renderable.castsShadow = node["Renderable"]["CastsShadow"].AsBool(true);
             // Zero is "no opinion", which is what every scene written before
             // draw order existed holds - and what makes the sort a no-op for them.
-            renderable.sortKey = static_cast<int32_t>(
+            renderable.sortKey = asI32(
                 node["Renderable"]["SortKey"].AsFloat(0.0f));
         }
     }

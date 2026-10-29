@@ -1,6 +1,58 @@
 #include "core/SpriteAnimationSystem.hpp"
 
+#include <cmath>
+
 namespace Supersonic {
+
+namespace {
+
+// How many frames one Advance steps through one at a time before it does the rest
+// arithmetically. 1024 frames in a sixtieth of a second is 61,440 frames a second,
+// which no flipbook shows, so every rate a real animation has takes the loop and
+// is bit-identical to what it always was. Past it the loop is not a way of
+// stepping but a way of hanging: `FramesPerSecond: 1e30` is 1.6e28 iterations in
+// ONE tick, and infinity is a period of zero, which never ends at all.
+constexpr int kMaxStepsPerAdvance = 1024;
+
+// What the loop would have reached, in closed form, for the steps it did not take.
+// Called with the state the loop had after kMaxStepsPerAdvance real steps, so it
+// only ever finishes a pathological rate - and in doubles, which is exact enough
+// here (fmod and floor are exactly specified) and as deterministic as the loop.
+void skipAhead(SpriteAnimationComponent& sprite, uint32_t count, float secondsPerFrame) {
+    // An accumulator that is not a number cannot be stepped from: drop it.
+    if (!std::isfinite(sprite.elapsed)) {
+        sprite.elapsed = 0.0f;
+        return;
+    }
+
+    const double period = static_cast<double>(secondsPerFrame);
+    const double steps = std::floor(static_cast<double>(sprite.elapsed) / period);
+
+    if (!sprite.loop) {
+        // From frame f the loop takes (count - f) steps to stop on the last frame.
+        if (steps >= static_cast<double>(count - sprite.frame)) {
+            sprite.frame = count - 1;
+            sprite.playing = false;
+            sprite.elapsed = 0.0f;
+            return;
+        }
+        sprite.frame += static_cast<uint32_t>(steps);
+    } else {
+        // A cycle is `count` steps: from the last frame one step is the first.
+        const double within = std::fmod(steps, static_cast<double>(count));
+        sprite.frame = static_cast<uint32_t>(
+            std::fmod(static_cast<double>(sprite.frame) + within, static_cast<double>(count)));
+    }
+
+    // Whatever is left over, less than one frame. At this size the subtraction
+    // cancels to noise, so it is clamped rather than trusted.
+    double rest = static_cast<double>(sprite.elapsed) - steps * period;
+    if (!(rest >= 0.0) || !(rest < period)) rest = 0.0;
+    sprite.elapsed = static_cast<float>(rest);
+    if (!(sprite.elapsed < secondsPerFrame)) sprite.elapsed = 0.0f;
+}
+
+} // namespace
 
 void SpriteAnimationSystem::CellTransform(uint32_t columns, uint32_t rows, uint32_t cell,
                                           glm::vec2& outScale, glm::vec2& outOffset) {
@@ -14,14 +66,18 @@ void SpriteAnimationSystem::CellTransform(uint32_t columns, uint32_t rows, uint3
         return;
     }
 
-    const uint32_t total = columns * rows;
-    const uint32_t wrapped = cell % total;
+    // 64-bit, because a grid is a number a scene writes: 65536 x 65536 is 2^32
+    // cells, which as a uint32 was ZERO, and `cell % 0` is an integer division by
+    // zero - a crash. For every grid whose cells fit a uint32 the arithmetic below
+    // gives exactly the answers it gave.
+    const uint64_t total = static_cast<uint64_t>(columns) * rows;
+    const uint64_t wrapped = cell % total;
 
     const float invColumns = 1.0f / static_cast<float>(columns);
     const float invRows = 1.0f / static_cast<float>(rows);
 
-    const uint32_t column = wrapped % columns;
-    const uint32_t row = wrapped / columns;
+    const uint32_t column = static_cast<uint32_t>(wrapped % columns);
+    const uint32_t row = static_cast<uint32_t>(wrapped / columns);
 
     outScale = glm::vec2(invColumns, invRows);
 
@@ -55,7 +111,17 @@ void SpriteAnimationSystem::Advance(SpriteAnimationComponent& sprite, float fixe
     const float secondsPerFrame = 1.0f / sprite.framesPerSecond;
     sprite.elapsed += fixedDelta;
 
+    // A period that is not a positive number - the reciprocal of infinity is zero,
+    // and of NaN is NaN - has no frames to cross. Zero in particular would make the
+    // loop below `while (elapsed >= 0)`, which never ends.
+    if (!(secondsPerFrame > 0.0f)) return;
+
+    int budget = kMaxStepsPerAdvance;
     while (sprite.elapsed >= secondsPerFrame) {
+        if (budget-- == 0) {
+            skipAhead(sprite, count, secondsPerFrame);
+            return;
+        }
         sprite.elapsed -= secondsPerFrame;
 
         if (sprite.frame + 1 < count) {

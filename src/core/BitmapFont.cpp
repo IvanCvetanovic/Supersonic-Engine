@@ -10,6 +10,9 @@ namespace Supersonic {
 
 namespace {
 
+// One more than the highest page id a font may name; see where it is used.
+constexpr int kMaxPages = 256;
+
 // The directory `path` sits in, with its separator, or empty for a bare name.
 // Page images are named RELATIVE to the descriptor, so this is what resolves
 // them - a font loaded by absolute path from outside the project must find its
@@ -129,6 +132,15 @@ bool BitmapFont::Load(const std::string& fntPath, std::string& error) {
             const auto fileIt = pairs.find("file");
             if (!IntOf(pairs, "id", id) || id < 0 || fileIt == pairs.end() || fileIt->second.empty()) {
                 error = fntPath + ": a page line needs an id and a file";
+                return false;
+            }
+            // The table is grown to id + 1 strings, and the id is the file's claim:
+            // "page id=2000000000" asked for sixty-four gigabytes. A glyph names its
+            // page in one byte in the binary BMFont format, so no real font has an id
+            // past 255.
+            if (id >= kMaxPages) {
+                error = fntPath + ": page id " + std::to_string(id) + " is past the " +
+                        std::to_string(kMaxPages - 1) + " a BMFont file can name";
                 return false;
             }
             // Pages are addressed by id, and ids need not arrive in order.

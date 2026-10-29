@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -110,6 +111,25 @@ public:
                                               : vk::SamplerMipmapMode::eLinear;
     }
 
+    // The barrier TransitionLayout records to move an image between two layouts.
+    struct LayoutBarrier {
+        vk::AccessFlags srcAccess;
+        vk::AccessFlags dstAccess;
+        vk::PipelineStageFlags srcStage;
+        vk::PipelineStageFlags dstStage;
+    };
+
+    // The barrier for a pair of layouts, or nothing for a pair TransitionLayout
+    // does not support - which it reports by throwing.
+    //
+    // Split out of the recording so the table can be read and tested with no
+    // device. An unsupported pair is invisible to every suite here and fatal in
+    // a running game, which is how UIImageStore::Update came to ask for
+    // ShaderReadOnly -> TransferDst, a pair that was not in the table, and
+    // terminate the process on its first call.
+    static std::optional<LayoutBarrier> BarrierFor(vk::ImageLayout oldLayout,
+                                                   vk::ImageLayout newLayout);
+
     static void TransitionLayout(
         VulkanDevice& device,
         vk::CommandPool commandPool,
@@ -169,6 +189,10 @@ public:
     );
 
 private:
+    // Everything the image owns, freed. The destructor, and the constructor's own
+    // failure path - a destructor does not run for an object whose constructor threw.
+    void releaseResources() noexcept;
+
     // The one place a sampler is described, so the other-wrap samplers
     // GetSampler(addressMode) makes differ from the image's own in the wrap
     // and nothing else.

@@ -352,6 +352,19 @@ static void testEmptyCellsAreSkippedAndIndicesStayInRange() {
     CHECK_EQ(mesh.indices[11], 4u);
 }
 
+static void testAnAtlasPastThirtyTwoBitsStillDrawsItsCells() {
+    // 65536 x 65536 atlas cells is 2^32, and the product in uint32_t was zero - so
+    // every cell was "past the atlas" and the whole map was counted out of range
+    // and not drawn.
+    TilemapComponent map = grid(1, 1, 65536, 65536);
+    map.Set(0, 0, TilemapComponent::MakeCell(5));
+    MeshData mesh;
+    TilemapSystem::BakeReport report;
+    CHECK(TilemapSystem::Bake(map, mesh, &report));
+    CHECK_EQ(report.drawn, 1u);
+    CHECK_EQ(report.outOfRange, 0u);
+}
+
 static void testACellPastTheAtlasIsNotDrawnAndIsCounted() {
     // A flipbook WRAPS a frame past the end of its run, because a frame past
     // the end is a loop. A map cell past the end of its atlas is a typo, and
@@ -830,6 +843,7 @@ int main() {
     testFlipsSwapOneAxisAndLeaveTheOther();
     testEmptyCellsAreSkippedAndIndicesStayInRange();
     testACellPastTheAtlasIsNotDrawnAndIsCounted();
+    testAnAtlasPastThirtyTwoBitsStillDrawsItsCells();
     testTheCapIsEnforcedWhereTheCellsAreAllocated();
     testADegenerateAtlasBakesNothing();
 

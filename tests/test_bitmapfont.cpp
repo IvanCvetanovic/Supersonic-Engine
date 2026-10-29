@@ -221,6 +221,36 @@ void WhatIsRefused() {
               "a font describing no characters is refused");
 }
 
+void APageIdIsNotAnAllocationRequest() {
+    // Pages are indexed by the id the file gives, and the table was grown to
+    // id + 1 strings. A real font has a handful of pages, and the BMFont binary
+    // format stores a glyph's page in one byte, so nothing real goes past 255.
+    //
+    // Each font here describes EVERY page from 0 up, because a descriptor that
+    // skips one is refused for that reason already and would hide whether the
+    // count was ever checked.
+    const auto fontWithPages = [](int count) {
+        std::string text = "common lineHeight=20 base=15 scaleW=64 scaleH=64 pages=" +
+                           std::to_string(count) + "\n";
+        for (int page = 0; page < count; ++page) {
+            text += "page id=" + std::to_string(page) + " file=\"p" + std::to_string(page) + ".png\"\n";
+        }
+        text += "char id=65 x=0 y=0 width=1 height=1 xoffset=0 yoffset=0 xadvance=1 page=0\n";
+        return text;
+    };
+
+    BitmapFont font;
+    std::string error;
+
+    // The most the format can name still loads.
+    CHECK_MSG(font.Load(Write("pages256.fnt", fontWithPages(256)), error), error);
+
+    // A hundred thousand pages is not a font.
+    CHECK_MSG(!font.Load(Write("pages100k.fnt", fontWithPages(100000)), error),
+              "a descriptor with far more pages than the format can address is refused");
+    CHECK_MSG(!error.empty(), "and says so");
+}
+
 void AnUnloadedFontDrawsNothing() {
     // The failure that must not be a crash: a font nobody loaded, asked for
     // geometry. Every caller is a game that failed to find its own asset.
@@ -237,6 +267,7 @@ void runTests() {
     TextBecomesQuads();
     APageIsOneMesh();
     WhatIsRefused();
+    APageIdIsNotAnAllocationRequest();
     AnUnloadedFontDrawsNothing();
 }
 

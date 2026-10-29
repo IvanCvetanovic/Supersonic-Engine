@@ -24,6 +24,7 @@
 #include "TestHarness.hpp"
 
 #include <cmath>
+#include <exception>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -416,6 +417,42 @@ void testRefusingAFileIsBetterThanReadingItWrongly() {
               "a file that is not Radiance is refused rather than read as noise");
 }
 
+void testAHeaderThatClaimsMorePixelsThanTheFileHoldsIsRefused() {
+    // The pixel array was sized from the resolution line, as written, before a
+    // scanline was read. "-Y 100000 +X 100000" is ten billion texels - 120 GB of
+    // vec3 - from a file of a few dozen bytes.
+    std::error_code ec;
+    fs::create_directories(scratchRoot(), ec);
+    std::vector<glm::vec3> pixels;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    std::string error;
+
+    const auto hostile = [&](const std::string& name, const std::string& resolution) {
+        const fs::path path = scratchRoot() / name;
+        {
+            std::ofstream file(path, std::ios::binary | std::ios::trunc);
+            file << "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n" << resolution << "\n";
+        }
+        bool threw = false;
+        bool loaded = true;
+        try {
+            loaded = EnvironmentMap::LoadRadiance(path.generic_string(), pixels, width, height, error);
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        CHECK_MSG(!threw, name + ": an absurd resolution is refused, not thrown");
+        CHECK_MSG(!loaded, name + ": and not loaded");
+        CHECK_MSG(pixels.empty(), name + ": leaving no pixels behind");
+    };
+
+    hostile("huge_square.hdr", "-Y 100000 +X 100000");
+    hostile("huge_side.hdr", "-Y 2 +X 2000000000");
+    // Inside any sane side limit, and still more texels than a file this size can
+    // encode: Radiance's run-length coding tops out near 16 texels a byte.
+    hostile("claims_a_lot.hdr", "-Y 8192 +X 16384");
+}
+
 void testAnHdrBecomesACubemap() {
     // A constant panorama through the whole path: file, decode, project onto
     // six faces. Every face has to come back as the colour that went in, which
@@ -481,6 +518,7 @@ void runTests() {
     testARadianceFileIsReadBothWaysItIsWritten();
     testRefusingAFileIsBetterThanReadingItWrongly();
     testAnHdrBecomesACubemap();
+    testAHeaderThatClaimsMorePixelsThanTheFileHoldsIsRefused();
     testNonsenseSizesAreRefused();
 
     std::error_code ec;

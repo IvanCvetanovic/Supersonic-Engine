@@ -5,7 +5,7 @@
 // uses it. Same arrangement as VmaImplementation.cpp.
 //
 // TINYGLTF_NO_STB_IMAGE matters: tinygltf ships its own stb_image copy, and
-// TextureRegistry.cpp already defines STB_IMAGE_IMPLEMENTATION. Two definitions
+// StbImageImplementation.cpp already defines STB_IMAGE_IMPLEMENTATION. Two definitions
 // would collide at link time. Images are loaded from resolved paths by
 // TextureRegistry instead.
 

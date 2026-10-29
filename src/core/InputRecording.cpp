@@ -1,5 +1,6 @@
 #include "core/InputRecording.hpp"
 
+#include <limits>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -19,6 +20,13 @@ constexpr const char* kMagic = "SUPERSONICREPLAY";
 // turned it, so both are read; anything newer is refused.
 constexpr int kFormatVersion = 2;
 constexpr int kOldestReadableVersion = 1;
+
+// The most ticks a file may declare: about nineteen hours at sixty a second, and
+// about a gigabyte of TickInput once materialised. The count in the header is the
+// file's own claim and the tick array was sized from it as written - "ticks
+// 4000000000" is a forty-byte file that asked for a terabyte. A hand-edited or
+// corrupted file is the reason; a real session of this length is not.
+constexpr uint64_t kMaxRecordedTicks = uint64_t{1} << 22;
 
 // --- floats, by their bits -------------------------------------------------
 //
@@ -71,7 +79,13 @@ bool parseIndex(const std::string& token, uint64_t& out) {
     uint64_t value = 0;
     for (const char c : token) {
         if (c < '0' || c > '9') return false;
-        value = value * 10 + static_cast<uint64_t>(c - '0');
+        const uint64_t digit = static_cast<uint64_t>(c - '0');
+        // Twenty digits fit a uint64 only up to 18446744073709551615, and the
+        // length guard above lets every twenty-digit number through. Without this
+        // 18446744073709551620 wrapped to 4, which matched "end 4" and was
+        // accepted as a four-tick replay.
+        if (value > (std::numeric_limits<uint64_t>::max() - digit) / 10) return false;
+        value = value * 10 + digit;
     }
     out = value;
     return true;
@@ -686,6 +700,12 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
             std::string token;
             if (!(line >> token) || !parseIndex(token, declaredTicks)) {
                 return fail(lineNumber, "the tick count must be a whole number");
+            }
+            if (declaredTicks > kMaxRecordedTicks) {
+                return fail(lineNumber, "a replay of " + std::to_string(declaredTicks) +
+                                            " ticks is more than the " +
+                                            std::to_string(kMaxRecordedTicks) +
+                                            " this reads - the count is not believed");
             }
             sawTickCount = true;
         } else if (keyword == "action") {

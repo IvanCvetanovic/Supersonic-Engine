@@ -45,6 +45,16 @@ public:
     // `thickness` is how far the solid extends BELOW the surface. It is not
     // cosmetic: a body that has ended up under the terrain has to be pushed out
     // of the top, and without a bottom there is no way to say when it has left.
+    // The most a collision grid is allowed to be: per side, and in cells.
+    //
+    // The size comes out of a scene file (TerrainColliderComponent's width and
+    // depth) or a typed inspector field, so it is somebody's claim and not a fact.
+    // Taken at its word, 65536 x 65536 asked for 17 GB of heights before a single
+    // one was computed. 8192 x 8192 - the cell limit - is 134 million triangles
+    // of ground, far past anything a game here draws or collides with.
+    static constexpr uint32_t kMaxHeightfieldSide = 32768;
+    static constexpr uint64_t kMaxHeightfieldCells = 1ull << 26;
+
     static bool GenerateHeightfield(uint32_t width, uint32_t height, float heightScale,
                                     float thickness, Heightfield& out);
 };

@@ -89,6 +89,10 @@ add_engine_test(test_hierarchy)
 add_engine_test(test_gltf)
 add_engine_test(test_blending)
 add_engine_test(test_skeletal)
+add_engine_test(test_particles)
+add_engine_test(test_hotreload)
+add_engine_test(test_log)
+add_engine_test(test_platform)
 
 # Suites that read real assets need the project root, because asset paths
 # resolve against the working directory.
