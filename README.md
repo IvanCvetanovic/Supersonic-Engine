@@ -498,7 +498,7 @@ assets/
 plugins/       Hot-reloadable C++ gameplay scripts
 platform/      Android and Apple target scaffolding
 tests/         Pure-logic regression suites
-tools/         check.sh, CI's checks run locally; verify-replay.ps1, which proves a corrupted replay checkpoint is caught
+tools/         check.sh, CI's checks run locally; verify-replay.sh and .ps1, which prove a corrupted replay checkpoint is caught
 docs/          Screenshots, and the planning records under docs/planning/
 cmake/         The suite rule and harness a game builds against, the Vulkan import library
 .github/       CI: manual-dispatch only (Actions -> CI -> Run workflow)

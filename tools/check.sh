@@ -19,13 +19,18 @@
 #   tools/check.sh asan           ASan + UBSan + LSan build, every suite
 #   tools/check.sh tsan           ThreadSanitizer build, the suites that use threads
 #   tools/check.sh tidy           clang-tidy over the engine's own sources
+#   tools/check.sh replay         record a run, replay it, corrupt a checkpoint
 #   tools/check.sh all            everything above
 #
-# Not here: tools/verify-replay.ps1's record / replay / corrupt-a-checkpoint round
-# trip. It needs a window and a Vulkan device, which this script cannot assume, and
-# a port that has never been run is a check that might not be checking. Run the
-# PowerShell one before pushing anything that touches the tick loop, the state
-# hash or the recording format (AGENTS.md).
+# replay is tools/verify-replay.sh over the Release build: the record / replay /
+# corrupt-a-checkpoint round trip that used to exist only as PowerShell. It needs
+# a Vulkan device and somewhere to open a window, which a Linux box with no screen
+# still has: Mesa's lavapipe (mesa-vulkan-drivers) and xvfb-run. With no display
+# and no xvfb-run the step says so and is skipped, the same way `shaders` skips
+# the recompile without glslc - and the skip is printed, because a check that
+# silently did not run reads like one that passed. Not in the default set: it is
+# the slowest step by far on a software device. Run it before pushing anything
+# that touches the tick loop, the state hash or the recording format (AGENTS.md).
 #
 # Build trees go under $CHECK_BUILD_ROOT (default build-check/, already ignored).
 # JOBS bounds parallelism; the default is the core count, which CI deliberately
@@ -316,6 +321,31 @@ check_tidy() {
 }
 
 # ---------------------------------------------------------------------------
+# replay
+# ---------------------------------------------------------------------------
+
+check_replay() {
+    step "replay: record a run, replay it, corrupt one checkpoint"
+
+    # The same tree and arguments as `build`, so after it this is no rebuild at
+    # all, and on its own it is the one build the verifier needs.
+    configure_and_build "$BUILD_ROOT/release" "SupersonicEngine" \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DSUPERSONIC_WERROR=ON
+
+    # A window needs a display. The verifier wraps the engine in xvfb-run when
+    # there is no DISPLAY on Linux; with neither there is nothing to run it on,
+    # and that is said rather than reported as a failure of the engine.
+    if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] \
+       && ! command -v xvfb-run >/dev/null 2>&1; then
+        echo "No DISPLAY and no xvfb-run - skipping the replay round trip. Install xvfb"
+        echo "(and mesa-vulkan-drivers for a software Vulkan device) to run it headless."
+        return 0
+    fi
+
+    bash tools/verify-replay.sh --exe "$BUILD_ROOT/release/SupersonicEngine"
+}
+
+# ---------------------------------------------------------------------------
 
 usage() {
     # The header comment, from the title to the end of the usage list.
@@ -332,9 +362,10 @@ run() {
         asan)    check_asan ;;
         tsan)    check_tsan ;;
         tidy)    check_tidy ;;
-        all)     local s; for s in docs shaders build options asan tsan tidy; do run "$s"; done ;;
+        replay)  check_replay ;;
+        all)     local s; for s in docs shaders build options asan tsan tidy replay; do run "$s"; done ;;
         -h|--help|help) usage ;;
-        *)       echo "unknown step: $name (try: docs shaders build options asan tsan tidy all)" >&2; return 2 ;;
+        *)       echo "unknown step: $name (try: docs shaders build options asan tsan tidy replay all)" >&2; return 2 ;;
     esac
 }
 

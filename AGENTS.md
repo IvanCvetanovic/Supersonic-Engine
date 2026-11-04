@@ -346,13 +346,18 @@ the same ones on a Linux or macOS machine. The `docs` and `shaders` steps are th
 code CI itself runs, not a copy of it. Build trees go under `build-check/`
 (ignored); set `JOBS=2` on a small machine.
 
-It does not include the replay round trip below, which needs a window and a
-Vulkan device.
+The replay round trip below is its `replay` step, outside the default set: it
+needs a Vulkan device and somewhere to open a window, and is the slowest step by
+far on a software device.
 
 ### Checking the determinism claim before a push
 
+```bash
+tools/verify-replay.sh                 # Linux, macOS
+```
+
 ```powershell
-pwsh tools/verify-replay.ps1
+pwsh tools/verify-replay.ps1           # Windows
 ```
 
 Records a session, replays it, then **corrupts one checkpoint and requires the
@@ -363,7 +368,15 @@ first two, and this project has shipped that shape of mistake before.
 It lives here rather than in CI because CI is dispatch-only — the repository is
 private, so automatic runs are charged. Run it before pushing anything that
 touches the tick loop, the state hash, or the recording format. It takes under a
-minute and needs no runner.
+minute on a GPU and needs no runner.
+
+It needs no screen either. On a Linux machine with no `DISPLAY` the bash
+script starts the engine under `xvfb-run` when there is one, and Mesa's
+lavapipe (`mesa-vulkan-drivers`) is a Vulkan device in software - the same pair
+CI's validation leg uses. Measured here on lavapipe, four cores, 180 frames of
+`MainScene`: about a minute and a half for the three runs, and the corrupted
+checkpoint caught at tick 180. Both scripts take `--config`, `--scene` and
+`--frames`; the bash one also takes `--exe` for a binary outside `build/`.
 
 ### With validation layers, if the SDK is not installed system-wide
 
