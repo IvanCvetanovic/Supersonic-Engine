@@ -689,15 +689,19 @@ void ScriptEngine::ApplyPendingCommands(entt::registry& registry, size_t* outSpa
         ++spawned;
     }
 
+    // Children first, or they are left pointing at a released handle - and
+    // EnTT recycles handles, so a stale parent link does not dangle, it
+    // silently resolves to a different entity later. For every destroy of the
+    // tick in one walk of the hierarchy: this used to be a walk per destroy,
+    // and a tick that destroyed fifty bullets walked every parented entity in
+    // the scene fifty times over.
+    TransformSystem::OnParentsDestroyed(registry, work.destroys);
+
     size_t destroyed = 0;
     for (const entt::entity entity : work.destroys) {
         // Re-checked, because a script can queue the same entity twice and two
         // scripts can destroy the same entity in one frame.
         if (!registry.valid(entity)) continue;
-        // Children first, or they are left pointing at a released handle -
-        // and EnTT recycles handles, so a stale parent link does not dangle,
-        // it silently resolves to a different entity later.
-        TransformSystem::OnParentDestroyed(registry, entity);
         registry.destroy(entity);
         ++destroyed;
     }

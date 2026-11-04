@@ -102,19 +102,23 @@ struct ClipScope {
 // Intersected down the chain, so nested clips compose: a panel inside a panel
 // is confined by both, and an intersection that closes to nothing means the
 // element is inside something scrolled entirely out of view.
+// Whether any panel confines its children. One view iteration, which is what a
+// scene that uses no clipping pays before anything is looked up or built.
+bool anyPanelClips(entt::registry& registry) {
+    for (auto [entity, panel] : registry.view<UIPanelComponent>().each()) {
+        (void)entity;
+        if (panel.clipsChildren) return true;
+    }
+    return false;
+}
+
 void resolveClips(entt::registry& registry, const UIRect& gameRect, float scale,
                   const std::unordered_map<entt::entity, std::vector<entt::entity>>& childrenOf,
                   UICanvas::StackedLayout& stacked) {
     auto panels = registry.view<UIPanelComponent>();
 
-    // Nothing clips, so nothing is looked up. A scene that does not use this
-    // pays for one view iteration and stops.
-    bool anyClips = false;
-    for (auto [entity, panel] : panels.each()) {
-        (void)entity;
-        if (panel.clipsChildren) { anyClips = true; break; }
-    }
-    if (!anyClips) return;
+    // Nothing clips, so nothing is looked up.
+    if (!anyPanelClips(registry)) return;
 
     // Depth-first from each clipping panel, carrying the intersection down.
     // Bounded the same way the measure is, and for the same reason: a cycle is
@@ -213,6 +217,16 @@ UICanvas::StackedLayout layoutStacksImpl(entt::registry& registry, const UIRect&
                                          ImFont* font, float scale) {
     UICanvas::StackedLayout stacked;
 
+    auto stacks = registry.view<UIStackComponent>();
+    const bool anyStacks = stacks.begin() != stacks.end();
+
+    // Nothing to lay out and nothing to clip is nothing to do, said here
+    // before the hierarchy is walked. The child map below is of EVERY parented
+    // entity in the scene, the 3D ones included - a map node and a vector per
+    // parent, per frame - and a scene with no stack and no clipping panel
+    // built it to hand to a pass that returned without reading it.
+    if (!anyStacks && !anyPanelClips(registry)) return stacked;
+
     // Children by parent, gathered ONCE and needed by both halves below.
     std::unordered_map<entt::entity, std::vector<entt::entity>> childrenOf;
     for (auto [entity, hierarchy] : registry.view<HierarchyComponent>().each()) {
@@ -220,8 +234,7 @@ UICanvas::StackedLayout layoutStacksImpl(entt::registry& registry, const UIRect&
         childrenOf[hierarchy.parent].push_back(entity);
     }
 
-    auto stacks = registry.view<UIStackComponent>();
-    if (stacks.begin() == stacks.end()) {
+    if (!anyStacks) {
         // NO STACKS IS NOT NO LAYOUT ANY MORE. Clipping is decided by the
         // hierarchy rather than by any stack, so a scene that confines a
         // column of absolutely-positioned rows - which is what a scrolling
@@ -482,8 +495,11 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     for (const int32_t layer : layersPresent(registry)) {
     for (auto [entity, shape] : registry.view<UIShapeComponent>().each()) {
         if (!shape.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) continue;
-        const ClipScope clip(draw, stacked, entity);
+        // The layer test before the clip is pushed: an element on another
+        // layer pushed and popped its clip rectangle once per layer present,
+        // drawing nothing between the two.
         if (layerOf(registry, entity) != layer) continue;
+        const ClipScope clip(draw, stacked, entity);
 
         // The anchor point, in pixels. Everything below is measured from here.
         glm::vec2 origin(0.0f);
@@ -548,9 +564,9 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // read on top of it. The same reasoning the type order already follows.
     for (auto [entity, image] : registry.view<UIImageComponent>().each()) {
         if (!image.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) continue;
-        const ClipScope clip(draw, stacked, entity);
         if (image.texture == 0) continue;   // still uploading, or never set
         if (layerOf(registry, entity) != layer) continue;
+        const ClipScope clip(draw, stacked, entity);
 
         const UIRect rect = placedRect(stacked, entity, image.anchor, image.offset,
                                        image.size, gameRect, scale);

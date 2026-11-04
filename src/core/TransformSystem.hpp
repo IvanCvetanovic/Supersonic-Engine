@@ -1,6 +1,8 @@
 #pragma once
 
 #include <entt/entt.hpp>
+
+#include <vector>
 #include <glm/glm.hpp>
 
 #include "core/Components.hpp"
@@ -36,6 +38,15 @@ public:
     // Detaches children before their parent is destroyed so they do not point
     // at a released handle.
     static void OnParentDestroyed(entt::registry& registry, entt::entity parent);
+
+    // The same, for every entity in `parents` at once: one walk of the
+    // hierarchy rather than one per parent. A script pass that destroys fifty
+    // bullets in a tick walked every parented entity in the scene fifty times.
+    // Children are promoted in the hierarchy's own order, exactly as fifty
+    // single walks would promote them, and each from its own cached world
+    // matrix - which no promotion rewrites - so the locals written are the
+    // same bits. Handles that are not valid are ignored.
+    static void OnParentsDestroyed(entt::registry& registry, const std::vector<entt::entity>& parents);
 
     // Decomposes a world matrix into a local transform under the given parent.
     static void SetWorldMatrix(entt::registry& registry, entt::entity entity, const glm::mat4& world);

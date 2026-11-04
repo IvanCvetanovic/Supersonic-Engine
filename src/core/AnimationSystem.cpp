@@ -187,7 +187,12 @@ void AnimationSystem::ComposePose(const Skeleton& skeleton, const std::vector<gl
     outMatrices.resize(jointCount);
 
     // Model-space transform per joint, before the inverse bind is applied.
-    std::vector<glm::mat4> globals(jointCount, glm::mat4(1.0f));
+    // A scratch kept between calls rather than a vector made per animated
+    // entity per frame - 64 bytes a joint, allocated and freed sixty times a
+    // second per character. Assigned to the identity every call, as the fresh
+    // vector was, so a joint listed before its parent reads what it always did.
+    thread_local std::vector<glm::mat4> globals;
+    globals.assign(jointCount, glm::mat4(1.0f));
 
     for (size_t i = 0; i < jointCount; ++i) {
         const Joint& joint = skeleton.joints[i];

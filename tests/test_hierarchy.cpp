@@ -13,7 +13,9 @@
 #include "core/Components.hpp"
 #include "editor/SceneHierarchyPanel.hpp"
 
+#include <cstring>
 #include <unordered_map>
+#include <vector>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -165,6 +167,65 @@ static void testDestroyingParentPromotesChildren() {
     const auto* hierarchy = registry.try_get<HierarchyComponent>(child);
     CHECK_MSG(!hierarchy || hierarchy->parent == entt::null,
               "an orphaned child must be promoted to the root");
+}
+
+static void testDestroyingManyParentsAtOncePromotesExactlyAsOneAtATime() {
+    // The script pass destroys a tick's entities through one walk of the
+    // hierarchy (OnParentsDestroyed) where it used to walk once per entity.
+    // The promise is that the locals it writes are the bits the single walks
+    // wrote: the same scene built twice, orphaned both ways, compared byte for
+    // byte - rotation and scale included, which a decompose rounds.
+    const auto build = [](entt::registry& registry, std::vector<entt::entity>& parents,
+                          std::vector<entt::entity>& children) {
+        const auto a = makeEntity(registry, "A", glm::vec3(4.0f, 1.0f, 0.3f));
+        registry.get<TransformComponent>(a).rotation = glm::vec3(0.3f, 0.7f, 0.1f);
+        registry.get<TransformComponent>(a).scale = glm::vec3(2.0f, 1.5f, 0.5f);
+        const auto b = makeEntity(registry, "B", glm::vec3(-2.0f, 3.0f, 1.0f));
+        registry.get<TransformComponent>(b).rotation = glm::vec3(0.0f, 1.2f, 0.0f);
+        // A chain: c under b under a, and two more children of a.
+        const auto c = makeEntity(registry, "C", glm::vec3(1.0f, 0.0f, 0.0f));
+        const auto d = makeEntity(registry, "D", glm::vec3(0.0f, 2.0f, 0.0f));
+        const auto e = makeEntity(registry, "E", glm::vec3(0.5f, 0.5f, 0.5f));
+        registry.emplace<HierarchyComponent>(b, a);
+        registry.emplace<HierarchyComponent>(c, b);
+        registry.emplace<HierarchyComponent>(d, a);
+        registry.emplace<HierarchyComponent>(e, a);
+        TransformSystem::UpdateWorldTransforms(registry);
+        parents = {a, b};
+        children = {c, d, e};
+    };
+
+    entt::registry oneAtATime;
+    std::vector<entt::entity> parents1, children1;
+    build(oneAtATime, parents1, children1);
+    for (const entt::entity parent : parents1) {
+        TransformSystem::OnParentDestroyed(oneAtATime, parent);
+        oneAtATime.destroy(parent);
+    }
+
+    entt::registry allAtOnce;
+    std::vector<entt::entity> parents2, children2;
+    build(allAtOnce, parents2, children2);
+    TransformSystem::OnParentsDestroyed(allAtOnce, parents2);
+    for (const entt::entity parent : parents2) allAtOnce.destroy(parent);
+
+    for (size_t i = 0; i < children1.size(); ++i) {
+        const auto& one = oneAtATime.get<TransformComponent>(children1[i]);
+        const auto& all = allAtOnce.get<TransformComponent>(children2[i]);
+        CHECK_MSG(std::memcmp(&one.position, &all.position, sizeof(one.position)) == 0,
+                  "the promoted position is the same bits either way");
+        CHECK_MSG(std::memcmp(&one.rotation, &all.rotation, sizeof(one.rotation)) == 0,
+                  "and the rotation");
+        CHECK_MSG(std::memcmp(&one.scale, &all.scale, sizeof(one.scale)) == 0, "and the scale");
+        const auto* hierarchy = allAtOnce.try_get<HierarchyComponent>(children2[i]);
+        CHECK_MSG(!hierarchy || hierarchy->parent == entt::null, "every orphan is a root");
+    }
+
+    // A handle that is not valid, and a null one, are ignored rather than
+    // walked for.
+    std::vector<entt::entity> nonsense{entt::null, parents2.front()};
+    TransformSystem::OnParentsDestroyed(allAtOnce, nonsense);
+    CHECK(allAtOnce.valid(children2.front()));
 }
 
 static void testHierarchySurvivesSerialization() {
@@ -578,6 +639,7 @@ static void runTests() {
     testDetachPreservesWorldPosition();
     testCyclesAreRejected();
     testDestroyingParentPromotesChildren();
+    testDestroyingManyParentsAtOncePromotesExactlyAsOneAtATime();
     testHierarchySurvivesSerialization();
     testPlayStopRestoresScene();
     testPauseAndStep();

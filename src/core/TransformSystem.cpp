@@ -1,4 +1,6 @@
 #include "core/TransformSystem.hpp"
+
+#include <algorithm>
 #include "core/DetMath.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -217,6 +219,38 @@ void TransformSystem::OnParentDestroyed(entt::registry& registry, entt::entity p
             hierarchy.parent = entt::null;
             SetWorldMatrix(registry, entity, world);
         }
+    }
+}
+
+void TransformSystem::OnParentsDestroyed(entt::registry& registry,
+                                         const std::vector<entt::entity>& parents) {
+    if (parents.empty()) return;
+    if (parents.size() == 1) {
+        if (registry.valid(parents.front())) OnParentDestroyed(registry, parents.front());
+        return;
+    }
+
+    // What GetWorldMatrix answers for a child does not change when a sibling,
+    // or its own parent, is promoted: it reads the cached world matrix, or
+    // failing that the child's own local one. So the walk can be one pass
+    // asking "is this entity's parent among them" rather than one pass per
+    // parent, and a child whose parent is itself a child of another parent
+    // here is promoted on the same evidence either way.
+    std::vector<entt::entity> going;
+    going.reserve(parents.size());
+    for (const entt::entity parent : parents) {
+        if (parent != entt::null && registry.valid(parent)) going.push_back(parent);
+    }
+    if (going.empty()) return;
+    std::sort(going.begin(), going.end());
+
+    for (auto entity : registry.view<HierarchyComponent>()) {
+        auto& hierarchy = registry.get<HierarchyComponent>(entity);
+        if (hierarchy.parent == entt::null) continue;
+        if (!std::binary_search(going.begin(), going.end(), hierarchy.parent)) continue;
+        const glm::mat4 world = GetWorldMatrix(registry, entity);
+        hierarchy.parent = entt::null;
+        SetWorldMatrix(registry, entity, world);
     }
 }
 
