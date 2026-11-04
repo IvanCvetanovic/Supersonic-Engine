@@ -102,7 +102,10 @@ std::string extractEmbeddedImage(const tinygltf::Model& model, int imageIndex,
     if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size())) return {};
 
     const tinygltf::Buffer& buffer = model.buffers[static_cast<size_t>(view.buffer)];
-    if (view.byteOffset + view.byteLength > buffer.data.size() || view.byteLength == 0) {
+    // Each term against what is left, never a sum that a crafted offset could
+    // wrap past the size - the form accessorData already uses.
+    if (view.byteLength == 0 || view.byteOffset > buffer.data.size() ||
+        view.byteLength > buffer.data.size() - view.byteOffset) {
         SUPERSONIC_LOG_ERROR("GltfLoader")
             << "The " << slot << " image names bytes outside its buffer; skipping it."
             << std::endl;

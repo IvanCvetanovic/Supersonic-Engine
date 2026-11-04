@@ -148,7 +148,12 @@ std::string ContentBrowserPanel::OnImGuiRender() {
             status = "Cannot read " + m_currentDirectory.string() + ": " + ec.message();
             m_currentDirectory = m_assetsDirectory;
         } else {
-            for (const auto& directoryEntry : it) {
+            // Stepped with the error_code overload: the range-for increments
+            // through the throwing one, so an entry that vanished between two
+            // frames, or one the process may not stat, threw
+            // filesystem_error out of the middle of the ImGui frame.
+            for (; it != std::filesystem::directory_iterator() && !ec; it.increment(ec)) {
+                const auto& directoryEntry = *it;
                 const auto& path = directoryEntry.path();
                 const std::string filenameString = path.filename().string();
 

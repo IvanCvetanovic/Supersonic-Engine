@@ -1004,6 +1004,24 @@ static void testPrefabRoundTripsEveryField() {
     std::remove(kPrefab.c_str());
 }
 
+static void testAPrefabFromANewerBuildIsRefused() {
+    // A scene from a newer build is refused with a message; a prefab was
+    // instantiated with whatever this build understood of it, silently.
+    const std::string path = "test_serialize_tmp_newer.prefab";
+    {
+        std::ofstream file(path, std::ios::binary);
+        file << "{\"Version\": " << (AssetVersion::kCurrent + 7) << ", \"Tag\": \"Future\"}\n";
+    }
+    entt::registry registry;
+    SerializationResult result;
+    const auto entity = PrefabSerializer::InstantiatePrefab(registry, path, &result);
+    std::filesystem::remove(path);
+
+    CHECK_MSG(entity == entt::null, "a prefab from a newer build must not produce an entity");
+    CHECK(!result.ok);
+    CHECK_MSG(result.message.find("newer build") != std::string::npos, result.message);
+}
+
 static void testMissingPrefabReturnsNull() {
     // The old version never opened the file and returned a valid entity for a
     // path that did not exist, making a missing asset indistinguishable from a
@@ -2477,6 +2495,7 @@ static void runTests() {
     testAJointsOtherEndSurvivesASceneRoundTrip();
     testAWorldAnchoredJointWritesNoReference();
     testMissingPrefabReturnsNull();
+    testAPrefabFromANewerBuildIsRefused();
 }
 
 TEST_MAIN("test_serialize", 491)

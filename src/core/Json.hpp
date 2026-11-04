@@ -209,6 +209,15 @@ public:
     static constexpr int kMaxDepth = 64;
 
     bool Parse(Value& out) {
+        // A UTF-8 byte order mark, which Notepad and PowerShell's Set-Content
+        // -Encoding UTF8 put at the front of a file they save. It is not part
+        // of the document; it failed as "invalid number at offset 0", so a
+        // scene hand-edited on Windows would not open.
+        if (m_text.size() >= 3 && static_cast<unsigned char>(m_text[0]) == 0xEF &&
+            static_cast<unsigned char>(m_text[1]) == 0xBB &&
+            static_cast<unsigned char>(m_text[2]) == 0xBF) {
+            m_pos = 3;
+        }
         skipWhitespace();
         if (!parseValue(out)) return false;
         skipWhitespace();

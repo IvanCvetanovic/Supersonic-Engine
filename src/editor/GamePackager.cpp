@@ -56,9 +56,12 @@ SerializationResult GamePackager::PackageStandaloneGame(const std::string& outpu
     std::string note;
     bool ok = true;
 
-    // Any runtime libraries sitting next to the executable.
-    for (const auto& entry : fs::directory_iterator(exe.parent_path(), ec)) {
-        if (ec) break;
+    // Any runtime libraries sitting next to the executable. Stepped with the
+    // error_code overload: the range-for increments through the throwing one,
+    // so the `if (ec) break` inside it could never see an error the step made.
+    for (auto it = fs::directory_iterator(exe.parent_path(), ec);
+         it != fs::directory_iterator() && !ec; it.increment(ec)) {
+        const auto& entry = *it;
         const auto& p = entry.path();
         // The error_code overload: the plain one throws on an entry that cannot be
         // stat'd (a file removed mid-walk, a broken permission), which took the whole

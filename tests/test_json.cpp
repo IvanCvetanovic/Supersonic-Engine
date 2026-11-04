@@ -292,6 +292,23 @@ static void testAnythingButAnObjectHasNoKeys() {
     CHECK_KEYS(data["present"]["a"]);
 }
 
+static void testAByteOrderMarkIsNotPartOfTheDocument() {
+    // Notepad and PowerShell's Set-Content -Encoding UTF8 put EF BB BF at the
+    // front of a file they save. It is not part of the document, and a scene
+    // hand-edited on Windows failed as "invalid number at offset 0".
+    const std::string withMark = "\xEF\xBB\xBF{\"Entities\": [1, 2]}";
+    Json::Value root;
+    std::string error;
+    CHECK_MSG(Json::Parse(withMark, root, error), error);
+    CHECK(root.IsObject() && root["Entities"].IsArray());
+
+    // Only at the front: inside a document the three bytes are what they are.
+    Json::Value other;
+    CHECK_MSG(!Json::Parse("{\xEF\xBB\xBF}", other, error), "a mark inside an object is not JSON");
+    // And a document shorter than a mark is still refused, not read past.
+    CHECK(!Json::Parse("\xEF\xBB", other, error));
+}
+
 static void runTests() {
     testParsesTheShapesTheEngineWrites();
     testDeepNestingIsRefusedRatherThanRecursedInto();
@@ -308,6 +325,7 @@ static void runTests() {
     testAnObjectBuiltInCodeIsInMapOrder();
     testCopiesAndMovesKeepTheOrder();
     testAnythingButAnObjectHasNoKeys();
+    testAByteOrderMarkIsNotPartOfTheDocument();
 }
 
 TEST_MAIN("test_json", 70)

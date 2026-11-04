@@ -3,6 +3,7 @@
 #include "core/AssetDatabase.hpp"
 #include "core/AssetWatcher.hpp"
 #include "core/AssetVersion.hpp"
+#include "core/FiniteNumbers.hpp"
 #include "core/Log.hpp"
 
 #include <filesystem>
@@ -54,6 +55,11 @@ glm::vec4 readVec4(const Json::Value& value, const glm::vec4& fallback) {
 
 std::string MaterialLibrary::Serialize(const MaterialAsset& asset) {
     std::ostringstream out;
+    // The same backstop the scene and the prefab writers hold: a NaN roughness
+    // - a slider typed past its range, a script - was written as "nan", which
+    // the reader refuses, and every entity sharing the material lost it at
+    // the next load. Every finite value is written exactly as before.
+    FiniteNumbersOnly finiteOnly(out);
     out << "{\n";
     out << "  \"Version\": " << AssetVersion::kCurrent << ",\n";
     out << "  \"Material\": \"" << Json::Escape(asset.name) << "\",\n";
@@ -78,6 +84,15 @@ bool MaterialLibrary::Deserialize(const std::string& text, MaterialAsset& out, s
     if (!Json::Parse(text, root, error)) return false;
     if (!root.IsObject()) {
         error = "material must be a JSON object";
+        return false;
+    }
+
+    // The policy every scene load already follows: a file from a newer build
+    // is refused with a message, not read with the parts this build does not
+    // know silently dropped and then saved back without them.
+    const int version = AssetVersion::Read(root);
+    if (!AssetVersion::IsReadable(version)) {
+        error = AssetVersion::TooNewMessage("this material", version);
         return false;
     }
 

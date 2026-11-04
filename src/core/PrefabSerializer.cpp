@@ -111,6 +111,16 @@ entt::entity PrefabSerializer::InstantiatePrefab(entt::registry& registry, const
             return entt::null;
         }
 
+        // The policy a scene load follows, which a prefab did not: a file from
+        // a newer build is refused with a message rather than instantiated
+        // without the parts this build does not know. Not cached, for the
+        // reason a parse failure is not.
+        const int version = AssetVersion::Read(parsed);
+        if (!AssetVersion::IsReadable(version)) {
+            report(false, AssetVersion::TooNewMessage(filepath, version));
+            return entt::null;
+        }
+
         // Only a document that parsed is kept. Caching a failure would make a
         // prefab that was broken once stay broken until the editor restarts,
         // even after the file is fixed.

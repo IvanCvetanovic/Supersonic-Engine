@@ -433,7 +433,14 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
         const auto prefabRoot = std::filesystem::path("assets") / "prefabs";
         if (std::filesystem::is_directory(prefabRoot, prefabScanError)) {
             size_t watched = 0;
-            for (const auto& entry : std::filesystem::directory_iterator(prefabRoot, prefabScanError)) {
+            // Stepped with the error_code overload. The range-for increments
+            // through the throwing one, and this runs at start-up: a prefab
+            // folder with one entry the process may not stat took the engine
+            // down before its first frame.
+            for (auto it = std::filesystem::directory_iterator(prefabRoot, prefabScanError);
+                 it != std::filesystem::directory_iterator() && !prefabScanError;
+                 it.increment(prefabScanError)) {
+                const auto& entry = *it;
                 if (entry.is_regular_file(prefabScanError) && entry.path().extension() == ".prefab") {
                     m_assetWatcher.Watch(entry.path().generic_string());
                     ++watched;

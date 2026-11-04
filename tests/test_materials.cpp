@@ -11,9 +11,12 @@
 // path that is retried every frame turns one typo into a per-frame disk hit.
 
 #include "TestHarness.hpp"
+#include <limits>
+#include <cmath>
 #include "core/AssetWatcher.hpp"
 #include "core/Components.hpp"
 #include "core/Light2D.hpp"
+#include "core/AssetVersion.hpp"
 #include "core/MaterialLibrary.hpp"
 #include "core/MaterialSystem.hpp"
 #include "core/RenderSystem.hpp"
@@ -84,6 +87,42 @@ static void testTextRoundTrip() {
     CHECK_NEAR(restored.ao, 0.75f);
     CHECK_NEAR(restored.albedoColor.z, 0.6f);
     CHECK_MSG(restored.albedoTexturePath == "assets/textures/uv_grid.png", restored.albedoTexturePath);
+}
+
+static void testANonFiniteValueIsWrittenAsANumber() {
+    // A roughness typed past its range, or written by a script, was serialised
+    // as "nan" - which the reader refuses, so every entity sharing the
+    // material lost it at the next load. The writer holds the same backstop
+    // the scene writer does: NaN is written as 0, infinity as the largest
+    // finite float, and every finite value exactly as before.
+    MaterialAsset original = makeAsset("Rough", 0.31f);
+    original.roughness = std::numeric_limits<float>::quiet_NaN();
+    original.albedoColor.y = std::numeric_limits<float>::infinity();
+    const std::string text = MaterialLibrary::Serialize(original);
+    CHECK_MSG(text.find("nan") == std::string::npos && text.find("inf") == std::string::npos,
+              "nothing a reader refuses is written");
+
+    MaterialAsset restored;
+    std::string error;
+    CHECK_MSG(MaterialLibrary::Deserialize(text, restored, error), error);
+    CHECK(std::isfinite(restored.roughness) && std::isfinite(restored.albedoColor.y));
+    CHECK_NEAR(restored.metallic, 0.25f);
+}
+
+static void testAMaterialFromANewerBuildIsRefused() {
+    // The policy a scene load follows: a file written by a build that knows
+    // more than this one is refused with a message, rather than read with the
+    // parts this build does not understand dropped and saved back without them.
+    std::string text = MaterialLibrary::Serialize(makeAsset("Future", 0.5f));
+    const std::string current = "\"Version\": " + std::to_string(AssetVersion::kCurrent);
+    const auto at = text.find(current);
+    CHECK_MSG(at != std::string::npos, "the writer stamps the current version");
+    text.replace(at, current.size(), "\"Version\": " + std::to_string(AssetVersion::kCurrent + 7));
+
+    MaterialAsset out;
+    std::string error;
+    CHECK_MSG(!MaterialLibrary::Deserialize(text, out, error), "a newer format is refused");
+    CHECK_MSG(error.find("newer build") != std::string::npos, error);
 }
 
 static void testGarbageIsRejected() {
@@ -2327,6 +2366,8 @@ static void runTests() {
     testAFrameThatFitsReportsNothingDropped();
     testASlotAndTheUnlitSwitchShareAWordWithoutTouching();
     testTextRoundTrip();
+    testANonFiniteValueIsWrittenAsANumber();
+    testAMaterialFromANewerBuildIsRefused();
     testGarbageIsRejected();
     testCreateAndReload();
     testAcquireIsCachedAndMissesAreToo();
