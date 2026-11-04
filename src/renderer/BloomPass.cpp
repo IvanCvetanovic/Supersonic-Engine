@@ -462,10 +462,17 @@ void BloomPass::RecordOverlay(vk::CommandBuffer cmd,
 }
 
 void BloomPass::Record(vk::CommandBuffer cmd) const {
-    // 4. only, for a scene of display values (RenderSettings::SceneEncoding).
+    // 4. only, for a scene of display values (RenderSettings::SceneEncoding),
+    // and for a scene that turned the bloom down to nothing. The composite
+    // reads scene + bloom * intensity, so at an intensity of exactly zero the
+    // three passes that produce `bloom` are producing a term that adds nothing
+    // - for every finite value, bloom * 0 is a zero and scene + 0 is scene -
+    // and the scene-only set, which binds the scene in bloom's place, gives
+    // the composite the same push constant and the same sum. Three
+    // half-resolution passes a frame, for a game that does not want them.
     // The composite is never skipped: it writes the image --screenshot reads
     // and the screen overlay loads.
-    if (!RunsBloomChain(m_settings)) {
+    if (!RunsBloomChain(m_settings) || m_settings.intensity == 0.0f) {
         Params composite{};
         composite.value = CompositeValue(m_settings);
         recordPass(cmd, m_outputPass, m_outputFramebuffer, m_width, m_height,

@@ -515,10 +515,21 @@ bool TextureRegistry::ReplaceRGBA(uint32_t id, const uint8_t* pixels,
     m_lookup.erase(scratchKey);
     if (scratchId >= m_textures.size()) return false;
 
+    // UploadRGBA answers a refusal - an image larger than the device can make
+    // - with the CHECKERBOARD's id. Taken as the scratch, that moved the
+    // checker's own image under this id and left the checker's slot empty, so
+    // every later fallback to it threw mid-frame. A built-in id is a refusal.
+    if (isBuiltIn(scratchId)) return false;
+
     auto oldImage = std::move(m_textures[id].image);
     m_textures[id].image = std::move(m_textures[scratchId].image);
     m_textures[id].width = width;
     m_textures[id].height = height;
+
+    // The scratch slot is the one the upload just pushed, now holding
+    // nothing. Dropped, or every replace left a dead slot behind - one per
+    // call, which for a texture replaced every frame is a slot a frame.
+    if (scratchId + 1 == m_textures.size()) m_textures.pop_back();
 
     // Descriptor sets naming this id keep working only if they are rewritten to
     // the new image, so they are dropped and rebuilt rather than left pointing

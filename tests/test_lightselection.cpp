@@ -16,6 +16,7 @@
 #include "core/Components.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <string>
 
 using namespace Supersonic;
@@ -164,6 +165,27 @@ static void testEverythingSurvivesUnderTheCap() {
     CHECK_EQ(SelectLights(empty, glm::vec3(0.0f), 8).size(), size_t{0});
 }
 
+static void testALampAtNaNDoesNotUnsortTheOthers() {
+    // The key is 1 + max(distance - range, 0), which is NaN for a lamp whose
+    // transform a script sent to NaN. `<` is false both ways against a NaN, so
+    // the comparator was no longer an ordering, and a sort handed one may put
+    // the finite lamps in any order: with the NaN lamp between them the near
+    // lamp stayed BEHIND the far one and fell off a cap of two. NaN sorts
+    // last now, and for finite keys the order is exactly what it was.
+    entt::registry registry;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    makeLight(registry, LightType::Point, glm::vec3(30.0f, 1.0f, 8.0f), 1.0f, "Far");
+    makeLight(registry, LightType::Point, glm::vec3(nan, 1.0f, 8.0f), 9.0f, "Nowhere");
+    makeLight(registry, LightType::Point, glm::vec3(1.0f, 1.0f, 8.0f), 9.0f, "Near");
+
+    const auto chosen = SelectLights(registry, glm::vec3(0.0f, 3.0f, 10.0f), 2);
+    CHECK_EQ(chosen.size(), size_t{2});
+    if (chosen.size() == 2) {
+        CHECK_MSG(tagOf(registry, chosen[0]) == "Near", "the near lamp is first, as it is without the NaN");
+        CHECK_MSG(tagOf(registry, chosen[1]) == "Far", "the far lamp is second; the lamp at NaN is last and over the cap");
+    }
+}
+
 static void runTests() {
     testTheSunSurvivesTwelveLampsAuthoredAfterIt();
     testEveryDirectionalOutranksEveryLamp();
@@ -172,6 +194,7 @@ static void runTests() {
     testEqualLightsKeepAStableOrder();
     testAParentedLampIsRankedWhereItActuallyIs();
     testEverythingSurvivesUnderTheCap();
+    testALampAtNaNDoesNotUnsortTheOthers();
 }
 
 TEST_MAIN("test_lightselection", 19)

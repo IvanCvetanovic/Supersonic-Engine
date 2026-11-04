@@ -1,6 +1,7 @@
 #include "core/LightSelection.hpp"
 
 #include "core/Components.hpp"
+#include "core/FloatOrdering.hpp"
 
 #include <algorithm>
 
@@ -46,10 +47,14 @@ std::vector<entt::entity> SelectLights(const entt::registry& registry,
         candidates.push_back(Candidate{entity, key});
     }
 
-    // Stable, deliberately. See the header.
+    // Stable, deliberately. See the header. And NaN last (FloatOrdering.hpp): a
+    // lamp whose position or range is not a number has a NaN key, `<` is false
+    // both ways against it, and a sort handed a comparator that is not an
+    // ordering may put the finite lamps in any order at all. For finite keys
+    // this is exactly `lhs.key < rhs.key`.
     std::stable_sort(candidates.begin(), candidates.end(),
                      [](const Candidate& lhs, const Candidate& rhs) {
-                         return lhs.key < rhs.key;
+                         return AscendingNaNLast(lhs.key, rhs.key);
                      });
 
     if (candidates.size() > maxLights) candidates.resize(maxLights);

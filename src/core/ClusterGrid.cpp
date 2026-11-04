@@ -47,6 +47,31 @@ float distanceSquaredToBox(const glm::vec3& point, const glm::vec3& boxMin,
     return total;
 }
 
+// What every froxel of one depth slice shares: the slice's two depths and the
+// frustum's half-height at each. Worked out once per slice. clusterBounds used
+// to derive them per froxel, which was two std::pow and two half-heights for
+// each of the 144 froxels of a slice that all have the same answer - most of
+// the cost of assigning a frame's lights, in a frame with one lamp.
+struct SliceGeometry {
+    float sliceNear{0.0f};
+    float sliceFar{0.0f};
+    float halfYNear{0.0f};
+    float halfYFar{0.0f};
+};
+
+SliceGeometry sliceGeometry(uint32_t z, float nearPlane, float farPlane, const ViewVolume& volume) {
+    SliceGeometry slice;
+    SliceDepthRange(z, nearPlane, farPlane, slice.sliceNear, slice.sliceFar);
+
+    // Evaluated at BOTH faces and unioned, because a perspective frustum
+    // widens. An orthographic one does not - the two come out equal, the union
+    // is exact rather than conservative, and that is why this needs no branch
+    // on which projection it was handed.
+    slice.halfYNear = volume.halfHeightAt(slice.sliceNear);
+    slice.halfYFar = volume.halfHeightAt(slice.sliceFar);
+    return slice;
+}
+
 // The froxel as an axis-aligned box in view space.
 //
 // A froxel is not actually a box - it is a frustum slab, wider at its far face
@@ -54,31 +79,26 @@ float distanceSquaredToBox(const glm::vec3& point, const glm::vec3& boxMin,
 // deliberately CONSERVATIVE: it can call a light present in a cluster it only
 // grazes, which costs a wasted iteration, and it can never drop one it reaches,
 // which would be a dark patch in a shape nobody could explain.
+void clusterBoundsInSlice(uint32_t x, uint32_t y, const SliceGeometry& slice,
+                          const ViewVolume& volume,
+                          glm::vec3& outMin, glm::vec3& outMax) {
+    float minXNear, maxXNear, minXFar, maxXFar;
+    axisBounds(x, kTilesX, slice.halfYNear * volume.aspect, minXNear, maxXNear);
+    axisBounds(x, kTilesX, slice.halfYFar * volume.aspect, minXFar, maxXFar);
+
+    float minYNear, maxYNear, minYFar, maxYFar;
+    axisBounds(y, kTilesY, slice.halfYNear, minYNear, maxYNear);
+    axisBounds(y, kTilesY, slice.halfYFar, minYFar, maxYFar);
+
+    outMin = glm::vec3(std::min(minXNear, minXFar), std::min(minYNear, minYFar), slice.sliceNear);
+    outMax = glm::vec3(std::max(maxXNear, maxXFar), std::max(maxYNear, maxYFar), slice.sliceFar);
+}
+
 void clusterBounds(uint32_t x, uint32_t y, uint32_t z,
                    float nearPlane, float farPlane,
                    const ViewVolume& volume,
                    glm::vec3& outMin, glm::vec3& outMax) {
-    float sliceNear = 0.0f;
-    float sliceFar = 0.0f;
-    SliceDepthRange(z, nearPlane, farPlane, sliceNear, sliceFar);
-
-    // Evaluated at BOTH faces and unioned, because a perspective frustum
-    // widens. An orthographic one does not - the two come out equal, the union
-    // is exact rather than conservative, and that is why this needs no branch
-    // on which projection it was handed.
-    const float halfYNear = volume.halfHeightAt(sliceNear);
-    const float halfYFar = volume.halfHeightAt(sliceFar);
-
-    float minXNear, maxXNear, minXFar, maxXFar;
-    axisBounds(x, kTilesX, halfYNear * volume.aspect, minXNear, maxXNear);
-    axisBounds(x, kTilesX, halfYFar * volume.aspect, minXFar, maxXFar);
-
-    float minYNear, maxYNear, minYFar, maxYFar;
-    axisBounds(y, kTilesY, halfYNear, minYNear, maxYNear);
-    axisBounds(y, kTilesY, halfYFar, minYFar, maxYFar);
-
-    outMin = glm::vec3(std::min(minXNear, minXFar), std::min(minYNear, minYFar), sliceNear);
-    outMax = glm::vec3(std::max(maxXNear, maxXFar), std::max(maxYNear, maxYFar), sliceFar);
+    clusterBoundsInSlice(x, y, sliceGeometry(z, nearPlane, farPlane, volume), volume, outMin, outMax);
 }
 
 } // namespace
@@ -160,6 +180,13 @@ Assignment Assign(const std::vector<LocalLight>& lights,
     Assignment out;
     out.clusters.assign(kClusterCount, ClusterRange{});
     out.indices.clear();
+
+    // A frame with no local light - a scene lit by its sun alone, which is most
+    // of them, and every 2D scene - is every range empty at offset zero, which
+    // the assign above has just written. The loop below computed three and a
+    // half thousand froxel boxes to arrive at the same answer, every frame.
+    if (lights.empty()) return out;
+
     out.indices.reserve(std::min<size_t>(kMaxLightIndices, lights.size() * 32));
 
     // Each light's DEPTH SPAN, worked out once instead of per froxel.
@@ -173,11 +200,17 @@ Assignment Assign(const std::vector<LocalLight>& lights,
     struct Span { uint32_t minSlice; uint32_t maxSlice; };
     std::vector<Span> spans;
     spans.reserve(lights.size());
+    // And which slices ANY light reaches, so a slice nothing is near costs its
+    // 144 empty ranges and no box at all.
+    bool sliceHasLight[kSlices] = {};
     for (const LocalLight& light : lights) {
         Span span{1, 0};  // deliberately empty: min > max skips every slice
         if (light.radius > 0.0f) {
             span.minSlice = SliceForDepth(light.viewPosition.z - light.radius, nearPlane, farPlane);
             span.maxSlice = SliceForDepth(light.viewPosition.z + light.radius, nearPlane, farPlane);
+            for (uint32_t z = span.minSlice; z <= span.maxSlice && z < kSlices; ++z) {
+                sliceHasLight[z] = true;
+            }
         }
         spans.push_back(span);
     }
@@ -187,6 +220,20 @@ Assignment Assign(const std::vector<LocalLight>& lights,
     // clusters on the outside and lights on the inside for exactly that reason:
     // the other order would need a second pass to compact.
     for (uint32_t z = 0; z < kSlices; ++z) {
+        // Nothing reaches this slice: every range in it is empty at the current
+        // offset, which is what the loop below would write after testing every
+        // light against every froxel and rejecting each on its span.
+        if (!sliceHasLight[z]) {
+            for (uint32_t i = 0; i < kTilesX * kTilesY; ++i) {
+                ClusterRange& range = out.clusters[i + z * kTilesX * kTilesY];
+                range.offset = static_cast<uint32_t>(out.indices.size());
+                range.count = 0;
+            }
+            continue;
+        }
+
+        const SliceGeometry slice = sliceGeometry(z, nearPlane, farPlane, volume);
+
         for (uint32_t y = 0; y < kTilesY; ++y) {
             for (uint32_t x = 0; x < kTilesX; ++x) {
                 const uint32_t cluster = x + y * kTilesX + z * kTilesX * kTilesY;
@@ -196,7 +243,7 @@ Assignment Assign(const std::vector<LocalLight>& lights,
 
                 glm::vec3 boxMin(0.0f);
                 glm::vec3 boxMax(0.0f);
-                clusterBounds(x, y, z, nearPlane, farPlane, volume, boxMin, boxMax);
+                clusterBoundsInSlice(x, y, slice, volume, boxMin, boxMax);
 
                 for (size_t i = 0; i < lights.size(); ++i) {
                     const LocalLight& light = lights[i];

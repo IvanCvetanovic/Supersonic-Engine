@@ -102,6 +102,16 @@ void VulkanRenderer::SetOffscreenRenderPass(vk::RenderPass pass, vk::SampleCount
 VulkanRenderer::~VulkanRenderer() {
     vk::Device device = m_deviceRef.GetDevice();
 
+    // Whatever is still queued for deferred destruction runs NOW, before the
+    // ImGui backend goes: a UI image's deleter gives its descriptor set back
+    // through ImGui_ImplVulkan_RemoveTexture, which reads the backend's data
+    // and has none to read once Shutdown has run. Safe here because the app
+    // waits the device idle before it destroys the renderer, and idempotent
+    // if it did not: the wait is repeated. The flush after cleanupSwapchain
+    // below stays, for anything queued by the teardown itself.
+    device.waitIdle();
+    m_deviceRef.FlushDeferredDestroys();
+
     ImGui_ImplVulkan_Shutdown();
 #if SUPERSONIC_WINDOW_GLFW
     ImGui_ImplGlfw_Shutdown();
@@ -708,17 +718,9 @@ void VulkanRenderer::createUniformBuffers() {
     // performs submit and wait on it.
     m_uiImages = std::make_unique<UIImageStore>(m_deviceRef, m_commandPool);
 
+    // The world-shape vertex buffers are made on the first frame that draws a
+    // shape (see the draw), so a game that never does holds none.
     m_worldShapeBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        // Sized for the shape buffer's own ceiling, so an upload can never
-        // overrun it and no reallocation ever happens mid-frame.
-        m_worldShapeBuffers[i] = std::make_unique<VulkanBuffer>(
-            m_deviceRef.GetAllocator(),
-            sizeof(WorldShapes::Vertex) * WorldShapes::kMaxVertices,
-            vk::BufferUsageFlagBits::eVertexBuffer,
-            VMA_MEMORY_USAGE_CPU_TO_GPU,
-            VMA_ALLOCATION_CREATE_MAPPED_BIT);
-    }
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         m_lightBuffers[i] = makeStorage(sizeof(GpuLight) * kMaxLights);
@@ -897,27 +899,44 @@ void VulkanRenderer::syncProbes(entt::registry& registry) {
         updateEnvironmentDescriptors();
     }
 
+    // The probes that can light anything, placed ONCE: where each is and how
+    // far it reaches, in the view's order. This used to be looked up again for
+    // every object - a registry lookup and a world position per probe per
+    // renderable per frame - and most scenes have no probe at all, so every
+    // object's centre was computed for a loop that then ran zero times.
+    struct PlacedProbe {
+        glm::vec3 origin{0.0f};
+        glm::vec3 extent{0.0f};
+        int32_t slot{0};
+    };
+    std::array<PlacedProbe, VulkanPipeline::kMaxEnvironmentProbes> placed{};
+    size_t placedCount = 0;
+    for (auto probeEntity : probes) {
+        const auto& probe = registry.get<ReflectionProbeComponent>(probeEntity);
+        if (probe.resolvedSlot < 0 || !m_environmentHasMap[probe.resolvedSlot]) continue;
+        if (placedCount >= placed.size()) break;   // every slot is claimed by now
+        placed[placedCount++] = PlacedProbe{probeWorldPosition(registry, probeEntity),
+                                            glm::abs(probe.halfExtent), probe.resolvedSlot};
+    }
+
     // And now every object picks one.
     for (auto entity : registry.view<RenderableComponent>()) {
         auto& renderable = registry.get<RenderableComponent>(entity);
         renderable.probeSlot = 0;
+        if (placedCount == 0) continue;
 
         const glm::vec3 centre = renderableCentre(registry, entity, renderable);
 
-        for (auto probeEntity : probes) {
-            const auto& probe = registry.get<ReflectionProbeComponent>(probeEntity);
-            if (probe.resolvedSlot < 0 || !m_environmentHasMap[probe.resolvedSlot]) continue;
-
-            const glm::vec3 origin = probeWorldPosition(registry, probeEntity);
-            const glm::vec3 offset = glm::abs(centre - origin);
-            const glm::vec3 extent = glm::abs(probe.halfExtent);
-            if (offset.x <= extent.x && offset.y <= extent.y && offset.z <= extent.z) {
+        for (size_t i = 0; i < placedCount; ++i) {
+            const PlacedProbe& probe = placed[i];
+            const glm::vec3 offset = glm::abs(centre - probe.origin);
+            if (offset.x <= probe.extent.x && offset.y <= probe.extent.y && offset.z <= probe.extent.z) {
                 // The FIRST containing probe wins, not the nearest. With two
                 // slots there is at most one overlap to resolve and "first" is
                 // stable; a nearest-centre rule would swap the answer as an
                 // object crosses the midpoint between two probes, which is a
                 // visible pop in the middle of a room rather than at its door.
-                renderable.probeSlot = probe.resolvedSlot;
+                renderable.probeSlot = probe.slot;
                 break;
             }
         }
@@ -1625,9 +1644,20 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
 
     // Cascades are fitted to the camera, so they need the same camera the scene
     // pass is about to use rather than a fixed box around the origin.
+    //
+    // The box around the origin is for a frame with NO visible mesh, and it
+    // has to be put back explicitly: ComputeSceneBounds writes +-FLT_MAX into
+    // both outputs before it looks, and returns false when it found nothing,
+    // so the defaults above never survived a call. The cascades were then
+    // fitted to corners at FLT_MAX - infinities through the light matrix - and
+    // the sky, the particles and the world shapes of a frame with nothing else
+    // in it sampled shadows through a matrix of them.
     glm::vec3 sceneMin(-20.0f);
     glm::vec3 sceneMax(20.0f);
-    RenderSystem::ComputeSceneBounds(registry, *m_meshRegistry, sceneMin, sceneMax);
+    if (!RenderSystem::ComputeSceneBounds(registry, *m_meshRegistry, sceneMin, sceneMax)) {
+        sceneMin = glm::vec3(-20.0f);
+        sceneMax = glm::vec3(20.0f);
+    }
 
     const CascadeSetup cascades = ShadowCascades::Build(
         camera, shadowDirection, sceneMin, sceneMax, m_shadowMap->GetResolution());
@@ -2072,9 +2102,28 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         WorldShapes* shapes = *shapeSlot;
         if (shapes != nullptr && !shapes->Empty()) {
             const size_t count = shapes->Vertices().size();
+
+            // Made on the first frame that draws a shape, not at start-up.
+            // Sized for the shape buffer's own ceiling, so an upload can never
+            // overrun it and no reallocation ever happens mid-frame - which is
+            // 7 MB of host-visible memory per frame in flight, and a game that
+            // draws no shape used to hold both for nothing.
+            if (!m_worldShapeBuffers[m_currentFrame]) {
+                m_worldShapeBuffers[m_currentFrame] = std::make_unique<VulkanBuffer>(
+                    m_deviceRef.GetAllocator(),
+                    sizeof(WorldShapes::Vertex) * WorldShapes::kMaxVertices,
+                    vk::BufferUsageFlagBits::eVertexBuffer,
+                    VMA_MEMORY_USAGE_CPU_TO_GPU,
+                    VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            }
             VulkanBuffer& buffer = *m_worldShapeBuffers[m_currentFrame];
-            std::memcpy(buffer.GetMappedData(), shapes->Vertices().data(),
-                        sizeof(WorldShapes::Vertex) * count);
+
+            // Through UploadData, which flushes the write: every other
+            // per-frame buffer goes that way, and this one was a bare memcpy
+            // into the mapping, which is complete only on memory the device
+            // keeps coherent - what a desktop driver hands out for CPU_TO_GPU,
+            // and not a promise.
+            buffer.UploadData(shapes->Vertices().data(), sizeof(WorldShapes::Vertex) * count);
 
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
                              m_worldShapePipeline->GetPipeline());

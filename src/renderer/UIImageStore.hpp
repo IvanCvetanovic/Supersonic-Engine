@@ -57,10 +57,12 @@ public:
 
     // Frees an image. The handle is invalid afterwards and must not be drawn.
     //
-    // NOT safe while a frame that references it is in flight. The caller clears
-    // the component first; there is no deferred queue here, deliberately, and
-    // the reason is that a store which quietly outlived its users would hide
-    // exactly the leak it exists to prevent.
+    // The store forgets the image at once - Has() and Count() answer "gone",
+    // so a store that quietly outlived its users would still show the leak it
+    // exists to prevent - and the device frees the image and the descriptor
+    // set through VulkanDevice::DeferDestroy, once no frame in flight can name
+    // them. The caller clears the component first, so nothing draws it again;
+    // what it need not do is wait for the frames already recorded against it.
     void Destroy(uint64_t handle);
 
     bool Has(uint64_t handle) const { return m_images.find(handle) != m_images.end(); }

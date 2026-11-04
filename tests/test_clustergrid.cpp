@@ -133,6 +133,41 @@ static void testDegeneratePlanesDoNotDivideByZero() {
     CHECK_MSG(b > a, "even a degenerate frustum must produce an ordered slice");
 }
 
+static void testNoLightsIsEveryRangeEmptyAtOffsetZero() {
+    // The shape of a frame with no local light - most frames - which Assign now
+    // answers without visiting a froxel. It has to be the shape the full walk
+    // produces: every range empty at offset zero, no indices, nothing dropped.
+    const auto assignment = ClusterGrid::Assign({}, kNear, kFar, kVolume);
+    CHECK_EQ(assignment.clusters.size(), size_t{ClusterGrid::kClusterCount});
+    bool allEmptyAtZero = true;
+    for (const auto& range : assignment.clusters) {
+        if (range.offset != 0 || range.count != 0) allEmptyAtZero = false;
+    }
+    CHECK(allEmptyAtZero);
+    CHECK(assignment.indices.empty());
+    CHECK_EQ(assignment.dropped, 0u);
+}
+
+static void testASliceNothingReachesIsEmptyAtTheRunningOffset() {
+    // A slice no light's span covers is skipped whole, and what the skip writes
+    // has to be what the walk would have: each range empty, at the offset the
+    // index list had reached by then - which is every index the nearer slices
+    // packed, and not zero.
+    std::vector<LocalLight> lights{ lightAt(0.0f, 0.0f, 2.0f, 0.5f) };
+    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kVolume);
+    CHECK_MSG(!assignment.indices.empty(), "the lamp lands somewhere");
+
+    const uint32_t lastSlice = ClusterGrid::kSlices - 1;
+    const uint32_t lampSlice = ClusterGrid::SliceForDepth(2.0f, kNear, kFar);
+    CHECK_MSG(lampSlice < lastSlice, "the lamp is nowhere near the far slice");
+    bool farSliceEmptyAtEnd = true;
+    for (uint32_t i = 0; i < ClusterGrid::kTilesX * ClusterGrid::kTilesY; ++i) {
+        const auto& range = assignment.clusters[i + lastSlice * ClusterGrid::kTilesX * ClusterGrid::kTilesY];
+        if (range.count != 0 || range.offset != assignment.indices.size()) farSliceEmptyAtEnd = false;
+    }
+    CHECK(farSliceEmptyAtEnd);
+}
+
 static void testALightReachesTheClusterItSitsIn() {
     // The floor of the whole feature: a lamp must light the froxel it is inside.
     const float depth = 5.0f;
@@ -476,6 +511,8 @@ static void runTests() {
     testDepthOutsideTheFrustumStillLandsSomewhere();
     testDegeneratePlanesDoNotDivideByZero();
 
+    testNoLightsIsEveryRangeEmptyAtOffsetZero();
+    testASliceNothingReachesIsEmptyAtTheRunningOffset();
     testALightReachesTheClusterItSitsIn();
     testATinyLightDoesNotReachTheWholeScreen();
     testAHugeLightReachesEverything();

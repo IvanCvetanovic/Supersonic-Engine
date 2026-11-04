@@ -767,13 +767,17 @@ uint64_t RenderSystem::ShadowPassSignature(const std::vector<ShadowCaster>& cast
                                            const glm::mat4& lightViewProj,
                                            const Frustum& lightFrustum,
                                            uint64_t seed) {
-    // Mixed in even when nothing is visible, so an empty pass and a pass whose
-    // casters all left are not confused with a pass that has not run.
-    uint32_t visible = 0;
-    for (const ShadowCaster& caster : casters) {
-        if (lightFrustum.IntersectsAABB(caster.worldMin, caster.worldMax)) ++visible;
-    }
-
+    // ONE walk over the casters, with the light matrix mixed in ahead of the
+    // first visible one. It used to be two walks - a count, then the mixing -
+    // which was every caster frustum-tested twice per pass, for up to eighteen
+    // passes a frame; the same tests in the same order fold the same bytes in
+    // the same sequence, so the signature is bit for bit what it was, and a
+    // cache keyed on it keeps every entry it had.
+    //
+    // The count is mixed in even when nothing is visible, so an empty pass and
+    // a pass whose casters all left are not confused with a pass that has not
+    // run.
+    //
     // A pass nothing is visible in is a clear to the far depth, whatever the light
     // matrix is: the matrix decides where a caster would land, and there is none.
     // Mixing it anyway re-recorded a camera-following cascade (four 2048x2048
@@ -782,12 +786,14 @@ uint64_t RenderSystem::ShadowPassSignature(const std::vector<ShadowCaster>& cast
     // game that has no shadow casters at all, which a slow memory bus pays for.
     // The first frame still records (a new signature), and so does the frame a
     // last caster leaves (it differs from the one with the caster in it).
-    if (visible == 0) return MixSignature(seed, &visible, sizeof(visible));
-
-    uint64_t signature = MixSignature(seed, &lightViewProj, sizeof(lightViewProj));
+    uint32_t visible = 0;
+    uint64_t signature = seed;
 
     for (const ShadowCaster& caster : casters) {
         if (!lightFrustum.IntersectsAABB(caster.worldMin, caster.worldMax)) continue;
+
+        if (visible == 0) signature = MixSignature(seed, &lightViewProj, sizeof(lightViewProj));
+        ++visible;
 
         signature = MixSignature(signature, &caster.model, sizeof(caster.model));
         signature = MixSignature(signature, &caster.worldMin, sizeof(caster.worldMin));
@@ -831,6 +837,7 @@ uint64_t RenderSystem::ShadowPassSignature(const std::vector<ShadowCaster>& cast
         signature = MixSignature(signature, &materialSet, sizeof(materialSet));
     }
 
+    if (visible == 0) return MixSignature(seed, &visible, sizeof(visible));
     return MixSignature(signature, &visible, sizeof(visible));
 }
 

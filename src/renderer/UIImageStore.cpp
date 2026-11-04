@@ -7,6 +7,8 @@
 
 #include "backends/imgui_impl_vulkan.h"
 
+#include <memory>
+
 namespace Supersonic {
 
 UIImageStore::UIImageStore(VulkanDevice& device, vk::CommandPool commandPool)
@@ -96,7 +98,21 @@ void UIImageStore::Destroy(uint64_t handle) {
     const auto it = m_images.find(handle);
     if (it == m_images.end()) return;
 
-    ImGui_ImplVulkan_RemoveTexture(HandleFromU64<VkDescriptorSet>(handle));
+    // Out of the store now - Has() and Count() say it is gone, which is the
+    // leak-finding the header promises - and off the device once no frame in
+    // flight can name it. The descriptor set and the image used to go at
+    // once, and the command buffer of the previous frame, still executing,
+    // could be sampling both: ImGui records the set into its draw list, the
+    // draw list is submitted, and the fence the renderer waits on at the top
+    // of a frame is the one from TWO frames ago. Update is safe without this
+    // only because each of its transitions drains the queue; Destroy drained
+    // nothing.
+    const VkDescriptorSet set = HandleFromU64<VkDescriptorSet>(handle);
+    m_device.DeferDestroy(
+        [set, image = std::shared_ptr<VulkanImage>(std::move(it->second.image))]() mutable {
+            ImGui_ImplVulkan_RemoveTexture(set);
+            image.reset();
+        });
     m_images.erase(it);
 }
 
