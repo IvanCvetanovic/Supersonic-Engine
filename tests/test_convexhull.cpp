@@ -621,9 +621,43 @@ void testInvalidateDropsOnlyTheHullsBuiltFromThatFile() {
     CHECK_EQ(cache.Invalidate(""), size_t{0});
 }
 
+void testATrimKeepsWhatTheLastStepUsed() {
+    // Trim used to drop EVERYTHING once the map reached its cap. A scene that
+    // referenced the cap's worth of hulls - broken references count, since a
+    // failed build is cached too - therefore emptied the cache at the top of
+    // every step and rebuilt every hull, from disk, inside the step, forever.
+    // A trim past the cap now keeps what the previous step asked for.
+    ConvexHullCache cache;
+    const ConvexDecomposition* cube = cache.Get("Cube", "");
+    CHECK_MSG(cube != nullptr, "a primitive must build a hull");
+    for (size_t i = 1; i < ConvexHullCache::kMaxHulls; ++i) {
+        CHECK(cache.Get("NotAPrimitive" + std::to_string(i), "") == nullptr);
+    }
+    CHECK_EQ(cache.size(), ConvexHullCache::kMaxHulls);
+
+    // A step begins. Everything was asked for since the last trim, so the cap
+    // being reached drops nothing: these are what the scene uses.
+    cache.Trim();
+    CHECK_EQ(cache.size(), ConvexHullCache::kMaxHulls);
+
+    // This step asks for the cube and nothing else.
+    CHECK(cache.Get("Cube", "") == cube);
+
+    // The next step's trim keeps the cube and drops the rest.
+    cache.Trim();
+    CHECK_EQ(cache.size(), size_t{1});
+    CHECK_MSG(cache.Get("Cube", "") == cube, "and the cube is the same node, not a rebuild");
+
+    // Below the cap a trim is free: nothing goes however old it is.
+    cache.Trim();
+    cache.Trim();
+    CHECK_EQ(cache.size(), size_t{1});
+}
+
 void runTests() {
     testTooFewPointsIsNotAHull();
     testInvalidateDropsOnlyTheHullsBuiltFromThatFile();
+    testATrimKeepsWhatTheLastStepUsed();
     testCollinearPointsAreNotASolid();
     testCoplanarPointsAreNotASolid();
     testCoincidentPointsAreOnePoint();

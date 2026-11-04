@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <string>
+#include <string_view>
 
 #include <entt/entt.hpp>
 
@@ -59,10 +61,21 @@ public:
     // SupersonicApp.cpp:906 and the fixed step begins at :963.
     size_t Invalidate(const std::string& path);
 
-    // Drops everything once the map has grown past the cap.
+    // Drops what the last step did not use, once the map has grown past the
+    // cap.
+    //
+    // It used to drop EVERYTHING past the cap, which is a backstop until the
+    // day a scene references the cap's worth of hulls - and then it is a cache
+    // that empties itself at the top of every step and rebuilds every hull,
+    // from disk, through quickhull, inside the step, forever. A build that
+    // failed counts too: a scene with thirty-two broken references thrashed
+    // the same way. Each entry now carries the step it was last asked for,
+    // and a trim past the cap keeps the ones the previous step touched. A
+    // rebuilt hull is the same hull, so nothing the solver sees changes;
+    // what changes is that a scene which needs more than the cap keeps them.
     //
     // Called at the TOP of a step, before any pointer has been handed out, for
-    // the reason HeightfieldCache::Trim is: clearing invalidates every pointer
+    // the reason HeightfieldCache::Trim is: dropping invalidates every pointer
     // the map has returned, and doing it part way through a gather would leave
     // the colliders gathered so far pointing at freed hulls.
     void Trim();
@@ -81,18 +94,46 @@ private:
     struct Key {
         std::string primitive;
         std::string path;
+    };
 
-        bool operator<(const Key& other) const {
-            if (primitive != other.primitive) return primitive < other.primitive;
-            return path < other.path;
+    // What a lookup is made with: the caller's strings, borrowed. A Key copies
+    // both, and the step looked a hull up once per hull collider per step and
+    // once per query - two allocations each for any path longer than the
+    // small-string limit, which an asset path is.
+    struct KeyView {
+        std::string_view primitive;
+        std::string_view path;
+    };
+
+    // One ordering for keys and views alike (std::less<> finds it for either
+    // side), so a view can search the map without becoming a Key first.
+    struct KeyLess {
+        using is_transparent = void;
+        static KeyView view(const Key& key) { return KeyView{key.primitive, key.path}; }
+        static KeyView view(const KeyView& key) { return key; }
+        template <typename L, typename R>
+        bool operator()(const L& lhs, const R& rhs) const {
+            const KeyView l = view(lhs);
+            const KeyView r = view(rhs);
+            if (l.primitive != r.primitive) return l.primitive < r.primitive;
+            return l.path < r.path;
         }
+    };
+
+    struct Entry {
+        ConvexDecomposition hull;
+        // The Trim generation this entry was last asked for in.
+        uint64_t lastUsed{0};
     };
 
     // By value, so a map node holding a hull does not move and a caller's
     // pointer survives every later insertion. A key whose build failed holds an
     // INVALID hull, which is the cached failure with nothing extra to represent
     // it.
-    std::map<Key, ConvexDecomposition> m_hulls;
+    std::map<Key, Entry, KeyLess> m_hulls;
+
+    // Advanced by every Trim; what Entry::lastUsed is measured in.
+    uint64_t m_generation{0};
 };
 
 } // namespace Supersonic

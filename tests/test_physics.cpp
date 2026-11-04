@@ -2510,6 +2510,35 @@ static void testRaycastRespectsItsLayerMask() {
     CHECK_MSG(rightLayer.hit, "and must hit the layer it did ask for");
 }
 
+static void testAQuerySeesWhatMovedSinceTheLastQuery() {
+    // Placing a collider for a query is cached between queries, keyed on what
+    // the placement reads, and this is the promise that cache has to keep: a
+    // script that moves a transform between two queries in the same tick, or
+    // edits a collider's size with the transform untouched, is answered about
+    // the world as it is now. A cache keyed on the tick would have answered
+    // about the world as it was.
+    entt::registry registry;
+    const auto wall = makeStaticBox(registry, glm::vec3(5.0f, 0.0f, 0.0f));
+    const glm::vec3 origin(0.0f);
+    const glm::vec3 along(1.0f, 0.0f, 0.0f);
+
+    const auto first = PhysicsSystem::Raycast(registry, origin, along, 10.0f);
+    CHECK_MSG(first.hit && test::nearly(first.distance, 4.5f), "the wall is where it was put");
+
+    registry.get<TransformComponent>(wall).position.x = 20.0f;
+    CHECK_MSG(!PhysicsSystem::Raycast(registry, origin, along, 10.0f).hit,
+              "moved out of reach between two queries, with no step between them");
+
+    registry.get<BoxColliderComponent>(wall).size = glm::vec3(40.0f);
+    const auto grown = PhysicsSystem::Raycast(registry, origin, along, 10.0f);
+    CHECK_MSG(grown.hit, "and a collider edited with its transform untouched is seen at its new size");
+
+    registry.get<TransformComponent>(wall).rotation.y = 0.7f;
+    registry.get<TransformComponent>(wall).scale = glm::vec3(0.01f);
+    CHECK_MSG(!PhysicsSystem::Raycast(registry, origin, along, 10.0f).hit,
+              "as is a rotation and a scale");
+}
+
 static void testAStackOfBoxesSettlesInsteadOfSinking() {
     // Nothing tested stacking, and until the solver iterated, nothing could
     // have passed. A single pass resolves each contact as though it were the
@@ -4291,6 +4320,7 @@ static void runTests() {
     testFilteringNeedsBothSidesToAgree();
     testColliderCenterMovesTheCollider();
     testRaycastRespectsItsLayerMask();
+    testAQuerySeesWhatMovedSinceTheLastQuery();
     testSweepAndPruneFindsOverlappingPairs();
     testSweepAndPruneSkipsPairsSeparatedOffAxis();
     testAProxyWithNoPositionDoesNotUnsortTheSweep();

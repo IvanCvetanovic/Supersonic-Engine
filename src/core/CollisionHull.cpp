@@ -266,15 +266,25 @@ CollisionSAT::Manifold CollideHullHull(const Instance& a, const Instance& b,
 
     // Edge against edge, which the face axes cannot find: a plank resting on the
     // corner of another plank passes through it if this loop is skipped.
+    //
+    // B's edge directions are placed once, not once per edge of A: each is two
+    // basis products, and they were recomputed Ea times over. The same two
+    // products give the same bits, so the axes measured are what they were.
+    // A thread-local scratch, because this runs for every piece pair of every
+    // hull pair of every step and the hulls it sees are capped and small.
+    thread_local std::vector<glm::vec3> directionsB;
+    directionsB.resize(b.hull->edges().size());
+    for (uint32_t j = 0; j < b.hull->edges().size(); ++j) {
+        const ConvexHull::Edge& edgeB = b.hull->edges()[j];
+        directionsB[j] = worldVertex(b, edgeB.b) - worldVertex(b, edgeB.a);
+    }
+
     for (uint32_t i = 0; i < a.hull->edges().size(); ++i) {
         const ConvexHull::Edge& edgeA = a.hull->edges()[i];
         const glm::vec3 directionA = worldVertex(a, edgeA.b) - worldVertex(a, edgeA.a);
 
         for (uint32_t j = 0; j < b.hull->edges().size(); ++j) {
-            const ConvexHull::Edge& edgeB = b.hull->edges()[j];
-            const glm::vec3 directionB = worldVertex(b, edgeB.b) - worldVertex(b, edgeB.a);
-
-            if (!measureAxis(glm::cross(directionA, directionB), a, b, toB, kFaceBias, margin,
+            if (!measureAxis(glm::cross(directionA, directionsB[j]), a, b, toB, kFaceBias, margin,
                              best, 2, 0, i, j)) {
                 return manifold;
             }

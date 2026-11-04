@@ -91,16 +91,17 @@ bool loadPoints(const std::string& primitive, const std::string& path,
 
 const ConvexDecomposition* ConvexHullCache::Get(const std::string& primitive,
                                                 const std::string& path) {
-    Key key{primitive, path};
-
-    const auto existing = m_hulls.find(key);
+    const auto existing = m_hulls.find(KeyView{primitive, path});
     if (existing != m_hulls.end()) {
+        existing->second.lastUsed = m_generation;
         // An entry that failed to build is left INVALID rather than removed, so
         // a broken reference costs one load instead of one per step forever.
-        return existing->second.valid() ? &existing->second : nullptr;
+        return existing->second.hull.valid() ? &existing->second.hull : nullptr;
     }
 
-    ConvexDecomposition& decomposition = m_hulls[key];
+    Entry& entry = m_hulls[Key{primitive, path}];
+    entry.lastUsed = m_generation;
+    ConvexDecomposition& decomposition = entry.hull;
 
     std::vector<glm::vec3> points;
     std::vector<uint32_t> indices;
@@ -164,7 +165,20 @@ size_t ConvexHullCache::Invalidate(const std::string& path) {
 }
 
 void ConvexHullCache::Trim() {
-    if (m_hulls.size() >= kMaxHulls) m_hulls.clear();
+    ++m_generation;
+    if (m_hulls.size() < kMaxHulls) return;
+
+    // Past the cap: keep what the previous generation asked for, drop the rest.
+    // Every entry the last step gathered carries the generation just ended, so
+    // a scene that references more hulls than the cap keeps all of them, and
+    // what goes is what nothing has asked for since the last trim.
+    for (auto it = m_hulls.begin(); it != m_hulls.end();) {
+        if (it->second.lastUsed + 1 < m_generation) {
+            it = m_hulls.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 ConvexHullCache& ConvexHullCache::For(entt::registry& registry) {

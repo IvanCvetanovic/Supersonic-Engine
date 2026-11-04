@@ -15,6 +15,7 @@
 #include "core/DetMath.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <limits>
 #include <unordered_map>
@@ -120,6 +121,16 @@ enum class Shape { Box, Sphere, Capsule, Heightfield, Hull };
 struct Body {
     entt::entity entity{entt::null};
     Shape shape{Shape::Box};
+
+    // The entity's transform and rigid body, looked up ONCE as it is gathered.
+    // The step reads them for every pair, every constraint and every solver
+    // iteration, and used to look each up again at each of those: sixteen
+    // sparse-set lookups per constraint per step, before the pairs and the
+    // wake-ups. Nothing in a step adds or removes a component, which is what
+    // lets a pointer into a pool be held for the length of one. Null where the
+    // entity has none, exactly where try_get was.
+    TransformComponent* transform{nullptr};
+    RigidBodyComponent* rigid{nullptr};
 
     // World space.
     glm::vec3 centre{0.0f};
@@ -758,19 +769,32 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     // inspector, serialised - and never tested against anything.
     std::vector<Body> bodies;
     std::vector<Proxy> proxies;
+    {
+        // An upper bound, since an entity with two colliders is gathered once:
+        // one allocation each instead of the doubling walk up to it.
+        const size_t colliders = registry.storage<BoxColliderComponent>().size() +
+                                 registry.storage<CapsuleColliderComponent>().size() +
+                                 registry.storage<SphereColliderComponent>().size() +
+                                 registry.storage<ConvexHullColliderComponent>().size() +
+                                 registry.storage<HeightfieldColliderComponent>().size();
+        bodies.reserve(colliders);
+        proxies.reserve(colliders);
+    }
 
     const auto collect = [&](entt::entity entity, Shape shape,
                              const glm::vec3& localHalfExtent, bool isTrigger,
                              const glm::vec3& localCenter, uint32_t layer,
                              uint32_t collidesWith) {
-        const auto* transform = registry.try_get<TransformComponent>(entity);
+        auto* transform = registry.try_get<TransformComponent>(entity);
         if (!transform) return;
 
-        const auto* rigid = registry.try_get<RigidBodyComponent>(entity);
+        auto* rigid = registry.try_get<RigidBodyComponent>(entity);
 
         Body body;
         body.entity = entity;
         body.shape = shape;
+        body.transform = transform;
+        body.rigid = rigid;
         body.isTrigger = isTrigger;
 
         // A sleeping body is immovable until something wakes it. Said once, here,
@@ -938,7 +962,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             continue;
         }
 
-        const auto* transform = registry.try_get<TransformComponent>(entity);
+        auto* transform = registry.try_get<TransformComponent>(entity);
         if (!transform) continue;
 
         const auto& authored = registry.get<ConvexHullColliderComponent>(entity);
@@ -946,7 +970,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             ConvexHullCache::For(registry).Get(registry, entity, authored);
         if (!hull) continue;
 
-        const auto* rigid = registry.try_get<RigidBodyComponent>(entity);
+        auto* rigid = registry.try_get<RigidBodyComponent>(entity);
 
         const glm::mat4 parentWorld = parentWorldMatrix(registry, entity);
         const glm::mat4 world = parentWorld * transform->getModelMatrix();
@@ -954,6 +978,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         Body body;
         body.entity = entity;
         body.shape = Shape::Hull;
+        body.transform = transform;
+        body.rigid = rigid;
         body.isTrigger = authored.isTrigger;
         body.pieces = hull;
         body.hullBasis = glm::mat3(world);
@@ -1018,7 +1044,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent,
                             SphereColliderComponent>(entity)) continue;
 
-        const auto* transform = registry.try_get<TransformComponent>(entity);
+        auto* transform = registry.try_get<TransformComponent>(entity);
         if (!transform) continue;
 
         const auto& terrain = registry.get<HeightfieldColliderComponent>(entity);
@@ -1031,6 +1057,10 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         Body body;
         body.entity = entity;
         body.shape = Shape::Heightfield;
+        body.transform = transform;
+        // Looked up, not assumed absent: the wake-up below asks every body for
+        // one, and terrain carrying a RigidBodyComponent answered then too.
+        body.rigid = registry.try_get<RigidBodyComponent>(entity);
         body.isTrigger = terrain.isTrigger;
         body.field = field;
         body.fieldOrigin = glm::vec3(world[3]);
@@ -1151,12 +1181,12 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     // receives the impulse at all. A ball would bounce off a sleeping crate and
     // leave it sitting exactly where it was.
     const auto wake = [&](Body& sleeper, const Body& other) {
-        auto* rigid = registry.try_get<RigidBodyComponent>(sleeper.entity);
+        auto* rigid = sleeper.rigid;
         if (!rigid) return;
 
         // Static level geometry wakes nothing. Resting on the floor is the
         // reason to sleep, not a reason to stay awake.
-        const auto* otherRigid = registry.try_get<RigidBodyComponent>(other.entity);
+        const auto* otherRigid = other.rigid;
         if (!otherRigid) return;
 
         if (otherRigid->isKinematic) {
@@ -1290,6 +1320,10 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 }
             };
 
+            // The other body's pieces, placed once for this pair (filled by the
+            // first piece below that meets a hull).
+            std::vector<CollisionHull::Instance> otherInstances;
+
             for (const ConvexHull& piece : hullBody.pieces->pieces()) {
                 CollisionHull::Instance hullInstance;
                 if (!CollisionHull::MakeInstance(piece, hullOrigin, hullBody.hullBasis,
@@ -1301,17 +1335,33 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                     // Both sides can be several pieces, so the inner loop is the
                     // other body's. Quadratic in the piece counts, which is what
                     // the cap in ConvexDecomposition bounds.
-                    const glm::vec3 otherCentroid =
-                        (other.pieces->boundsMin() + other.pieces->boundsMax()) * 0.5f;
-                    const glm::vec3 otherOrigin =
-                        glm::vec3(other.centre) - other.hullBasis * otherCentroid;
-
-                    for (const ConvexHull& otherPiece : other.pieces->pieces()) {
-                        CollisionHull::Instance otherInstance;
-                        if (!CollisionHull::MakeInstance(otherPiece, otherOrigin, other.hullBasis,
-                                                         otherInstance)) {
-                            continue;
+                    //
+                    // The other body's instances are placed ONCE for the pair.
+                    // Each is a determinant, an inverse and a transpose of the
+                    // same basis, and they were rebuilt for every piece of this
+                    // body - P times Q placements where P plus Q would do. The
+                    // same inputs give the same bits, so the manifolds are what
+                    // they were.
+                    if (otherInstances.empty()) {
+                        const glm::vec3 otherCentroid =
+                            (other.pieces->boundsMin() + other.pieces->boundsMax()) * 0.5f;
+                        const glm::vec3 otherOrigin =
+                            glm::vec3(other.centre) - other.hullBasis * otherCentroid;
+                        otherInstances.reserve(other.pieces->pieces().size());
+                        for (const ConvexHull& otherPiece : other.pieces->pieces()) {
+                            CollisionHull::Instance placed;
+                            // A piece that cannot be placed is skipped, as it
+                            // was: an unset hull pointer marks it below.
+                            if (!CollisionHull::MakeInstance(otherPiece, otherOrigin,
+                                                             other.hullBasis, placed)) {
+                                placed.hull = nullptr;
+                            }
+                            otherInstances.push_back(placed);
                         }
+                    }
+
+                    for (const CollisionHull::Instance& otherInstance : otherInstances) {
+                        if (otherInstance.hull == nullptr) continue;
                         const CollisionSAT::Manifold pairManifold =
                             CollisionHull::CollideHullHull(hullInstance, otherInstance, pairMargin);
                         if (!pairManifold.colliding || pairManifold.pointCount == 0) continue;
@@ -1596,8 +1646,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         const float inverseSum = a.inverseMass + b.inverseMass;
         if (inverseSum <= 0.0f) continue;
 
-        auto* transformA = registry.try_get<TransformComponent>(a.entity);
-        auto* transformB = registry.try_get<TransformComponent>(b.entity);
+        auto* transformA = a.transform;
+        auto* transformB = b.transform;
         if (!transformA || !transformB) continue;
 
         // Positional correction, shared out by inverse mass so the heavier body
@@ -1624,8 +1674,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             b.centre += shiftB;
         }
 
-        auto* rigidA = registry.try_get<RigidBodyComponent>(a.entity);
-        auto* rigidB = registry.try_get<RigidBodyComponent>(b.entity);
+        auto* rigidA = a.rigid;
+        auto* rigidB = b.rigid;
 
         // Shapes other than box-box report one point; the box path filled the
         // array above.
@@ -1749,9 +1799,15 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     std::vector<JointRuntime> joints;
 
     {
+        // The entity-to-body map serves the joint ends below and nothing else,
+        // and most scenes have no joint at all. Built only when one does, so
+        // the ordinary step does not pay a hash map of every body for it.
+        auto jointView = registry.view<JointComponent>();
         std::unordered_map<entt::entity, size_t> byEntity;
-        byEntity.reserve(bodies.size());
-        for (size_t i = 0; i < bodies.size(); ++i) byEntity.emplace(bodies[i].entity, i);
+        if (jointView.begin() != jointView.end()) {
+            byEntity.reserve(bodies.size());
+            for (size_t i = 0; i < bodies.size(); ++i) byEntity.emplace(bodies[i].entity, i);
+        }
 
         const auto makeEnd = [&](entt::entity entity) {
             JointEnd end;
@@ -1995,6 +2051,25 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         return spin;
     };
 
+    // Column 3 of parentWorld * model, and nothing else of the product.
+    //
+    // The model matrix's own column 3 is the position exactly - getModelMatrix
+    // assigns it, bit for bit - so the product's column 3 is p[0]*x + p[1]*y +
+    // p[2]*z + p[3]*1, summed left to right. That is the order glm's matrix
+    // product uses for every column (type_mat4x4.inl, operator*), and it is the
+    // order written here, so the bits are the product's bits; three DetMath
+    // sincos and a 4x4 product per joint end per pass are not. It is NOT
+    // `parentWorld * glm::vec4(position, 1)`: glm's matrix-times-vector adds
+    // its terms in a different order, and the difference is in the last bit,
+    // which the state hash sees.
+    const auto worldPositionOf = [](const JointEnd& end) {
+        const glm::mat4& p = end.parentWorld;
+        const glm::vec3& position = end.transform->position;
+        const glm::vec4 column =
+            p[0] * position.x + p[1] * position.y + p[2] * position.z + p[3] * 1.0f;
+        return glm::vec3(column);
+    };
+
     if (!joints.empty()) {
         for (int pass = 0; pass < kJointPositionIterations; ++pass) {
             for (JointRuntime& joint : joints) {
@@ -2006,14 +2081,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 // offsets from each centre and depend on the body's rotation,
                 // which nothing in this sweep changes. Anything that adds an
                 // angular positional correction has to refresh them here.
-                if (joint.a.transform) {
-                    joint.a.state.position = glm::vec3(
-                        (joint.a.parentWorld * joint.a.transform->getModelMatrix())[3]);
-                }
-                if (joint.b.transform) {
-                    joint.b.state.position = glm::vec3(
-                        (joint.b.parentWorld * joint.b.transform->getModelMatrix())[3]);
-                }
+                if (joint.a.transform) joint.a.state.position = worldPositionOf(joint.a);
+                if (joint.b.transform) joint.b.state.position = worldPositionOf(joint.b);
 
                 // A hinge past one of its stops is turned back, which is the
                 // angular twin of the shift below. It only became writable once
@@ -2090,8 +2159,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             Body& bodyA = bodies[constraint.bodyA];
             Body& bodyB = bodies[constraint.bodyB];
 
-            auto* rigidA = registry.try_get<RigidBodyComponent>(bodyA.entity);
-            auto* rigidB = registry.try_get<RigidBodyComponent>(bodyB.entity);
+            auto* rigidA = bodyA.rigid;
+            auto* rigidB = bodyB.rigid;
 
             const bool movableA = rigidA && bodyA.inverseMass > 0.0f;
             const bool movableB = rigidB && bodyB.inverseMass > 0.0f;
@@ -2377,10 +2446,78 @@ bool rayHitsHeightfield(const QueryShape& shape, const glm::vec3& origin, const 
     return true;
 }
 
-void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
+// What each collider's world-space shape was last computed FROM, and what it
+// came to, so a query that finds the same inputs skips the work.
+//
+// Placing a shape is three DetMath sincos and a 4x4 product, and every query
+// placed every collider again: a scene of three hundred colliders and two
+// hundred and fifty queries a tick was seventy-five thousand placements a
+// tick, nearly all of them of a body that had not moved since the query before.
+// Keyed on EVERYTHING the placement reads - the collider's kind and extents,
+// the transform's three triples, and the parent's world matrix as
+// parentWorldMatrix hands it over - and compared byte for byte, so a slot is
+// reused only when recomputing would give the same bits; a script that moves
+// a transform between two queries, or edits a collider's size, misses and
+// recomputes, which is what a cache keyed on the tick could not promise.
+// Indexed by entity index, with the owner's handle checked, so a recycled
+// index is a miss rather than somebody else's shape. Lives in the registry's
+// context beside the hull and terrain caches, and like them is never part of
+// the state hash: it holds nothing a tick could not recompute.
+struct QueryShapeMemo {
+    struct Inputs {
+        uint32_t kind{0};
+        glm::vec3 localHalfExtent{0.0f};
+        glm::vec3 localCenter{0.0f};
+        glm::vec3 position{0.0f};
+        glm::vec3 rotation{0.0f};
+        glm::vec3 scale{0.0f};
+        glm::mat4 parentWorld{0.0f};
+    };
+    // Every member is four-byte aligned and the sizes add up, so there is no
+    // padding for a byte compare to read garbage from.
+    static_assert(sizeof(Inputs) == sizeof(uint32_t) + 5 * sizeof(glm::vec3) + sizeof(glm::mat4),
+                  "QueryShapeMemo::Inputs must have no padding: it is compared with memcmp");
+
+    struct Slot {
+        entt::entity owner{entt::null};
+        Inputs inputs;
+        glm::vec3 centre{0.0f};
+        glm::vec3 halfExtent{0.0f};
+        float radius{0.0f};
+    };
+    std::vector<Slot> slots;
+
+    Slot& SlotFor(entt::entity entity) {
+        const auto index = static_cast<size_t>(entt::to_entity(entity));
+        if (index >= slots.size()) slots.resize(index + 1);
+        return slots[index];
+    }
+
+    static QueryShapeMemo& For(entt::registry& registry) {
+        if (auto* existing = registry.ctx().find<QueryShapeMemo>()) return *existing;
+        return registry.ctx().emplace<QueryShapeMemo>();
+    }
+};
+
+// Walks every collider in the solver's gather order and hands each to `visit`
+// as the QueryShape a list used to hold - once `wanted(entity, isTrigger,
+// layer)` has said so, which is where a query's ignore, trigger and layer
+// filters go: BEFORE the matrix work rather than after it.
+//
+// It used to build the whole list for every call, so a script's IsGrounded
+// was one allocation and one placement per collider in the scene, per query,
+// per tick, most of them for shapes the query then skipped and the rest for
+// shapes nothing had moved. Same order, same shapes: a query that keeps its
+// nearest hit as it goes sees exactly the sequence it saw, and the cache
+// lookups a hull and a terrain make on the way are made as they were.
+template <typename Wanted, typename Visit>
+void forEachShape(entt::registry& registry, Wanted&& wanted, Visit&& visit) {
+    QueryShapeMemo& memo = QueryShapeMemo::For(registry);
+
     const auto collect = [&](entt::entity entity, QueryShape::Kind kind,
                              const glm::vec3& localHalfExtent, bool isTrigger,
                              const glm::vec3& localCenter, uint32_t layer) {
+        if (!wanted(entity, isTrigger, layer)) return;
         const auto* transform = registry.try_get<TransformComponent>(entity);
         if (!transform) return;
 
@@ -2388,13 +2525,33 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
         shape.entity = entity;
         shape.kind = kind;
         shape.isTrigger = isTrigger;
+        shape.layer = layer;
 
-        const glm::mat4 world = parentWorldMatrix(registry, entity) * transform->getModelMatrix();
+        const glm::mat4 parentWorld = parentWorldMatrix(registry, entity);
+
+        QueryShapeMemo::Inputs inputs;
+        inputs.kind = static_cast<uint32_t>(kind);
+        inputs.localHalfExtent = localHalfExtent;
+        inputs.localCenter = localCenter;
+        inputs.position = transform->position;
+        inputs.rotation = transform->rotation;
+        inputs.scale = transform->scale;
+        inputs.parentWorld = parentWorld;
+
+        QueryShapeMemo::Slot& slot = memo.SlotFor(entity);
+        if (slot.owner == entity && std::memcmp(&slot.inputs, &inputs, sizeof(inputs)) == 0) {
+            shape.centre = slot.centre;
+            shape.halfExtent = slot.halfExtent;
+            shape.radius = slot.radius;
+            visit(shape);
+            return;
+        }
+
+        const glm::mat4 world = parentWorld * transform->getModelMatrix();
         worldBounds(world, localHalfExtent, shape.centre, shape.halfExtent);
         if (localCenter != glm::vec3(0.0f)) {
             shape.centre += glm::vec3(world * glm::vec4(localCenter, 0.0f));
         }
-        shape.layer = layer;
 
         if (kind == QueryShape::Kind::Sphere) {
             // From the SCALE, the third and last place that had to be told.
@@ -2412,7 +2569,13 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
             shape.radius = localHalfExtent.x * scale;
             shape.halfExtent = glm::vec3(shape.radius);
         }
-        out.push_back(shape);
+
+        slot.owner = entity;
+        slot.inputs = inputs;
+        slot.centre = shape.centre;
+        slot.halfExtent = shape.halfExtent;
+        slot.radius = shape.radius;
+        visit(shape);
     };
 
     for (auto entity : registry.view<BoxColliderComponent>()) {
@@ -2481,6 +2644,7 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
         const auto& terrain = registry.get<HeightfieldColliderComponent>(entity);
         const Heightfield* field = HeightfieldCache::For(registry).Get(terrain);
         if (!field) continue;
+        if (!wanted(entity, terrain.isTrigger, terrain.layer)) continue;
 
         const glm::mat4 world = parentWorldMatrix(registry, entity) * transform->getModelMatrix();
 
@@ -2509,7 +2673,7 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
         worldBounds(world, (localMax - localMin) * 0.5f, shape.centre, shape.halfExtent);
         shape.centre += glm::vec3(world * glm::vec4((localMin + localMax) * 0.5f, 0.0f));
 
-        out.push_back(shape);
+        visit(shape);
     }
 }
 
@@ -2527,15 +2691,14 @@ PhysicsSystem::RayHit PhysicsSystem::Raycast(entt::registry& registry, const glm
     if (length < 1e-8f || maxDistance <= 0.0f) return result;
     const glm::vec3 ray = direction / length;
 
-    std::vector<QueryShape> shapes;
-    gatherShapes(registry, shapes);
+    const auto wanted = [&](entt::entity entity, bool isTrigger, uint32_t layer) {
+        if (entity == ignore) return false;
+        if (isTrigger && !includeTriggers) return false;
+        return (layerMask & layer) != 0;
+    };
 
     float nearest = maxDistance;
-    for (const QueryShape& shape : shapes) {
-        if (shape.entity == ignore) continue;
-        if (shape.isTrigger && !includeTriggers) continue;
-        if ((layerMask & shape.layer) == 0) continue;
-
+    forEachShape(registry, wanted, [&](const QueryShape& shape) {
         float distance = 0.0f;
         glm::vec3 normal(0.0f);
         bool hit = false;
@@ -2552,7 +2715,7 @@ PhysicsSystem::RayHit PhysicsSystem::Raycast(entt::registry& registry, const glm
             break;
         }
 
-        if (!hit || distance > nearest) continue;
+        if (!hit || distance > nearest) return;
 
         nearest = distance;
         result.hit = true;
@@ -2560,7 +2723,7 @@ PhysicsSystem::RayHit PhysicsSystem::Raycast(entt::registry& registry, const glm
         result.distance = distance;
         result.point = origin + ray * distance;
         result.normal = normal;
-    }
+    });
     return result;
 }
 
@@ -2569,33 +2732,32 @@ void PhysicsSystem::OverlapSphere(entt::registry& registry, const glm::vec3& cen
                                   bool includeTriggers, uint32_t layerMask) {
     if (radius <= 0.0f) return;
 
-    std::vector<QueryShape> shapes;
-    gatherShapes(registry, shapes);
+    const auto wanted = [&](entt::entity entity, bool isTrigger, uint32_t layer) {
+        if (entity == ignore) return false;
+        if (isTrigger && !includeTriggers) return false;
+        return (layerMask & layer) != 0;
+    };
 
-    for (const QueryShape& shape : shapes) {
-        if (shape.entity == ignore) continue;
-        if (shape.isTrigger && !includeTriggers) continue;
-        if ((layerMask & shape.layer) == 0) continue;
-
+    forEachShape(registry, wanted, [&](const QueryShape& shape) {
         if (shape.kind == QueryShape::Kind::Sphere) {
             const float reach = radius + shape.radius;
             if (glm::dot(shape.centre - centre, shape.centre - centre) <= reach * reach) {
                 outEntities.push_back(shape.entity);
             }
-            continue;
+            return;
         }
 
         if (shape.kind == QueryShape::Kind::Heightfield) {
             // Against the SURFACE, for the same reason the ray is: an overlap
             // against a landscape's bounding box reports the whole sky above it.
-            if (!shape.field) continue;
+            if (!shape.field) return;
             const glm::mat3 intoField = glm::transpose(shape.fieldAxes);
             const float inverseScale = 1.0f / shape.fieldScale;
             const glm::vec3 local = intoField * (centre - shape.fieldOrigin) * inverseScale;
             if (shape.field->CollideSphere(local, radius * inverseScale).count > 0) {
                 outEntities.push_back(shape.entity);
             }
-            continue;
+            return;
         }
 
         // Closest point on the box to the sphere's centre - exact, unlike
@@ -2606,7 +2768,7 @@ void PhysicsSystem::OverlapSphere(entt::registry& registry, const glm::vec3& cen
         if (glm::dot(delta, delta) <= radius * radius) {
             outEntities.push_back(shape.entity);
         }
-    }
+    });
 }
 
 bool PhysicsSystem::IsGrounded(entt::registry& registry, const glm::vec3& footPosition,
