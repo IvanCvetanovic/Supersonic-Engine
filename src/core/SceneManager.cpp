@@ -34,7 +34,14 @@ void SceneManager::RequestNew() {
 bool SceneManager::ApplyPending(entt::registry& registry, SerializationResult& outResult) {
     if (m_pendingNew) {
         m_pendingNew = false;
-        registry.clear();
+        // An EMPTY SCENE, loaded, rather than a cleared registry. registry.clear()
+        // leaves the context alone, so a new scene kept the previous scene's
+        // gravity, ground plane, fog and environment - and saved them, as its
+        // own. The serializer's own comment says a load must assign every
+        // world setting; this goes through it, with nothing to assign from.
+        const SerializationResult cleared =
+            SceneSerializer::DeserializeFromString(registry, "{\"Entities\": []}");
+        if (!cleared.ok) registry.clear();
         m_currentPath = kDefaultScene;
         m_dirty = false;
         outResult = { true, "New scene." };

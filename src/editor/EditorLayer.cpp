@@ -15,6 +15,10 @@
 #include "core/UISystem.hpp"
 #include "core/ViewportInfo.hpp"
 #include "core/PrefabSerializer.hpp"
+#include "core/ComponentCodec.hpp"
+#include "core/Json.hpp"
+#include "core/TransformSystem.hpp"
+#include "renderer/Frustum.hpp"
 #include "core/Raycast.hpp"
 #include "core/TilemapSystem.hpp"
 #include "core/TimeTravelDebugger.hpp"
@@ -25,7 +29,9 @@
 #include "ImGuizmo.h"
 
 #include <cstring>
+#include <filesystem>
 #include <iostream>
+#include <sstream>
 
 namespace Supersonic {
 
@@ -98,7 +104,12 @@ void EditorLayer::OnSceneLoaded(entt::registry& registry, const SerializationRes
         // Reset, not Clear: its own comment says to call this after a load,
         // because undoing past one makes no sense - the undo stack describes a
         // scene that is no longer open.
-        m_history.Reset(registry);
+        //
+        // Unless the load is a TICK'S - a script's loadScene during Play. Stop
+        // restores the scene the history describes, and resetting here made
+        // the play-time level the history's present: the first commit after
+        // Stop then recorded the authored scene as an edit away from it.
+        if (!m_playMode || m_playMode->IsEditing()) m_history.Reset(registry);
     }
 }
 
@@ -452,21 +463,26 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
     // 2. Editor Main Menu Bar
     if (ImGui::BeginMenuBar()) {
+        // Saving, reloading and starting over are EDIT-MODE actions. During
+        // Play the registry is the simulation's - a thousand ticks of physics
+        // over the authored scene - and saving it wrote that over the file;
+        // the same key after a tick's loadScene wrote one level over another.
+        const bool canEdit = !m_playMode || m_playMode->IsEditing();
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem(ICON_FA_FLOPPY "  Save Scene", "Ctrl+S")) {
+            if (ImGui::MenuItem(ICON_FA_FLOPPY "  Save Scene", "Ctrl+S", false, canEdit)) {
                 const auto result = m_sceneManager->Save(registry);
                 SetStatus(result.message, !result.ok);
             }
-            if (ImGui::MenuItem(ICON_FA_FLOPPY "  Save Scene As...")) {
+            if (ImGui::MenuItem(ICON_FA_FLOPPY "  Save Scene As...", nullptr, false, canEdit)) {
                 m_showSaveAs = true;
             }
-            if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "  Reload Scene", "Ctrl+O")) {
+            if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "  Reload Scene", "Ctrl+O", false, canEdit)) {
                 // Deferred: this runs inside BuildUI, while panels are iterating
                 // views over the registry a load would clear and refill.
-                m_sceneManager->RequestLoad(m_sceneManager->CurrentPath());
+                requestGuarded(registry, window, GuardedAction::Reload);
             }
-            if (ImGui::MenuItem(ICON_FA_PLUS "  New Scene")) {
-                m_sceneManager->RequestNew();
+            if (ImGui::MenuItem(ICON_FA_PLUS "  New Scene", nullptr, false, canEdit)) {
+                requestGuarded(registry, window, GuardedAction::NewScene);
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Import Assets")) {
@@ -513,13 +529,7 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Alt+F4")) {
-#if SUPERSONIC_WINDOW_GLFW
-                glfwSetWindowShouldClose(window.GetNativeWindow(), GLFW_TRUE);
-#else
-                // The editor never runs on a borrowed window (WindowBackend.hpp);
-                // this keeps the file compiling there.
-                (void)window;
-#endif
+                requestGuarded(registry, window, GuardedAction::Exit);
             }
             ImGui::EndMenu();
         }
@@ -596,8 +606,15 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
                 m_playMode->Pause();
                 SetStatus("Paused.");
             } else {
+                // From edit mode, not from a pause: a resume keeps what the
+                // first Play wrote down.
+                const bool fromEdit = m_playMode->IsEditing();
                 const auto result = m_playMode->Play(registry);
                 SetStatus(result.message, !result.ok);
+                if (result.ok && fromEdit && m_sceneManager) {
+                    m_scenePathAtPlay = m_sceneManager->CurrentPath();
+                    m_dirtyAtPlay = m_sceneManager->IsDirty();
+                }
             }
         }
         ImGui::PopStyleColor();
@@ -608,6 +625,18 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             const auto result = m_playMode->Stop(registry);
             SetStatus(result.message, !result.ok);
             m_hierarchyPanel.SetSelectedEntity(entt::null);
+
+            // Stop restored the scene Play started from, so the editor is on
+            // that file again whatever a tick loaded in between - and as dirty
+            // as it was, since a load in between cleared the flag.
+            if (result.ok && m_sceneManager && !m_scenePathAtPlay.empty()) {
+                if (m_sceneManager->CurrentPath() != m_scenePathAtPlay) {
+                    m_sceneManager->AdoptLoaded(m_scenePathAtPlay);
+                }
+                if (m_dirtyAtPlay) m_sceneManager->MarkDirty();
+            }
+            m_scenePathAtPlay.clear();
+            m_dirtyAtPlay = false;
         }
         ImGui::SameLine();
         if (ImGui::Button(ICON_FA_FORWARD_STEP "  Step##play", ImVec2(90, 0))) {
@@ -627,6 +656,17 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             ImGui::SameLine();
             ImGui::TextDisabled("- Stop restores the scene as it was before Play.");
         }
+
+        // The file being edited, and a star when it holds edits the disk does
+        // not. Nothing showed either before, so "is this saved" was a question
+        // answered by saving.
+        if (m_sceneManager) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("|");
+            ImGui::SameLine();
+            const std::string file = std::filesystem::path(m_sceneManager->CurrentPath()).filename().string();
+            ImGui::TextDisabled("%s%s", file.c_str(), m_sceneManager->IsDirty() ? " *" : "");
+        }
         ImGui::Separator();
     }
 
@@ -645,11 +685,27 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     if (!io.WantTextInput && !Input::TextCaptureActive() &&
         !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
-            const auto result = m_sceneManager->Save(registry);
-            SetStatus(result.message, !result.ok);
+            if (editing) {
+                const auto result = m_sceneManager->Save(registry);
+                SetStatus(result.message, !result.ok);
+            } else {
+                // See the File menu: the registry is the simulation's now.
+                SetStatus("Stop before saving: Play is running over the scene, and Stop restores it.", true);
+            }
         }
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) {
-            m_sceneManager->RequestLoad(m_sceneManager->CurrentPath());
+            if (editing) requestGuarded(registry, window, GuardedAction::Reload);
+            else SetStatus("Stop before reloading.", true);
+        }
+        if (editing && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
+            const entt::entity selected = m_hierarchyPanel.GetSelectedEntity();
+            if (selected != entt::null && registry.valid(selected)) {
+                const entt::entity copy = duplicateEntity(registry, selected);
+                if (copy != entt::null) {
+                    m_hierarchyPanel.SetSelectedEntity(copy);
+                    SetStatus("Duplicated.");
+                }
+            }
         }
         // Gated on edit mode, matching the Edit menu. Undo replaces the whole
         // registry, so running it mid-play wiped the simulating scene - and
@@ -676,6 +732,18 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             if (ImGui::IsKeyPressed(ImGuiKey_W)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::TRANSLATE);
             if (ImGui::IsKeyPressed(ImGuiKey_E)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::ROTATE);
             if (ImGui::IsKeyPressed(ImGuiKey_R)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::SCALE);
+
+            // F frames the selection, Delete deletes it. Both existed as code
+            // - EditorCamera::FocusOn, the hierarchy's deferred delete - and
+            // neither had a key.
+            const entt::entity selected = m_hierarchyPanel.GetSelectedEntity();
+            if (selected != entt::null && registry.valid(selected)) {
+                if (ImGui::IsKeyPressed(ImGuiKey_F)) focusSelected(registry, selected);
+                if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+                    m_hierarchyPanel.RequestDelete(selected);
+                    SetStatus("Deleted.");
+                }
+            }
         }
     }
 
@@ -745,14 +813,33 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             if (name.empty()) name = "Prefab";
         }
 
-        const std::string path = "assets/prefabs/" + name + ".prefab";
-        const auto result = PrefabSerializer::SavePrefab(registry, toSave, path);
+        // A name nothing holds yet. Two entities tagged "Cube" wrote over the
+        // same file, the second silently replacing the first.
+        std::string path = "assets/prefabs/" + name + ".prefab";
+        std::error_code exists;
+        for (int n = 2; std::filesystem::exists(path, exists) && n < 1000; ++n) {
+            path = "assets/prefabs/" + name + "_" + std::to_string(n) + ".prefab";
+        }
+        auto result = PrefabSerializer::SavePrefab(registry, toSave, path);
+
+        // A prefab is one entity. Say so when that leaves something behind,
+        // rather than letting the file look like the whole thing.
+        size_t children = 0;
+        for (auto [entity, hierarchy] : registry.view<HierarchyComponent>().each()) {
+            (void)entity;
+            if (hierarchy.parent == toSave) ++children;
+        }
+        if (result.ok && children > 0) {
+            result.message += " Its " + std::to_string(children) +
+                              " child entit" + (children == 1 ? "y is" : "ies are") +
+                              " not part of it: a prefab is one entity.";
+        }
         SetStatus(result.message, !result.ok);
     }
 
     // Double-clicking a .prefab tile places it.
     if (const std::string scene = m_contentBrowserPanel.ConsumeSceneClick(); !scene.empty()) {
-        m_sceneManager->RequestLoad(scene);
+        requestGuarded(registry, window, GuardedAction::Load, scene);
     }
 
     if (const std::string prefab = m_contentBrowserPanel.ConsumePrefabClick(); !prefab.empty()) {
@@ -1081,6 +1168,38 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     // Save As. A modal rather than a menu field so the path is committed by an
     // explicit press: typing into a live field would rename the open scene on
     // every keystroke.
+    if (m_openUnsavedPopup) {
+        ImGui::OpenPopup("Unsaved Changes");
+        m_openUnsavedPopup = false;
+    }
+    if (ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("%s has changes that are not saved.", m_sceneManager->CurrentPath().c_str());
+        ImGui::Spacing();
+        if (ImGui::Button("Save", ImVec2(110, 0))) {
+            const auto result = m_sceneManager->Save(registry);
+            SetStatus(result.message, !result.ok);
+            if (result.ok) {
+                performGuarded(registry, window);
+            } else {
+                m_pendingGuarded = GuardedAction::None;
+                m_pendingGuardedPath.clear();
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Discard", ImVec2(110, 0))) {
+            performGuarded(registry, window);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(110, 0))) {
+            m_pendingGuarded = GuardedAction::None;
+            m_pendingGuardedPath.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     if (m_showSaveAs) {
         ImGui::OpenPopup("Save Scene As");
         m_showSaveAs = false;
@@ -1147,7 +1266,11 @@ void EditorLayer::handleUndoRedo(entt::registry& registry) {
         SUPERSONIC_PROFILE(UndoCommit);
         if (++m_framesSinceUndoCheck >= kFramesBetweenUndoChecks) {
             m_framesSinceUndoCheck = 0;
-            m_history.CommitIfChanged(registry);
+            // An edit the history saw is an edit the disk has not: this is
+            // what the star in the toolbar and the question before a reload
+            // are made of. SceneManager::MarkDirty had one caller, the asset
+            // import, and IsDirty had none.
+            if (m_history.CommitIfChanged(registry) && m_sceneManager) m_sceneManager->MarkDirty();
         }
     }
 }
@@ -1160,7 +1283,106 @@ void EditorLayer::afterHistoryJump(entt::registry& registry, const std::string& 
     if (selected != entt::null && !registry.valid(selected)) {
         m_hierarchyPanel.SetSelectedEntity(entt::null);
     }
+    // The scene is a step away from what it was, which may or may not be what
+    // the disk holds; dirty is the honest answer.
+    if (m_sceneManager) m_sceneManager->MarkDirty();
     SetStatus(what);
+}
+
+void EditorLayer::requestGuarded(entt::registry& registry, Window& window, GuardedAction action,
+                                 const std::string& path) {
+    m_pendingGuarded = action;
+    m_pendingGuardedPath = path;
+    if (m_sceneManager && m_sceneManager->IsDirty()) {
+        // Asked, not assumed: the popup is drawn by BuildUI and performs the
+        // action, or drops it, on the answer.
+        m_openUnsavedPopup = true;
+        return;
+    }
+    performGuarded(registry, window);
+}
+
+void EditorLayer::performGuarded(entt::registry& registry, Window& window) {
+    const GuardedAction action = m_pendingGuarded;
+    const std::string path = m_pendingGuardedPath;
+    m_pendingGuarded = GuardedAction::None;
+    m_pendingGuardedPath.clear();
+    (void)registry;
+
+    switch (action) {
+    case GuardedAction::NewScene:
+        m_sceneManager->RequestNew();
+        break;
+    case GuardedAction::Reload:
+        // Deferred: this runs inside BuildUI, while panels are iterating views
+        // over the registry a load would clear and refill.
+        m_sceneManager->RequestLoad(m_sceneManager->CurrentPath());
+        break;
+    case GuardedAction::Load:
+        m_sceneManager->RequestLoad(path);
+        break;
+    case GuardedAction::Exit:
+#if SUPERSONIC_WINDOW_GLFW
+        glfwSetWindowShouldClose(window.GetNativeWindow(), GLFW_TRUE);
+#else
+        // The editor never runs on a borrowed window (WindowBackend.hpp);
+        // this keeps the file compiling there.
+        (void)window;
+#endif
+        break;
+    case GuardedAction::None:
+        break;
+    }
+}
+
+void EditorLayer::focusSelected(entt::registry& registry, entt::entity selected) {
+    // The middle of what the entity draws, at a distance its size suggests;
+    // its origin, from five metres, when it draws nothing.
+    const glm::mat4 world = TransformSystem::GetWorldMatrix(registry, selected);
+    glm::vec3 target(world[3]);
+    float distance = 5.0f;
+    if (const auto* renderable = registry.try_get<RenderableComponent>(selected)) {
+        glm::vec3 worldMin(0.0f);
+        glm::vec3 worldMax(0.0f);
+        Frustum::TransformAABB(world, renderable->localBoundsMin, renderable->localBoundsMax,
+                               worldMin, worldMax);
+        const glm::vec3 size = worldMax - worldMin;
+        const float extent = glm::length(size);
+        if (std::isfinite(extent) && extent > 0.0f) {
+            target = (worldMin + worldMax) * 0.5f;
+            distance = std::max(1.0f, extent * 1.25f);
+        }
+    }
+    if (!std::isfinite(target.x) || !std::isfinite(target.y) || !std::isfinite(target.z)) return;
+    m_editorCamera.FocusOn(target, distance);
+}
+
+entt::entity EditorLayer::duplicateEntity(entt::registry& registry, entt::entity source) {
+    // Through the codec, so the copy carries every component the original
+    // does - the same argument that moved prefabs off a hand-written list.
+    // The codec writes no parent link; the copy is parented beside the
+    // original by hand, with the same local transform, so it sits exactly
+    // where the original does.
+    std::ostringstream out;
+    out << "{\n";
+    ComponentCodec::Write(registry, source, out, "  ");
+    out << "}\n";
+
+    Json::Value node;
+    std::string error;
+    if (!Json::Parse(out.str(), node, error)) {
+        SetStatus("Could not duplicate: " + error, true);
+        return entt::null;
+    }
+
+    const entt::entity copy = registry.create();
+    ComponentCodec::Read(registry, copy, node);
+    if (const auto* hierarchy = registry.try_get<HierarchyComponent>(source);
+        hierarchy && hierarchy->parent != entt::null && registry.valid(hierarchy->parent)) {
+        registry.emplace<HierarchyComponent>(copy, hierarchy->parent);
+    }
+    if (auto* tag = registry.try_get<TagComponent>(copy)) tag->tag += " Copy";
+    return copy;
 }
 
 } // namespace Supersonic

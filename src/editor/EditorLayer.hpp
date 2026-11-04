@@ -137,6 +137,29 @@ private:
     // holding is stale.
     void afterHistoryJump(entt::registry& registry, const std::string& what);
 
+    // Actions that throw away unsaved edits - a new scene, a reload, a load, an
+    // exit - go through requestGuarded, which performs them at once while the
+    // scene is saved and otherwise asks Save / Discard / Cancel first. Exit
+    // through the window's own close button is not guarded: the window does
+    // not ask the editor.
+    enum class GuardedAction { None, NewScene, Reload, Load, Exit };
+    void requestGuarded(entt::registry& registry, Window& window, GuardedAction action,
+                        const std::string& path = std::string());
+    void performGuarded(entt::registry& registry, Window& window);
+    GuardedAction m_pendingGuarded{GuardedAction::None};
+    std::string m_pendingGuardedPath;
+    bool m_openUnsavedPopup{false};
+
+    // F frames the selection; Ctrl+D copies it beside itself.
+    void focusSelected(entt::registry& registry, entt::entity selected);
+    entt::entity duplicateEntity(entt::registry& registry, entt::entity source);
+
+    // What Play started from, so Stop puts the editor back on that file even
+    // when a tick switched scenes in between: the registry Stop restores is
+    // that file's, and a Ctrl+S afterwards wrote it over the other level.
+    std::string m_scenePathAtPlay;
+    bool m_dirtyAtPlay{false};
+
     // Must be called right after DockSpace(), before any panel is submitted.
     void buildLayout(unsigned int dockspaceId, int preset);
 

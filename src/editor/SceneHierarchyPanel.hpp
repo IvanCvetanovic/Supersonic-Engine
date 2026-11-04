@@ -38,12 +38,26 @@ public:
     entt::entity ConsumePrefabSaveRequest();
     void SetSelectedEntity(entt::entity entity) { m_selectedEntity = entity; }
 
+    // Deletes the entity at the end of the next render, the same deferred way
+    // the row's context menu does: never during a walk over the registry.
+    // How the Delete key reaches the panel.
+    void RequestDelete(entt::entity entity) { m_pendingDelete = entity; }
+
 private:
     // Draws an entity and, recursively, its children. Returns true if the
     // entity was deleted, so the caller can stop touching it.
     bool drawEntityNode(entt::entity entity);
 
     void drawCreateMenu();
+
+    // The flat list the search box replaces the tree with.
+    void drawSearchResults();
+
+    // The search box above the tree. While it holds text the tree is replaced
+    // by a flat list of the entities whose name matches, because finding one
+    // entity in a scene of hundreds by unfolding parents is how a scene of
+    // hundreds stops being edited.
+    ImGuiTextFilter m_filter;
 
     // Who is whose child, rebuilt once per frame.
     //

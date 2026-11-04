@@ -1,4 +1,7 @@
 #include "editor/SceneHierarchyPanel.hpp"
+
+#include <cfloat>
+#include <cstdio>
 #include "editor/EditorIcons.hpp"
 #include "core/Components.hpp"
 #include "core/TransformSystem.hpp"
@@ -47,13 +50,29 @@ void SceneHierarchyPanel::OnImGuiRender() {
     ImGui::Begin("Scene Hierarchy");
 
     if (m_registry) {
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        m_filter.Draw("##search");
+        if (!m_filter.IsActive() && !ImGui::IsItemActive()) {
+            // A hint in the empty box, drawn over it, so the box says what it is
+            // for without a label taking a row of its own.
+            const ImVec2 min = ImGui::GetItemRectMin();
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(min.x + 6.0f, min.y + 3.0f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                "Search entities");
+        }
+        ImGui::Spacing();
+
         // One pass over the scene answers both questions: which entities are
         // roots, and which entities each parent owns. The walk below then looks
         // its children up instead of searching the whole pool for them.
         BuildIndex(*m_registry, m_children, m_roots);
 
-        for (const auto entity : m_roots) {
-            drawEntityNode(entity);
+        if (m_filter.IsActive()) {
+            drawSearchResults();
+        } else {
+            for (const auto entity : m_roots) {
+                drawEntityNode(entity);
+            }
         }
 
         // Dropping onto empty space detaches to the root.
@@ -246,6 +265,35 @@ bool SceneHierarchyPanel::drawEntityNode(entt::entity entity) {
     }
 
     return deleted;
+}
+
+void SceneHierarchyPanel::drawSearchResults() {
+    auto& registry = *m_registry;
+    size_t shown = 0;
+    for (const auto entity : registry.view<entt::entity>()) {
+        char fallback[32];
+        const char* name = nullptr;
+        if (const auto* tag = registry.try_get<TagComponent>(entity); tag && !tag->tag.empty()) {
+            name = tag->tag.c_str();
+        } else {
+            std::snprintf(fallback, sizeof(fallback), "Entity %u", static_cast<uint32_t>(entity));
+            name = fallback;
+        }
+        if (!m_filter.PassFilter(name)) continue;
+        ++shown;
+
+        ImGui::PushID(static_cast<int>(entt::to_integral(entity)));
+        char row[320];
+        std::snprintf(row, sizeof(row), "%s  %s", iconForEntity(registry, entity), name);
+        if (ImGui::Selectable(row, m_selectedEntity == entity)) m_selectedEntity = entity;
+        if (ImGui::BeginPopupContextItem()) {
+            if (ImGui::MenuItem("Delete Entity")) m_pendingDelete = entity;
+            if (ImGui::MenuItem("Save as Prefab")) m_pendingPrefabSave = entity;
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+    }
+    if (shown == 0) ImGui::TextDisabled("Nothing matches.");
 }
 
 void SceneHierarchyPanel::drawCreateMenu() {

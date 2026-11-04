@@ -263,6 +263,13 @@ void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity select
         ImGui::PushID(static_cast<int>(entt::to_integral(selectedEntity)));
         drawComponents(registry, selectedEntity);
         ImGui::PopID();
+
+        // After the draw, never during it: see removableHeader.
+        if (m_pendingRemoval) {
+            std::function<void()> removal = std::move(m_pendingRemoval);
+            m_pendingRemoval = nullptr;
+            removal();
+        }
     } else {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 20.0f);
         ImGui::TextDisabled("  Select an entity from the Scene Hierarchy to inspect.");
@@ -295,6 +302,28 @@ bool drawAnchorCombo(const char* label, UIAnchor& anchor) {
 }
 
 } // namespace
+
+// A component's header, with "Remove Component" on its context menu.
+//
+// Components could be added and never removed: a RigidBody put on the wrong
+// entity, a camera on a prop, a light on a wall could only be undone by deleting
+// the entity and building it again. The removal is queued (m_pendingRemoval)
+// and applied after the draw, because the draw holds references into the pool
+// a removal compacts. Transform and Tag have no such menu: everything else on
+// the entity is placed by the one and named by the other.
+template <typename Component>
+bool InspectorPanel::removableHeader(const char* label, entt::registry& registry, entt::entity entity) {
+    const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+    if (ImGui::BeginPopupContextItem()) {
+        if (ImGui::MenuItem("Remove Component")) {
+            m_pendingRemoval = [&registry, entity]() {
+                if (registry.valid(entity)) registry.remove<Component>(entity);
+            };
+        }
+        ImGui::EndPopup();
+    }
+    return open;
+}
 
 void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entity) {
     // 1. TagComponent
@@ -354,7 +383,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 2b. MeshComponent - now actually drives which geometry is drawn.
     if (registry.all_of<MeshComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<MeshComponent>("Mesh", registry, entity)) {
             auto& mesh = registry.get<MeshComponent>(entity);
 
             static const char* kPrimitives[] = { "Cube", "Box", "Sphere", "Plane", "Terrain" };
@@ -416,7 +445,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
     // what it casts - a blended surface opts back in with a cutoff, but a solid
     // one had no way to opt out at all.
     if (registry.all_of<RenderableComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Renderable", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<RenderableComponent>("Renderable", registry, entity)) {
             auto& renderable = registry.get<RenderableComponent>(entity);
 
             ImGui::Checkbox("Visible##renderable", &renderable.isVisible);
@@ -460,7 +489,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 2c. MaterialComponent - reaches the GPU via push constants.
     if (registry.all_of<MaterialComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<MaterialComponent>("Material", registry, entity)) {
             auto& material = registry.get<MaterialComponent>(entity);
 
             // A linked entity edits the SHARED asset, so the change lands on
@@ -693,7 +722,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 3. RigidBodyComponent
     if (registry.all_of<RigidBodyComponent>(entity)) {
-        if (ImGui::CollapsingHeader("RigidBody Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<RigidBodyComponent>("RigidBody Physics", registry, entity)) {
             auto& rb = registry.get<RigidBodyComponent>(entity);
 
             ImGui::Checkbox("Use Gravity", &rb.useGravity);
@@ -743,7 +772,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 3b. PhysicsMaterialComponent - the surface of a collider with no rigid body.
     if (registry.all_of<PhysicsMaterialComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Physics Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<PhysicsMaterialComponent>("Physics Material", registry, entity)) {
             auto& surface = registry.get<PhysicsMaterialComponent>(entity);
             ImGui::SliderFloat("Restitution##Surface", &surface.restitution, 0.0f, 0.99f);
             ImGui::SliderFloat("Friction##Surface", &surface.friction, 0.0f, 2.0f);
@@ -759,7 +788,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 4. BoxColliderComponent
     if (registry.all_of<BoxColliderComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Box Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<BoxColliderComponent>("Box Collider", registry, entity)) {
             auto& box = registry.get<BoxColliderComponent>(entity);
 
             Theme::DrawVec3Control("Size", box.size, 1.0f);
@@ -776,7 +805,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
     // The component, its narrowphase and its serialization all existed; there
     // was simply no way to see or add one from the editor.
     if (registry.all_of<SphereColliderComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Sphere Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<SphereColliderComponent>("Sphere Collider", registry, entity)) {
             auto& sphere = registry.get<SphereColliderComponent>(entity);
             ImGui::DragFloat("Radius", &sphere.radius, 0.01f, 0.01f, 100.0f);
             Theme::DrawVec3Control("Center##sphere", sphere.center, 0.0f);
@@ -789,7 +818,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 4c. CapsuleColliderComponent
     if (registry.all_of<CapsuleColliderComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Capsule Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<CapsuleColliderComponent>("Capsule Collider", registry, entity)) {
             auto& capsule = registry.get<CapsuleColliderComponent>(entity);
             ImGui::DragFloat("Radius##capsule", &capsule.radius, 0.01f, 0.01f, 100.0f);
             ImGui::DragFloat("Height##capsule", &capsule.height, 0.01f, 0.01f, 100.0f);
@@ -809,7 +838,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 4c-ii. ConvexHullColliderComponent
     if (registry.all_of<ConvexHullColliderComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Convex Hull Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<ConvexHullColliderComponent>("Convex Hull Collider", registry, entity)) {
             auto& hull = registry.get<ConvexHullColliderComponent>(entity);
 
             const bool followsMesh = hull.sourcePath.empty() && hull.sourcePrimitive.empty();
@@ -887,7 +916,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 4d. HeightfieldColliderComponent
     if (registry.all_of<HeightfieldColliderComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Heightfield Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<HeightfieldColliderComponent>("Heightfield Collider", registry, entity)) {
             auto& terrain = registry.get<HeightfieldColliderComponent>(entity);
 
             int width = static_cast<int>(terrain.width);
@@ -932,7 +961,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 4e. JointComponent
     if (registry.all_of<JointComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Joint", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<JointComponent>("Joint", registry, entity)) {
             auto& joint = registry.get<JointComponent>(entity);
 
             static const char* kTypes[] = { "Point", "Distance", "Hinge", "Weld" };
@@ -1074,7 +1103,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 5. AudioSourceComponent
     if (registry.all_of<AudioSourceComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<AudioSourceComponent>("Audio Source", registry, entity)) {
             auto& audio = registry.get<AudioSourceComponent>(entity);
 
             ImGui::Checkbox("Playing", &audio.isPlaying);
@@ -1103,7 +1132,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 6. ScriptComponent
     if (registry.all_of<ScriptComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Script Component", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<ScriptComponent>("Script Component", registry, entity)) {
             auto& script = registry.get<ScriptComponent>(entity);
 
             ImGui::Checkbox("Enabled", &script.isEnabled);
@@ -1193,7 +1222,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 7. ParticleEmitterComponent
     if (registry.all_of<ParticleEmitterComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Particle Emitter", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<ParticleEmitterComponent>("Particle Emitter", registry, entity)) {
             auto& emitter = registry.get<ParticleEmitterComponent>(entity);
 
             ImGui::DragFloat("Emit Rate", &emitter.emitRate, 1.0f, 1.0f, 100.0f);
@@ -1207,7 +1236,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 7b. SpriteAnimationComponent
     if (registry.all_of<SpriteAnimationComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Sprite Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<SpriteAnimationComponent>("Sprite Animation", registry, entity)) {
             auto& sprite = registry.get<SpriteAnimationComponent>(entity);
 
             int columns = static_cast<int>(sprite.columns);
@@ -1250,7 +1279,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 7c. TilemapComponent
     if (registry.all_of<TilemapComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Tilemap", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<TilemapComponent>("Tilemap", registry, entity)) {
             auto& tilemap = registry.get<TilemapComponent>(entity);
 
             ImGui::TextDisabled("Atlas");
@@ -1336,7 +1365,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 8. LightComponent
     if (registry.all_of<LightComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<LightComponent>("Light", registry, entity)) {
             auto& light = registry.get<LightComponent>(entity);
 
             static const char* kTypes[] = { "Directional", "Point", "Spot" };
@@ -1389,7 +1418,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 8a. ReflectionProbeComponent
     if (registry.all_of<ReflectionProbeComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Reflection Probe", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<ReflectionProbeComponent>("Reflection Probe", registry, entity)) {
             auto& probe = registry.get<ReflectionProbeComponent>(entity);
 
             ImGui::DragFloat3("Half Extent##probe", glm::value_ptr(probe.halfExtent), 0.1f,
@@ -1419,7 +1448,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 8b. AnimatorComponent
     if (registry.all_of<AnimatorComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Animator", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<AnimatorComponent>("Animator", registry, entity)) {
             auto& animator = registry.get<AnimatorComponent>(entity);
 
             // The clip used to be typed. An exporter decides what a clip is
@@ -1512,7 +1541,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 9. CameraComponent
     if (registry.all_of<CameraComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Camera Component", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<CameraComponent>("Camera Component", registry, entity)) {
             auto& camera = registry.get<CameraComponent>(entity);
 
             // THE PROJECTION, which nothing in the editor could set.
@@ -1587,7 +1616,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // UITextComponent
     if (registry.all_of<UITextComponent>(entity)) {
-        if (ImGui::CollapsingHeader("HUD Text", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<UITextComponent>("HUD Text", registry, entity)) {
             auto& text = registry.get<UITextComponent>(entity);
 
             // Fixed buffer with an explicit copy back, matching how the tag
@@ -1626,7 +1655,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // UIPanelComponent
     if (registry.all_of<UIPanelComponent>(entity)) {
-        if (ImGui::CollapsingHeader("HUD Panel", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<UIPanelComponent>("HUD Panel", registry, entity)) {
             auto& panel = registry.get<UIPanelComponent>(entity);
 
             drawAnchorCombo("Anchor##panel", panel.anchor);
@@ -1671,7 +1700,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // UIShapeComponent
     if (registry.all_of<UIShapeComponent>(entity)) {
-        if (ImGui::CollapsingHeader("HUD Shape", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<UIShapeComponent>("HUD Shape", registry, entity)) {
             auto& shape = registry.get<UIShapeComponent>(entity);
 
             const char* kinds[] = { "Ring", "Disc", "Line" };
@@ -1713,7 +1742,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // UIStackComponent
     if (registry.all_of<UIStackComponent>(entity)) {
-        if (ImGui::CollapsingHeader("HUD Stack", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<UIStackComponent>("HUD Stack", registry, entity)) {
             auto& stack = registry.get<UIStackComponent>(entity);
 
             ImGui::Checkbox("Horizontal", &stack.horizontal);
@@ -1732,7 +1761,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // UIOrderComponent
     if (registry.all_of<UIOrderComponent>(entity)) {
-        if (ImGui::CollapsingHeader("HUD Order", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<UIOrderComponent>("HUD Order", registry, entity)) {
             auto& ordering = registry.get<UIOrderComponent>(entity);
 
             ImGui::DragInt("Order", &ordering.order, 0.2f, -1000, 1000);
@@ -1749,7 +1778,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // UIButtonComponent
     if (registry.all_of<UIButtonComponent>(entity)) {
-        if (ImGui::CollapsingHeader("HUD Button", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<UIButtonComponent>("HUD Button", registry, entity)) {
             auto& button = registry.get<UIButtonComponent>(entity);
 
             char buffer[128];
@@ -1784,7 +1813,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // UITextFieldComponent
     if (registry.all_of<UITextFieldComponent>(entity)) {
-        if (ImGui::CollapsingHeader("HUD Text Field", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (removableHeader<UITextFieldComponent>("HUD Text Field", registry, entity)) {
             auto& field = registry.get<UITextFieldComponent>(entity);
 
             char buffer[256];

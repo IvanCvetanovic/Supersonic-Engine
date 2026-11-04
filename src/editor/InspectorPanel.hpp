@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <entt/entt.hpp>
 #include "imgui.h"
 #include "ImGuizmo.h"
@@ -65,6 +67,14 @@ private:
     AnimationLibrary* m_animationLibrary{nullptr};
 
     void drawComponents(entt::registry& registry, entt::entity entity);
+
+    template <typename Component>
+    bool removableHeader(const char* label, entt::registry& registry, entt::entity entity);
+
+    // A removal asked for from a component header's context menu, applied
+    // after the draw that asked for it: the draw holds references into the
+    // pool the removal would compact.
+    std::function<void()> m_pendingRemoval;
 
     // Scene-level physics, drawn where the inspector would otherwise be
     // empty: it belongs to no entity, so there is nothing to select to

@@ -53,7 +53,14 @@ bool EditHistory::Undo(entt::registry& registry) {
     Snapshot target = std::move(m_undo.back());
     m_undo.pop_back();
 
-    if (!restore(registry, target)) return false;
+    // A restore that fails - a snapshot a component's reader refuses, which a
+    // game's own codec can produce - used to pop the step and return false,
+    // so the step was gone and the scene unchanged: the one combination that
+    // cannot be retried. The step goes back where it was.
+    if (!restore(registry, target)) {
+        m_undo.push_back(std::move(target));
+        return false;
+    }
 
     m_redo.push_back(std::move(m_current));
     if (m_redo.size() > kMaxDepth) m_redo.pop_front();
@@ -72,7 +79,10 @@ bool EditHistory::Redo(entt::registry& registry) {
     Snapshot target = std::move(m_redo.back());
     m_redo.pop_back();
 
-    if (!restore(registry, target)) return false;
+    if (!restore(registry, target)) {
+        m_redo.push_back(std::move(target));
+        return false;
+    }
 
     m_undo.push_back(std::move(m_current));
     if (m_undo.size() > kMaxDepth) m_undo.pop_front();

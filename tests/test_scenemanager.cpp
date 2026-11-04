@@ -11,6 +11,7 @@
 // build, while panels are iterating views over that registry.
 
 #include "TestHarness.hpp"
+#include "core/PhysicsSettings.hpp"
 #include "core/SceneManager.hpp"
 #include "core/Components.hpp"
 
@@ -148,6 +149,15 @@ static void testNewSceneEmptiesAndResets() {
     makeTagged(registry, "A");
     makeTagged(registry, "B");
 
+    // World settings the previous scene left in the context. A new scene used
+    // to keep them - a cleared registry keeps its context - and save them as
+    // its own, so every scene made from the menu inherited the last one's
+    // gravity and ground plane.
+    PhysicsSettings previous;
+    previous.hasGroundPlane = true;
+    previous.gravity = glm::vec3(0.0f, -1.0f, 0.0f);
+    registry.ctx().insert_or_assign<PhysicsSettings>(std::move(previous));
+
     SceneManager scenes;
     scenes.MarkDirty();
     scenes.RequestNew();
@@ -159,6 +169,12 @@ static void testNewSceneEmptiesAndResets() {
     CHECK(result.ok);
     CHECK_EQ(countEntities(registry), size_t{0});
     CHECK(!scenes.IsDirty());
+
+    const PhysicsSettings defaults;
+    const auto* settings = registry.ctx().find<PhysicsSettings>();
+    CHECK_MSG(settings != nullptr && settings->hasGroundPlane == defaults.hasGroundPlane &&
+                  settings->gravity == defaults.gravity,
+              "a new scene starts from the default world settings, not the last scene's");
 }
 
 static void testApplyPendingIsANoOpWhenNothingIsQueued() {
