@@ -102,15 +102,15 @@ code quietly contradicts.
 | | |
 |---|---|
 | **Dockable layout** | ImGui docking with saved layout presets |
-| **Hierarchy** | Full transform parenting via drag-and-drop, with cached world matrices |
-| **Inspector** | Every component editable, with a dynamic *Add Component* menu |
+| **Hierarchy** | Full transform parenting via drag-and-drop, with cached world matrices; a search box that finds an entity by name in a scene of hundreds; `Delete` deletes the selection and `Ctrl+D` duplicates it, every component included, beside the original |
+| **Inspector** | Every component editable, with a dynamic *Add Component* menu and *Remove Component* on each header's context menu |
 | **Gizmos** | ImGuizmo translate / rotate / scale, `W` `E` `R` |
 | **Selection** | Viewport raycast picking against real mesh bounds, not an assumed unit cube |
-| **Play / Pause / Stop / Step** | Snapshots the scene on Play and restores it on Stop, so a scene can be authored, tried, and got back |
-| **Undo / redo** | 64 steps over the scene serializer — `Ctrl+Z`, `Ctrl+Y` |
+| **Play / Pause / Stop / Step** | Snapshots the scene on Play and restores it on Stop, so a scene can be authored, tried, and got back. Save, Reload and New wait for Stop, so the simulation cannot be written over the authored file - and Stop puts the editor back on the file Play started from, whatever a script loaded in between |
+| **Undo / redo** | 64 steps over the scene serializer — `Ctrl+Z`, `Ctrl+Y`. Unsaved edits are starred in the toolbar and asked about (Save / Discard / Cancel) before a reload, a new scene, a scene opened from the browser, or Exit |
 | **Animator** | Clip, speed, loop and a scrubbable time slider — poses evaluate every frame, so scrubbing shows the result immediately |
 | **Time-travel rewind** | Scrub backwards through recorded simulation frames |
-| **Fly camera** | The viewport has its own camera, so framing a shot in the editor does not move the game's |
+| **Fly camera** | The viewport has its own camera, so framing a shot in the editor does not move the game's; `F` frames the selection |
 | **Statistics** | Per-frame CPU zone timings, a frame-time graph plotted from the raw delta so a hitch is actually visible, entity count, draw/cull counts per pass, contact count, worker threads, script-host state |
 | **Console** | Levelled, categorised engine log with substring filtering, mirrored to a file beside the binary |
 | **Interface** | Inter and Font Awesome embedded in the binary, an accent palette from the engine's own branding, image thumbnails in the browser, a floating viewport HUD, and DPI scaling from the monitor |
