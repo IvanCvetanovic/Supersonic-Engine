@@ -309,6 +309,56 @@ static void testANonNumberSampleDoesNotReachTheOutput() {
     CHECK_MSG(pcm[0] == 0, "a NaN sample is silent in the integer output too");
 }
 
+static void testANonNumberParameterDoesNotPoisonTheVoice() {
+    // A game computes a voice's volume from a distance and its pitch from a
+    // speed, and either is NaN on the frame something upstream divided by zero.
+    // std::clamp(NaN, lo, hi) is NaN, so a NaN volume made the bus NaN - which
+    // the output clamp turns into silence for EVERY voice - and a NaN pitch
+    // made the cursor NaN, which never reaches the end of the clip (the voice
+    // leaks) and is cast to size_t on every sample, which is undefined. A
+    // number that is not one is replaced: silence for a volume, the authored
+    // rate for a pitch, the centre for a pan.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const AudioClip clip = constantClip(50, 0.5f);
+
+    // A NaN volume is that voice silent, and nobody else.
+    {
+        AudioMixer mixer(48000, 1);
+        CHECK(mixer.Add(clip, false, nan, 1.0f) != AudioMixer::kInvalidVoice);
+        mixer.Add(clip, false, 1.0f, 1.0f);
+        std::vector<float> out(50, 0.0f);
+        mixer.Mix(out.data(), 50);
+        CHECK_MSG(std::isfinite(out[0]) && test::nearly(out[0], 0.5f, 1e-3f),
+                  "the healthy voice is heard at its own volume");
+    }
+
+    // A NaN pitch plays at the authored rate, and finishes.
+    {
+        AudioMixer mixer(48000, 1);
+        const auto voice = mixer.Add(clip, false, 1.0f, nan);
+        CHECK(voice != AudioMixer::kInvalidVoice);
+        std::vector<float> out(100, 0.0f);
+        mixer.Mix(out.data(), 100);
+        bool allFinite = true;
+        for (const float v : out) allFinite = allFinite && std::isfinite(v);
+        CHECK(allFinite);
+        CHECK_MSG(!mixer.IsPlaying(voice), "fifty frames at the authored rate are over after a hundred");
+    }
+
+    // And through SetParameters, the pan included.
+    {
+        AudioMixer mixer(48000, 2);
+        const auto voice = mixer.Add(clip, true, 1.0f, 1.0f);
+        mixer.SetParameters(voice, nan, nan, nan);
+        std::vector<float> out(40, 0.0f);
+        mixer.Mix(out.data(), 20);
+        bool allFinite = true;
+        for (const float v : out) allFinite = allFinite && std::isfinite(v);
+        CHECK(allFinite);
+        CHECK_MSG(mixer.IsPlaying(voice), "a looping voice is still playing");
+    }
+}
+
 static void runTests() {
     testSilenceWithNoVoices();
     testASingleVoiceReachesTheOutput();
@@ -325,6 +375,7 @@ static void runTests() {
     testEightBitClipsAreUnsigned();
     testEmptyClipIsRejected();
     testANonNumberSampleDoesNotReachTheOutput();
+    testANonNumberParameterDoesNotPoisonTheVoice();
 }
 
 TEST_MAIN("test_mixer", 190)

@@ -748,6 +748,14 @@ void SupersonicApp::applyPendingSceneLoad() {
 
     if (result.ok) {
         SUPERSONIC_LOG_INFO("SupersonicApp") << result.message;
+
+        // What was touching in the level just left is not touching in this
+        // one. Play clears the tracker (below) and a load did not, so the first
+        // tick of a new level began by reporting Exit for every pair of the old
+        // one - to handles the clear had retired, which is why no script ever
+        // saw them. Said here so the next reader of the tracker does not have
+        // to work out that the stale events were invisible by luck.
+        m_contactTracker.Clear();
     } else {
         // A failed load leaves the previous scene open - Deserialize parses
         // before it touches the registry - so this is a report, not a crash.

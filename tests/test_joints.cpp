@@ -646,6 +646,50 @@ void testAWeldBetweenTwoUnturnableBodiesIsNotANaN() {
     CHECK(nearlyVec(a.angularVelocity, glm::vec3(0.0f)));
 }
 
+// --- heavy bodies -----------------------------------------------------------
+
+void testAHeavyBodyIsStillHeldByItsJoint() {
+    // The effective mass of a point joint is inverted outright, so it is
+    // checked for being invertible first - and the check was an absolute floor
+    // of 1e-8 on the determinant. The determinant of a 3x3 scales with the CUBE
+    // of the inverse masses, so for a body hung from the world at its own
+    // centre, where the matrix is imB down the diagonal, the floor was reached
+    // at 464 kg. Above that the solve returned quietly and the joint did
+    // nothing: a boulder on a chain fell off it, a vehicle on a hinge drove
+    // away, and no log line said so.
+    //
+    // One tonne, one metre below an anchor that cannot move. The determinant is
+    // 4e-9 - under the old floor, and a perfectly conditioned matrix.
+    Joints::Body anchor = immovable(glm::vec3(0.0f));
+    Joints::Body heavy = freeBody(glm::vec3(0.0f, -1.0f, 0.0f), 1000.0f, 1000.0f);
+    heavy.velocity = glm::vec3(1.0f, -2.0f, 0.0f);
+
+    Joints::Constraint joint = pointJoint(glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    Joints::SolveVelocity(joint, anchor, heavy);
+
+    CHECK_MSG(nearlyVec(anchorVelocityOf(heavy, joint.armB), glm::vec3(0.0f), 1e-4f),
+              "one pass holds the anchor still, as it does for a one-kilogram body");
+    CHECK(finiteVec(heavy.velocity) && finiteVec(heavy.angularVelocity));
+}
+
+void testAHeavyWeldStillLocksRotation() {
+    // The same floor through the angular lock: the summed inverse inertia of a
+    // tonne welded to the world has a determinant of 1e-9.
+    Joints::Body anchor = immovable(glm::vec3(0.0f));
+    Joints::Body heavy = freeBody(glm::vec3(1.0f, 0.0f, 0.0f), 1000.0f, 1000.0f);
+    heavy.angularVelocity = glm::vec3(0.0f, 0.0f, 1.0f);
+
+    Joints::Constraint joint;
+    joint.type = Joints::Type::Weld;
+    joint.armA = glm::vec3(0.5f, 0.0f, 0.0f);
+    joint.armB = glm::vec3(-0.5f, 0.0f, 0.0f);
+    for (int pass = 0; pass < 8; ++pass) Joints::SolveVelocity(joint, anchor, heavy);
+
+    CHECK_MSG(nearlyVec(heavy.angularVelocity, glm::vec3(0.0f), 1e-4f),
+              "welded to the world, a tonne does not turn");
+    CHECK(finiteVec(heavy.velocity) && finiteVec(heavy.angularVelocity));
+}
+
 // --- what a joint applied, which is what breaks it --------------------------
 
 void testAJointRecordsWhatItApplied() {
@@ -696,6 +740,8 @@ void runTests() {
     testAMotorsTorqueCapIsWhatStopsItGoingThroughWalls();
     testAWeldHoldsBothBodiesStillRelativeToEachOther();
     testAWeldBetweenTwoUnturnableBodiesIsNotANaN();
+    testAHeavyBodyIsStillHeldByItsJoint();
+    testAHeavyWeldStillLocksRotation();
     testAJointRecordsWhatItApplied();
 }
 

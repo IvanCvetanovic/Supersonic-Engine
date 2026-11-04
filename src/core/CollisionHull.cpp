@@ -1,4 +1,5 @@
 #include "core/CollisionHull.hpp"
+#include "core/FloatOrdering.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -379,10 +380,20 @@ CollisionSAT::Manifold CollideHullHull(const Instance& a, const Instance& b,
     // The deepest four. A clipped face can produce more, and the solver takes
     // four - so which four it gets should be the ones holding the shapes apart
     // rather than the ones the loop reached first.
-    std::sort(candidates, candidates + candidateCount,
-              [](const Candidate& left, const Candidate& right) {
-                  return left.penetration > right.penetration;
-              });
+    //
+    // A STABLE sort, because ties are the normal case - a face resting flat
+    // gives every point the same depth - and which of the tied points are kept,
+    // and in what order the solver then applies them, is simulation state.
+    // std::sort leaves the order of equal elements to the implementation:
+    // libstdc++ partitions above sixteen elements, MSVC above thirty-two, so a
+    // manifold with more candidates than that came out one way on Windows and
+    // another on Linux. The two already agreed below those counts, because both
+    // fall back to an insertion sort there, and still do. NaN depths last, so
+    // the comparison stays an ordering with one in the data.
+    std::stable_sort(candidates, candidates + candidateCount,
+                     [](const Candidate& left, const Candidate& right) {
+                         return DescendingNaNLast(left.penetration, right.penetration);
+                     });
 
     manifold.pointCount = std::min(candidateCount, CollisionSAT::kMaxContactPoints);
     for (int i = 0; i < manifold.pointCount; ++i) {

@@ -11,6 +11,21 @@ namespace {
 
 constexpr float kEpsilon = 1.0e-8f;
 
+// How small a determinant may be, RELATIVE to the matrix it came from, and
+// still be the determinant of a matrix that can be inverted.
+//
+// The effective mass of a joint scales with the inverse masses, so its
+// determinant scales with their cube (a 3x3) or their square (a 2x2). An
+// absolute floor is therefore a floor on the MASS: kEpsilon alone put it at
+// 464 kg for a body hung from the world at its own centre, where the matrix is
+// imB down the diagonal and the determinant is imB cubed. Above that the solve
+// returned without a word and the joint did nothing - a boulder fell off its
+// chain, a vehicle drove off its hinge - while the matrix itself was perfectly
+// conditioned. What an inverse cannot survive is a determinant small against
+// the entries, which is what this measures; float rounding leaves a genuinely
+// singular matrix at about 1e-7 of its scale, and this sits a decade above it.
+constexpr float kRelativeEpsilon = 1.0e-6f;
+
 // The inverse mass a body presents along a unit direction: all of it unless a
 // position lock takes some axes away. Branched, so an unlocked body sees exactly
 // the number it always did - the rule PhysicsSystem's contacts follow.
@@ -119,8 +134,29 @@ float axisSpeed(const Body& a, const Body& b, const glm::vec3& axis) {
 // It cannot when neither body can move - two static bodies bolted together,
 // which is a joint an author is entitled to build and which must cost nothing
 // rather than produce a matrix of infinities that then flows into a velocity.
+//
+// The absolute test first, and the relative one only when it fails, so every
+// joint that solved before this had two tests solves through the same branch
+// with the same bits; the relative test only ever admits more.
 bool invertible(const glm::mat3& matrix) {
-    return std::fabs(glm::determinant(matrix)) > kEpsilon;
+    const float determinant = std::fabs(glm::determinant(matrix));
+    if (determinant > kEpsilon) return true;
+    float scale = 0.0f;
+    for (int column = 0; column < 3; ++column) {
+        for (int row = 0; row < 3; ++row) {
+            scale = std::max(scale, std::fabs(matrix[column][row]));
+        }
+    }
+    return determinant > scale * scale * scale * kRelativeEpsilon;
+}
+
+// The same, for a 2x2 whose determinant the caller has already worked out.
+bool invertible2(const glm::mat2& matrix, float determinant) {
+    const float magnitude = std::fabs(determinant);
+    if (magnitude > kEpsilon) return true;
+    const float scale = std::max(std::max(std::fabs(matrix[0][0]), std::fabs(matrix[0][1])),
+                                 std::max(std::fabs(matrix[1][0]), std::fabs(matrix[1][1])));
+    return magnitude > scale * scale * kRelativeEpsilon;
 }
 
 void perpendicularBasis(const glm::vec3& axis, glm::vec3& outFirst, glm::vec3& outSecond) {
@@ -201,7 +237,7 @@ void solveAxisVelocity(Constraint& joint, Body& a, Body& b) {
                          glm::dot(rowFirst, inertiaSecond), glm::dot(rowSecond, inertiaSecond));
     const float determinant = mass[0][0] * mass[1][1] - mass[0][1] * mass[1][0];
     // Neither body can turn, so there is no misalignment anything could fix.
-    if (std::fabs(determinant) < kEpsilon) return;
+    if (!invertible2(mass, determinant)) return;
 
     const glm::vec3 relative = b.angularVelocity - a.angularVelocity;
 

@@ -83,10 +83,24 @@ float AudioMixer::sampleInterpolated(const AudioClip& clip, double cursor, uint1
     return a + (b - a) * t;
 }
 
+// A parameter that is not a number, replaced by one.
+//
+// A game computes a volume from a distance and a pitch from a speed, and either
+// is NaN on the frame something upstream divided by zero. std::clamp(NaN, lo,
+// hi) is NaN - both comparisons are false - so a NaN volume made the whole bus
+// NaN, which the output clamp turns into silence for EVERY voice, and a NaN
+// pitch made the cursor NaN: it never reaches the end of the clip, so the voice
+// leaks, and it is cast to size_t on every sample, which is undefined. The
+// fallbacks are the harmless reading of each: silence for a volume, as a NaN
+// sample already is; the authored rate for a pitch; the centre for a pan.
+float numberOr(float value, float fallback) {
+    return std::isfinite(value) ? value : fallback;
+}
+
 double AudioMixer::stepFor(const AudioClip& clip, float pitch) const {
     const double rateRatio = static_cast<double>(clip.sampleRate) /
                              static_cast<double>(m_outputSampleRate);
-    return rateRatio * static_cast<double>(std::clamp(pitch, kMinPitch, kMaxPitch));
+    return rateRatio * static_cast<double>(std::clamp(numberOr(pitch, 1.0f), kMinPitch, kMaxPitch));
 }
 
 AudioMixer::VoiceId AudioMixer::Add(const AudioClip& clip, bool loop, float volume, float pitch) {
@@ -96,7 +110,7 @@ AudioMixer::VoiceId AudioMixer::Add(const AudioClip& clip, bool loop, float volu
     voice.clip = &clip;
     voice.cursor = 0.0;
     voice.step = stepFor(clip, pitch);
-    voice.volume = std::clamp(volume, 0.0f, 1.0f);
+    voice.volume = std::clamp(numberOr(volume, 0.0f), 0.0f, 1.0f);
     voice.loop = loop;
 
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -115,8 +129,8 @@ void AudioMixer::SetParameters(VoiceId voice, float volume, float pitch, float p
     auto it = m_voices.find(voice);
     if (it == m_voices.end() || !it->second.clip) return;
 
-    it->second.volume = std::clamp(volume, 0.0f, 1.0f);
-    it->second.pan = std::clamp(pan, -1.0f, 1.0f);
+    it->second.volume = std::clamp(numberOr(volume, 0.0f), 0.0f, 1.0f);
+    it->second.pan = std::clamp(numberOr(pan, 0.0f), -1.0f, 1.0f);
     // Only the rate changes; the cursor stays where it is, so a pitch change
     // mid-playback bends the sound rather than restarting it.
     it->second.step = stepFor(*it->second.clip, pitch);

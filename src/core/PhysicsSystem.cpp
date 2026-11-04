@@ -457,11 +457,24 @@ void PhysicsSystem::SweepAndPrune(std::vector<Proxy>& proxies,
         return lhs.index < rhs.index;
     });
 
+    // Every bound test below is written as the NEGATION OF THE OVERLAP rather
+    // than as the separation - `!(b.min.x <= a.max.x)` where `b.min.x > a.max.x`
+    // reads more naturally. For any two numbers the two are the same test. For
+    // a NaN they are opposite answers, and the opposite answer is the right
+    // one: the separation test is false against NaN, so a proxy at NaN was "not
+    // separated" from anything. The sort puts the NaN proxies last, the scan
+    // never broke out of them, and every finite body whose scan reached the
+    // tail of the list was paired with each of them. A sphere pair then took
+    // the NaN reach as "not out of range" and reported a hit at any distance,
+    // and the solver applied a NaN impulse to the HEALTHY body - so one body a
+    // script had sent to NaN took its neighbours with it, a tick at a time. A
+    // proxy with a NaN bound on any axis now overlaps nothing, and for finite
+    // data the pair list is exactly what it was.
     for (size_t i = 0; i < proxies.size(); ++i) {
         const Proxy& a = proxies[i];
         for (size_t j = i + 1; j < proxies.size(); ++j) {
             const Proxy& b = proxies[j];
-            if (b.min.x > a.max.x) break;
+            if (!(b.min.x <= a.max.x)) break;
 
             // Two immovable things can overlap all they like.
             if (a.inverseMass == 0.0f && b.inverseMass == 0.0f) continue;
@@ -471,8 +484,8 @@ void PhysicsSystem::SweepAndPrune(std::vector<Proxy>& proxies,
             // an object that shoves things it is not touching.
             if ((a.collidesWith & b.layer) == 0 || (b.collidesWith & a.layer) == 0) continue;
 
-            if (a.max.y < b.min.y || b.max.y < a.min.y) continue;
-            if (a.max.z < b.min.z || b.max.z < a.min.z) continue;
+            if (!(a.max.y >= b.min.y) || !(b.max.y >= a.min.y)) continue;
+            if (!(a.max.z >= b.min.z) || !(b.max.z >= a.min.z)) continue;
 
             outPairs.emplace_back(i, j);
         }

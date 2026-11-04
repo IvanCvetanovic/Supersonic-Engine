@@ -1458,9 +1458,9 @@ static void testAProxyWithNoPositionDoesNotUnsortTheSweep() {
     PhysicsSystem::SweepAndPrune(proxies, pairs);
 
     // A pair's indices refer to the SORTED proxies, so map them back through
-    // Proxy::index. A NaN proxy is a candidate with its neighbours - every test
-    // against NaN is false, so it is "not separated" from anything - and that is
-    // harmless: the narrowphase decides. What matters is the finite bodies.
+    // Proxy::index. The NaN proxy's own pairs are the next test's business - it
+    // used to be paired with its neighbours, and that was not harmless - and
+    // what matters here is the finite bodies.
     bool foundAB = false;
     bool reportedAFalsePair = false;
     for (const auto& pair : pairs) {
@@ -1540,6 +1540,69 @@ static void testProxiesStartingAtTheSameXKeepAStatedOrder() {
                   "proxies sharing a min.x must come out in index order, not in whichever "
                   "order the standard library's sort happened to leave them");
     }
+}
+
+static void testAProxyWithNoPositionPairsWithNothing() {
+    // The test above kept the NaN proxy's own pairs out of its verdict because
+    // they were "harmless: the narrowphase decides". They were not. The sweep
+    // stops at `b.min.x > a.max.x`, which is false for a NaN, so once the scan
+    // reached the NaN proxies at the end of the sorted list it paired every
+    // finite body that got there with each of them - and the y and z rejects
+    // are false against NaN too. A sphere pair then took the NaN reach as "not
+    // out of range", reported a hit at any distance, and the solver applied a
+    // NaN impulse to the HEALTHY body. One body a script had sent to NaN took
+    // its neighbours with it, a tick at a time.
+    //
+    // A proxy with a NaN bound on any axis now overlaps nothing. The tests are
+    // written as the negation of the overlap rather than as the separation,
+    // which is the same comparison for every number and the opposite answer for
+    // NaN.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    std::vector<PhysicsSystem::Proxy> proxies;
+    proxies.push_back(makeProxy(1, 0, glm::vec3(0.0f), glm::vec3(1.0f), 1.0f));    // A
+    proxies.push_back(makeProxy(2, 1, glm::vec3(0.5f), glm::vec3(1.5f), 1.0f));    // B, overlaps A
+    proxies.push_back(makeProxy(3, 2, glm::vec3(nan), glm::vec3(nan), 1.0f));      // nowhere at all
+    proxies.push_back(makeProxy(4, 3, glm::vec3(0.2f, nan, 0.2f),
+                                      glm::vec3(0.8f, nan, 0.8f), 1.0f));          // x is a number, y is not
+
+    std::vector<std::pair<size_t, size_t>> pairs;
+    PhysicsSystem::SweepAndPrune(proxies, pairs);
+
+    bool foundAB = false;
+    bool pairedANaNProxy = false;
+    for (const auto& pair : pairs) {
+        const size_t a = proxies[pair.first].index;
+        const size_t b = proxies[pair.second].index;
+        if (a >= 2 || b >= 2) pairedANaNProxy = true;
+        if ((a == 0 && b == 1) || (a == 1 && b == 0)) foundAB = true;
+    }
+    CHECK_MSG(foundAB, "the finite pair is still found");
+    CHECK_MSG(!pairedANaNProxy, "and a proxy with a NaN bound, on any axis, is paired with nothing");
+    CHECK_EQ(pairs.size(), size_t{1});
+}
+
+static void testABodyAtNaNDoesNotTakeItsNeighbourWithIt() {
+    // Two spheres overlapping, one with a velocity a script made NaN. Through
+    // the broadphase hole above the solver resolved the pair with a NaN impulse,
+    // and the healthy sphere was NaN on the next tick. It stays a number, and it
+    // falls as it would with no neighbour at all: the broken body is simply not
+    // there as far as the solver is concerned.
+    entt::registry registry;
+    const auto broken = makeSphere(registry, glm::vec3(0.0f, 5.0f, 0.0f));
+    const auto healthy = makeSphere(registry, glm::vec3(0.6f, 5.0f, 0.0f));
+    registry.get<RigidBodyComponent>(broken).velocity =
+        glm::vec3(std::numeric_limits<float>::quiet_NaN());
+
+    stepFor(registry, 0.5f);
+
+    const auto& transform = registry.get<TransformComponent>(healthy);
+    const auto& body = registry.get<RigidBodyComponent>(healthy);
+    const auto finite = [](const glm::vec3& v) {
+        return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+    };
+    CHECK_MSG(finite(transform.position) && finite(body.velocity),
+              "a neighbour's NaN is its own problem: the healthy sphere keeps a position and a velocity");
+    CHECK_MSG(transform.position.y < 4.0f, "and it fell under gravity");
 }
 
 static void testSweepAndPruneIgnoresTwoStatics() {
@@ -4231,6 +4294,8 @@ static void runTests() {
     testSweepAndPruneFindsOverlappingPairs();
     testSweepAndPruneSkipsPairsSeparatedOffAxis();
     testAProxyWithNoPositionDoesNotUnsortTheSweep();
+    testAProxyWithNoPositionPairsWithNothing();
+    testABodyAtNaNDoesNotTakeItsNeighbourWithIt();
     testAFiniteBroadphaseIsOrderedExactlyAsItWas();
     testProxiesStartingAtTheSameXKeepAStatedOrder();
     testSweepAndPruneIgnoresTwoStatics();
