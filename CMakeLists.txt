@@ -472,6 +472,50 @@ if (SUPERSONIC_WERROR)
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# Precompiled headers, for the engine's own translation units.
+#
+# vulkan.hpp takes about 2.8 s to parse and EnTT about 1.1 s, and Components.hpp
+# includes both, and 66 of the engine's files include Components.hpp: the
+# ninety-line AssetRepointer.cpp compiled in 9.5 s, against a second for a file
+# of the same size that includes neither. So the headers every one of those
+# files parses are parsed once per build instead, and each file starts from
+# the result. Measured on GCC 13.3, Release, four cores, a clean build of the
+# whole tree (the editor, the plugin and the 62 suites): the figures are in the
+# commit that added this.
+#
+# PRIVATE, so it changes nothing a game's own targets compile with, and an
+# option, so a game whose build tool dislikes a PCH (ccache without its
+# pch_defines sloppiness caches nothing behind one, which is slower than not
+# having it) can switch it off. The vendored translation units are left out:
+# each configures the header it hosts with a macro before including it, which
+# a precompiled prefix would come before, and none of them includes these
+# headers anyway. Only the three libraries and the standard headers go in,
+# never a project header: a project header in the prefix is rebuilt, along
+# with every file, on every edit to it.
+# ---------------------------------------------------------------------------
+option(SUPERSONIC_PRECOMPILE_HEADERS
+    "Precompile vulkan.hpp, EnTT, GLM and the standard headers for the engine's own translation units (PRIVATE to SupersonicCore)"
+    ON)
+if (SUPERSONIC_PRECOMPILE_HEADERS)
+    target_precompile_headers(SupersonicCore PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:<vulkan/vulkan.hpp$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<entt/entt.hpp$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<glm/glm.hpp$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<glm/gtc/matrix_transform.hpp$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<glm/gtc/quaternion.hpp$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<algorithm$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<array$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<cmath$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<cstdint$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<functional$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<memory$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<string$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<unordered_map$<ANGLE-R>>"
+        "$<$<COMPILE_LANGUAGE:CXX>:<vector$<ANGLE-R>>")
+    set_source_files_properties(${VENDORED_SOURCES} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+endif()
+
 # THE ARITHMETIC IS SPELLED OUT, not left to the compiler: no contraction.
 #
 # The engine's determinism claim is cross-platform (decided 10 September 2026,
