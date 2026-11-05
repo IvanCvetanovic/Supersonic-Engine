@@ -2200,9 +2200,21 @@ Scripts reach `raycast` and `isGrounded` through the POD-only C ABI
 so a script queries the world it is running in rather than a snapshot of it.
 `OverlapSphere` is C++ only.
 
-Every query rebuilds the whole shape list from the registry on each call. There
-is no acceleration structure and no cache, so a script that raycasts once per
-entity per frame walks every collider in the scene once per entity per frame.
+Every query walks every collider in the registry, in the solver's gather order.
+There is no acceleration structure, so a script that raycasts once per entity
+per tick walks every collider in the scene once per entity per tick. What a
+walk no longer does is place every collider again. Placing one - the parent's
+world matrix times the entity's model matrix, three `DetMath` sincos and a 4x4
+product - is memoised in the registry's context, keyed on everything the
+placement reads (the collider's kind and extents, the transform's three triples
+and the parent world matrix as `parentWorldMatrix` hands it over) and compared
+byte for byte, so a slot is reused only when recomputing would give the same
+bits; a transform a script moved between two queries, or a collider whose size
+changed, misses and is placed again, and `test_physics` holds the memo to that.
+The ignore, trigger and layer filters run before the placement too. Measured on
+three hundred spheres and two hundred and fifty queries a tick, the queries went
+from 7.6 ms to 2.9 ms a tick with the results unchanged; what remains is the
+walk itself.
 
 ### 7m. Documented departures
 
