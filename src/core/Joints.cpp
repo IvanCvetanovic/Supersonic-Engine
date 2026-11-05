@@ -153,7 +153,10 @@ bool invertible(const glm::mat3& matrix) {
 // The same, for a 2x2 whose determinant the caller has already worked out.
 bool invertible2(const glm::mat2& matrix, float determinant) {
     const float magnitude = std::fabs(determinant);
-    if (magnitude > kEpsilon) return true;
+    // `>=`: the test this replaced skipped on `< kEpsilon`, so a determinant of
+    // exactly kEpsilon solved, and still does. (The 3x3 above it skipped on
+    // `<=` and keeps that boundary.)
+    if (magnitude >= kEpsilon) return true;
     const float scale = std::max(std::max(std::fabs(matrix[0][0]), std::fabs(matrix[0][1])),
                                  std::max(std::fabs(matrix[1][0]), std::fabs(matrix[1][1])));
     return magnitude > scale * scale * kRelativeEpsilon;

@@ -310,7 +310,11 @@ bool drawAnchorCombo(const char* label, UIAnchor& anchor) {
 // the entity and building it again. The removal is queued (m_pendingRemoval)
 // and applied after the draw, because the draw holds references into the pool
 // a removal compacts. Transform and Tag have no such menu: everything else on
-// the entity is placed by the one and named by the other.
+// the entity is placed by the one and named by the other. Nor has the Animator:
+// AnimationSystem::SyncSkeletons attaches one to every mesh whose file has clips,
+// every frame, by a standing rule its own comment says would make a remove
+// button "appear not to work" - it came back the next frame with the file's
+// first clip in place of the one the author had chosen.
 template <typename Component>
 bool InspectorPanel::removableHeader(const char* label, entt::registry& registry, entt::entity entity) {
     const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
@@ -1448,7 +1452,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 8b. AnimatorComponent
     if (registry.all_of<AnimatorComponent>(entity)) {
-        if (removableHeader<AnimatorComponent>("Animator", registry, entity)) {
+        if (ImGui::CollapsingHeader("Animator", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& animator = registry.get<AnimatorComponent>(entity);
 
             // The clip used to be typed. An exporter decides what a clip is
