@@ -22,11 +22,17 @@ namespace {
 // copies the payload and hands it back later - a pointer into a std::string
 // that has since been rebuilt would be a dangling read at drop time.
 const char* dragPayloadFor(const std::filesystem::path& path) {
-    const std::string ext = path.extension().string();
+    // Lower-cased, as iconForFile below already does: a tile named Rock.PNG
+    // showed the image icon and could not be dragged. And every audio format
+    // AudioClip decodes - the tile showed the music icon for .ogg and .mp3
+    // and the drag did nothing.
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (ext == ".gltf" || ext == ".glb" || ext == ".obj") return "SUPERSONIC_MESH";
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
         ext == ".tga" || ext == ".bmp")                   return "SUPERSONIC_TEXTURE";
-    if (ext == ".wav")                                    return "SUPERSONIC_AUDIO";
+    if (ext == ".wav" || ext == ".ogg" || ext == ".mp3") return "SUPERSONIC_AUDIO";
     if (ext == ".material")                               return "SUPERSONIC_MATERIAL";
     if (ext == ".prefab")                                 return "SUPERSONIC_PREFAB";
     if (ext == ".scene")                                  return "SUPERSONIC_SCENE";

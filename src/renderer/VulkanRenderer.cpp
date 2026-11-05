@@ -109,7 +109,18 @@ VulkanRenderer::~VulkanRenderer() {
     // waits the device idle before it destroys the renderer, and idempotent
     // if it did not: the wait is repeated. The flush after cleanupSwapchain
     // below stays, for anything queued by the teardown itself.
-    device.waitIdle();
+    //
+    // The wait is caught, for the reason SupersonicApp's destructor gives: a
+    // device that was lost makes waitIdle throw, and a throw out of a
+    // destructor during unwinding is std::terminate before the message about
+    // the loss is shown. A lost device runs nothing, so the flush is safe
+    // either way.
+    try {
+        device.waitIdle();
+    } catch (const vk::SystemError& error) {
+        SUPERSONIC_LOG_WARN("VulkanRenderer")
+            << "waitIdle failed during shutdown (" << error.what() << "); tearing down anyway.";
+    }
     m_deviceRef.FlushDeferredDestroys();
 
     ImGui_ImplVulkan_Shutdown();

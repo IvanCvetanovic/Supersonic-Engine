@@ -20,7 +20,9 @@ namespace {
 
 void* openLibrary(const std::string& path) {
 #if defined(_WIN32)
-    return reinterpret_cast<void*>(LoadLibraryA(path.c_str()));
+    // The wide entry point: LoadLibraryA reads the path in the ANSI code page
+    // and fails on a project folder named outside it.
+    return reinterpret_cast<void*>(LoadLibraryW(std::filesystem::path(path).c_str()));
 #else
     return dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif
@@ -211,9 +213,24 @@ bool HotReloadEngine::openPlugin(int slot, void*& outHandle, SupersonicScriptPlu
     // plugin would fail while the engine is running; loading a private copy
     // leaves the build output free to be replaced. Two slots are alternated so
     // the new copy never collides with the one still mapped.
+    // Into a NEW file, renamed over the slot's path, rather than written over
+    // the file already there. The slot's previous copy was unloaded two
+    // reloads ago, and on Linux dlclose does not unmap a library that holds
+    // a STB_GNU_UNIQUE symbol - which any C++ plugin with a template static
+    // can - so overwriting it in place wrote into a mapped image (a SIGBUS
+    // on the next call into it), and dlopen of the same path, which glibc
+    // matches by inode, handed back the old image and the reload did nothing.
+    // A rename gives the slot a new inode; whatever is still mapped keeps the
+    // old one. On Windows the slot's old DLL is unmapped by FreeLibrary and
+    // the rename replaces it as the overwrite did.
     const fs::path shadow = shadowPathFor(slot);
-    fs::copy_file(m_pluginPath, shadow, fs::copy_options::overwrite_existing, ec);
+    const fs::path staged = shadow.string() + ".staged";
+    fs::remove(staged, ec);
+    ec.clear();
+    fs::copy_file(m_pluginPath, staged, fs::copy_options::overwrite_existing, ec);
+    if (!ec) fs::rename(staged, shadow, ec);
     if (ec) {
+        fs::remove(staged, ec);
         m_status = "plugin is still locked by another process; will retry";
         return false;
     }
