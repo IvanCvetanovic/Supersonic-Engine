@@ -109,7 +109,9 @@ OUT="$WORK/engine.log"
 CODE=0
 invoke_engine() {
     set +e
-    "${RUNNER[@]}" "$EXE" --hidden "$@" > "$OUT" 2>&1
+    # ${RUNNER[@]+...}: an EMPTY array under `set -u` is an unbound variable in
+    # bash before 4.4, which includes the 3.2 macOS ships as /bin/bash.
+    ${RUNNER[@]+"${RUNNER[@]}"} "$EXE" --hidden "$@" > "$OUT" 2>&1
     CODE=$?
     set -e
 }

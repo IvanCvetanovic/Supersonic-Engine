@@ -441,6 +441,8 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
         return;
     }
 
+    settlePlayMemory();
+
     // 1. Enable Fullscreen Central Dockspace
     ImGuiDockNodeFlags dockspaceFlags = ImGuiDockNodeFlags_None;
     ImGuiWindowFlags windowFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
@@ -628,15 +630,10 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
             // Stop restored the scene Play started from, so the editor is on
             // that file again whatever a tick loaded in between - and as dirty
-            // as it was, since a load in between cleared the flag.
-            if (result.ok && m_sceneManager && !m_scenePathAtPlay.empty()) {
-                if (m_sceneManager->CurrentPath() != m_scenePathAtPlay) {
-                    m_sceneManager->AdoptLoaded(m_scenePathAtPlay);
-                }
-                if (m_dirtyAtPlay) m_sceneManager->MarkDirty();
-            }
-            m_scenePathAtPlay.clear();
-            m_dirtyAtPlay = false;
+            // as it was, since a load in between cleared the flag. Settled here
+            // for this frame's Save, and again at the top of every frame in case
+            // Play ended some other way.
+            settlePlayMemory();
         }
         ImGui::SameLine();
         if (ImGui::Button(ICON_FA_FORWARD_STEP "  Step##play", ImVec2(90, 0))) {
@@ -682,8 +679,13 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     // still re-bind the gizmo and save the scene.
     const bool editing = !m_playMode || m_playMode->IsEditing();
 
+    // Not while the Unsaved Changes question is open. A modal blocks the mouse and
+    // not the keyboard: Delete deleted the selection behind it, Ctrl+Z undid, and
+    // Ctrl+O replaced the action the question was about with a reload, so Discard
+    // then did something other than what had been asked.
     if (!io.WantTextInput && !Input::TextCaptureActive() &&
-        !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+        !ImGui::IsMouseDown(ImGuiMouseButton_Right) &&
+        m_pendingGuarded == GuardedAction::None) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
             if (editing) {
                 const auto result = m_sceneManager->Save(registry);
@@ -839,7 +841,8 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
     // Double-clicking a .prefab tile places it.
     if (const std::string scene = m_contentBrowserPanel.ConsumeSceneClick(); !scene.empty()) {
-        requestGuarded(registry, window, GuardedAction::Load, scene);
+        if (editing) requestGuarded(registry, window, GuardedAction::Load, scene);
+        else SetStatus("Stop before opening a scene.", true);
     }
 
     if (const std::string prefab = m_contentBrowserPanel.ConsumePrefabClick(); !prefab.empty()) {
@@ -861,7 +864,9 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             // scene text changes and handleUndoRedo picks it up on the next
             // settled frame anyway - but recording it here means the step
             // exists before anything else can be done to the new entity.
-            m_history.CommitIfChanged(registry);
+            // And an edit the disk has not seen: the star and the question before a
+            // reload are made of exactly this call.
+            if (m_history.CommitIfChanged(registry) && m_sceneManager) m_sceneManager->MarkDirty();
         }
     }
 
@@ -1165,16 +1170,20 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     }
     ImGui::End();
 
-    // Save As. A modal rather than a menu field so the path is committed by an
-    // explicit press: typing into a live field would rename the open scene on
-    // every keystroke.
+    // The unsaved-changes question, before Save As below.
     if (m_openUnsavedPopup) {
         ImGui::OpenPopup("Unsaved Changes");
         m_openUnsavedPopup = false;
     }
     if (ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Text("%s has changes that are not saved.", m_sceneManager->CurrentPath().c_str());
+        // Exit is the one action still offered while Play runs, and the registry
+        // is then the simulation's, not the file's: Save would write a thousand
+        // ticks of physics over the scene. Stop first, or discard.
+        const bool canSave = !m_playMode || m_playMode->IsEditing();
+        if (!canSave) ImGui::TextDisabled("Play is running. Stop to save; the edits are held until then.");
         ImGui::Spacing();
+        ImGui::BeginDisabled(!canSave);
         if (ImGui::Button("Save", ImVec2(110, 0))) {
             const auto result = m_sceneManager->Save(registry);
             SetStatus(result.message, !result.ok);
@@ -1186,6 +1195,7 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             }
             ImGui::CloseCurrentPopup();
         }
+        ImGui::EndDisabled();
         ImGui::SameLine();
         if (ImGui::Button("Discard", ImVec2(110, 0))) {
             performGuarded(registry, window);
@@ -1199,7 +1209,18 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
         }
         ImGui::EndPopup();
     }
+    // Closed some way the buttons do not cover (Escape): the question is over and
+    // so is the action it was about, or every guarded action would be ignored from
+    // here on and the hotkeys would stay off.
+    if (m_pendingGuarded != GuardedAction::None && !m_openUnsavedPopup &&
+        !ImGui::IsPopupOpen("Unsaved Changes")) {
+        m_pendingGuarded = GuardedAction::None;
+        m_pendingGuardedPath.clear();
+    }
 
+    // Save As. A modal rather than a menu field so the path is committed by an
+    // explicit press: typing into a live field would rename the open scene on
+    // every keystroke.
     if (m_showSaveAs) {
         ImGui::OpenPopup("Save Scene As");
         m_showSaveAs = false;
@@ -1291,6 +1312,9 @@ void EditorLayer::afterHistoryJump(entt::registry& registry, const std::string& 
 
 void EditorLayer::requestGuarded(entt::registry& registry, Window& window, GuardedAction action,
                                  const std::string& path) {
+    // One question at a time: a second request while the first is being asked
+    // would silently replace the action Discard is about to perform.
+    if (m_pendingGuarded != GuardedAction::None) return;
     m_pendingGuarded = action;
     m_pendingGuardedPath = path;
     if (m_sceneManager && m_sceneManager->IsDirty()) {
@@ -1381,8 +1405,47 @@ entt::entity EditorLayer::duplicateEntity(entt::registry& registry, entt::entity
         hierarchy && hierarchy->parent != entt::null && registry.valid(hierarchy->parent)) {
         registry.emplace<HierarchyComponent>(copy, hierarchy->parent);
     }
+    // The codec writes neither link between entities - a handle means nothing in a
+    // file, so the scene serializer carries them as indices and puts them back after
+    // the read - and a copy that lost a joint's other end was hung from the world
+    // point the anchor names instead of from the body the original swings from.
+    if (const auto* sourceJoint = registry.try_get<JointComponent>(source)) {
+        if (auto* copyJoint = registry.try_get<JointComponent>(copy)) {
+            copyJoint->connectedBody =
+                (sourceJoint->connectedBody != entt::null && registry.valid(sourceJoint->connectedBody))
+                    ? sourceJoint->connectedBody
+                    : entt::null;
+        }
+    }
     if (auto* tag = registry.try_get<TagComponent>(copy)) tag->tag += " Copy";
     return copy;
+}
+
+void EditorLayer::settlePlayMemory() {
+    if (!m_playMode || !m_sceneManager) return;
+
+    if (m_playMode->IsEditing()) {
+        // Play is over, however it ended: the registry is the scene Play started
+        // from again, so the editor is on that file again whatever a tick loaded
+        // in between - and as dirty as it was, since that load cleared the flag.
+        if (m_scenePathAtPlay.empty()) return;
+        if (m_sceneManager->CurrentPath() != m_scenePathAtPlay) {
+            m_sceneManager->AdoptLoaded(m_scenePathAtPlay);
+        }
+        if (m_dirtyAtPlay) m_sceneManager->MarkDirty();
+        m_scenePathAtPlay.clear();
+        m_dirtyAtPlay = false;
+        return;
+    }
+
+    // Playing or paused, with nothing noted: Play began somewhere other than the
+    // toolbar - the app enters it itself for --scene and for a packaged game - and
+    // this is the first frame the editor sees it. BuildUI runs before a tick's
+    // pending load is applied, so the path is still the one Play started from.
+    if (m_scenePathAtPlay.empty()) {
+        m_scenePathAtPlay = m_sceneManager->CurrentPath();
+        m_dirtyAtPlay = m_sceneManager->IsDirty();
+    }
 }
 
 } // namespace Supersonic

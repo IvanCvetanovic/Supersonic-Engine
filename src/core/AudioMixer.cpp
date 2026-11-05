@@ -83,7 +83,7 @@ float AudioMixer::sampleInterpolated(const AudioClip& clip, double cursor, uint1
     return a + (b - a) * t;
 }
 
-// A parameter that is not a number, replaced by one.
+// A parameter that is NaN, replaced by a number.
 //
 // A game computes a volume from a distance and a pitch from a speed, and either
 // is NaN on the frame something upstream divided by zero. std::clamp(NaN, lo,
@@ -93,8 +93,12 @@ float AudioMixer::sampleInterpolated(const AudioClip& clip, double cursor, uint1
 // leaks, and it is cast to size_t on every sample, which is undefined. The
 // fallbacks are the harmless reading of each: silence for a volume, as a NaN
 // sample already is; the authored rate for a pitch; the centre for a pan.
+//
+// ONLY a NaN. An infinity is a number the clamp already handles - +inf is full
+// volume, the fastest pitch, hard right - and a volume of 1 / distance with the
+// listener exactly on the source is +inf and is meant to be heard.
 float numberOr(float value, float fallback) {
-    return std::isfinite(value) ? value : fallback;
+    return std::isnan(value) ? fallback : value;
 }
 
 double AudioMixer::stepFor(const AudioClip& clip, float pitch) const {

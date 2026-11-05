@@ -49,6 +49,9 @@ GENERATOR_ARGS=()
 if command -v ninja >/dev/null 2>&1; then
     GENERATOR_ARGS=(-G Ninja)
 fi
+# Expanded as ${GENERATOR_ARGS[@]+"${GENERATOR_ARGS[@]}"} below, never bare: with no
+# ninja the array is empty, and an empty array under `set -u` is an unbound variable
+# in bash before 4.4 - which includes the 3.2 macOS ships as /bin/bash.
 
 # GitHub turns "::error file=...::message" into an annotation on the file. Anywhere
 # else it is just noise, so print something a person can read instead.
@@ -241,7 +244,7 @@ check_shaders() {
 configure_and_build() {
     local dir="$1" target="$2"
     shift 2
-    cmake -S . -B "$dir" "${GENERATOR_ARGS[@]}" "$@"
+    cmake -S . -B "$dir" ${GENERATOR_ARGS[@]+"${GENERATOR_ARGS[@]}"} "$@"
     if [ -n "$target" ]; then
         cmake --build "$dir" --parallel "$JOBS" --target "$target"
     else
@@ -302,7 +305,7 @@ check_tidy() {
 
     # Configure only: the compile database is all clang-tidy needs, and a build
     # first would just be the Release build again.
-    cmake -S . -B "$BUILD_ROOT/tidy" "${GENERATOR_ARGS[@]}" \
+    cmake -S . -B "$BUILD_ROOT/tidy" ${GENERATOR_ARGS[@]+"${GENERATOR_ARGS[@]}"} \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     local db="$BUILD_ROOT/tidy/compile_commands.json"
     test -f "$db" || { echo "no compile_commands.json - the configure failed"; return 1; }

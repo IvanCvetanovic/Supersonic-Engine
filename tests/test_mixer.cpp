@@ -345,17 +345,53 @@ static void testANonNumberParameterDoesNotPoisonTheVoice() {
         CHECK_MSG(!mixer.IsPlaying(voice), "fifty frames at the authored rate are over after a hundred");
     }
 
-    // And through SetParameters, the pan included.
+    // SetParameters, the volume: a second healthy voice is still heard at its own
+    // level. Before the fix a NaN volume made the bus NaN, which the output clamp
+    // turns into silence for BOTH voices - the finite-and-still-playing checks this
+    // block used to make held either way, since that clamp pre-dates the fix.
+    {
+        AudioMixer mixer(48000, 1);
+        const auto broken = mixer.Add(clip, true, 1.0f, 1.0f);
+        mixer.Add(clip, true, 1.0f, 1.0f);
+        mixer.SetParameters(broken, nan, 1.0f, 0.0f);
+        std::vector<float> out(30, 0.0f);
+        mixer.Mix(out.data(), 30);
+        CHECK_MSG(test::nearly(out[0], 0.5f, 1e-3f),
+                  "the other voice is heard at its own volume, and the broken one adds nothing");
+    }
+
+    // SetParameters, the pan: NaN is the CENTRE, which constant-power panning
+    // gives both sides 1/sqrt(2) of - not hard left, not hard right.
     {
         AudioMixer mixer(48000, 2);
         const auto voice = mixer.Add(clip, true, 1.0f, 1.0f);
-        mixer.SetParameters(voice, nan, nan, nan);
+        mixer.SetParameters(voice, 1.0f, 1.0f, nan);
         std::vector<float> out(40, 0.0f);
         mixer.Mix(out.data(), 20);
-        bool allFinite = true;
-        for (const float v : out) allFinite = allFinite && std::isfinite(v);
-        CHECK(allFinite);
-        CHECK_MSG(mixer.IsPlaying(voice), "a looping voice is still playing");
+        const float centre = 0.5f * 0.70710678f;
+        CHECK_MSG(test::nearly(out[0], centre, 1e-3f) && test::nearly(out[1], centre, 1e-3f),
+                  "a NaN pan plays from the centre: both channels at 1/sqrt(2)");
+    }
+
+    // And an INFINITY is not a NaN: the clamp handles it, and a volume of
+    // 1 / distance with the listener on the source is +inf and is meant to be
+    // heard. Only the NaN is replaced.
+    {
+        const float inf = std::numeric_limits<float>::infinity();
+        AudioMixer mixer(48000, 1);
+        CHECK(mixer.Add(clip, false, inf, 1.0f) != AudioMixer::kInvalidVoice);
+        std::vector<float> out(10, 0.0f);
+        mixer.Mix(out.data(), 10);
+        CHECK_MSG(test::nearly(out[0], 0.5f, 1e-3f), "an infinite volume is full volume, as it always was");
+
+        // +inf pitch is the fastest the mixer allows (twice the authored rate), so
+        // fifty frames of clip are over inside thirty; the NaN fallback of the
+        // authored rate would still be playing.
+        AudioMixer fast(48000, 1);
+        const auto voice = fast.Add(clip, false, 1.0f, inf);
+        std::vector<float> more(30, 0.0f);
+        fast.Mix(more.data(), 30);
+        CHECK_MSG(!fast.IsPlaying(voice), "an infinite pitch is the clamp's maximum, not the authored rate");
     }
 }
 

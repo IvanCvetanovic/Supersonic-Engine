@@ -222,10 +222,22 @@ static void testDestroyingManyParentsAtOncePromotesExactlyAsOneAtATime() {
     }
 
     // A handle that is not valid, and a null one, are ignored rather than
-    // walked for.
-    std::vector<entt::entity> nonsense{entt::null, parents2.front()};
+    // walked for. Observable: a parent and child that nothing on the list names
+    // stay exactly as they were - still parented, transform untouched.
+    const auto stayer = makeEntity(allAtOnce, "Stayer", glm::vec3(7.0f, 8.0f, 9.0f));
+    const auto kept = makeEntity(allAtOnce, "Kept", glm::vec3(1.0f, 2.0f, 3.0f));
+    allAtOnce.emplace<HierarchyComponent>(kept, stayer);
+    TransformSystem::UpdateWorldTransforms(allAtOnce);
+    const TransformComponent before = allAtOnce.get<TransformComponent>(kept);
+
+    std::vector<entt::entity> nonsense{entt::null, parents2.front(), parents2.back()};
     TransformSystem::OnParentsDestroyed(allAtOnce, nonsense);
-    CHECK(allAtOnce.valid(children2.front()));
+
+    const auto* hierarchy = allAtOnce.try_get<HierarchyComponent>(kept);
+    CHECK_MSG(hierarchy != nullptr && hierarchy->parent == stayer,
+              "a child of an entity that was not on the list is still its child");
+    CHECK_MSG(std::memcmp(&before, &allAtOnce.get<TransformComponent>(kept), sizeof(before)) == 0,
+              "and its transform is untouched");
 }
 
 static void testHierarchySurvivesSerialization() {

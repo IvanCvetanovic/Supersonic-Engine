@@ -47,19 +47,22 @@ public:
 private:
     // Opens and validates a candidate module WITHOUT disturbing the one already
     // loaded, so a failed attempt leaves the running plugin intact.
-    bool openPlugin(int slot, void*& outHandle, SupersonicScriptPluginRegisterFn& outRegister);
+    bool openPlugin(uint32_t serial, void*& outHandle, SupersonicScriptPluginRegisterFn& outRegister,
+                    std::filesystem::path& outShadow);
     void unload();
 
     // The plugin is shadow-copied before loading so the build system can relink
-    // the original while a copy is still mapped. Two slots are alternated so a
-    // new copy never collides with the one currently in use.
-    std::filesystem::path shadowPathFor(int slot) const;
+    // the original while a copy is still mapped. Every copy has a name this process
+    // has not opened a library under before (glibc matches loaded libraries by name
+    // first), and is deleted when its module is.
+    std::filesystem::path shadowPathFor(uint32_t serial) const;
 
     std::string m_pluginPath;
     std::string m_status{"no plugin configured"};
 
     void* m_library{nullptr};
-    int m_shadowSlot{0};
+    // The copy m_library was opened from; empty when nothing is loaded.
+    std::filesystem::path m_shadowPath;
     std::filesystem::file_time_type m_lastWriteTime{};
     bool m_haveWriteTime{false};
     uint32_t m_reloadCount{0};

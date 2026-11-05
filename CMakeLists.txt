@@ -514,6 +514,15 @@ if (SUPERSONIC_PRECOMPILE_HEADERS)
         "$<$<COMPILE_LANGUAGE:CXX>:<unordered_map$<ANGLE-R>>"
         "$<$<COMPILE_LANGUAGE:CXX>:<vector$<ANGLE-R>>")
     set_source_files_properties(${VENDORED_SOURCES} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+
+    # ExecutablePath.cpp is given a define of its own when SUPERSONIC_ASSET_ROOT is
+    # set (below) - in every subproject build, so in every game's. MSVC warns
+    # (C4605, an error under /WX) about a /D that was on the command line of a
+    # translation unit but not on the one that built the precompiled header; GCC
+    # and Clang accept it silently, which is why a Linux build cannot show it. The
+    # file is a few lines, and loses nothing by not using the prefix.
+    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ExecutablePath.cpp
+        PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 
 # THE ARITHMETIC IS SPELLED OUT, not left to the compiler: no contraction.

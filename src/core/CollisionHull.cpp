@@ -391,19 +391,28 @@ CollisionSAT::Manifold CollideHullHull(const Instance& a, const Instance& b,
     // four - so which four it gets should be the ones holding the shapes apart
     // rather than the ones the loop reached first.
     //
-    // A STABLE sort, because ties are the normal case - a face resting flat
-    // gives every point the same depth - and which of the tied points are kept,
-    // and in what order the solver then applies them, is simulation state.
-    // std::sort leaves the order of equal elements to the implementation:
-    // libstdc++ partitions above sixteen elements, MSVC above thirty-two, so a
-    // manifold with more candidates than that came out one way on Windows and
-    // another on Linux. The two already agreed below those counts, because both
-    // fall back to an insertion sort there, and still do. NaN depths last, so
-    // the comparison stays an ordering with one in the data.
-    std::stable_sort(candidates, candidates + candidateCount,
-                     [](const Candidate& left, const Candidate& right) {
-                         return DescendingNaNLast(left.penetration, right.penetration);
-                     });
+    // std::sort, as it always was - and that is a decision, not a leftover.
+    //
+    // Ties are the normal case here (a face resting flat gives every point the
+    // same depth), which of the tied points are kept and in what order the solver
+    // applies them is simulation state, and std::sort leaves the order of equal
+    // elements to the implementation: libstdc++ partitions above sixteen
+    // candidates, MSVC above thirty-two, so a manifold with a 17- to 64-sided cap
+    // pair can come out differently on Windows and on Linux. A stable sort would
+    // make them agree - and would change the kept points on every platform for
+    // some of those manifolds, which is a re-recording of every baseline that
+    // holds one. That is the owner's decision (README, Roadmap: hull contact
+    // order), not something to do on the way past; an earlier change here made it
+    // silently and was taken back.
+    //
+    // What does change is the comparison for a NaN depth: NaN last, so the
+    // predicate stays an ordering when one is in the data. For every finite depth
+    // it answers exactly as `left.penetration > right.penetration` does, so the
+    // algorithm sees the same answers and leaves the same order.
+    std::sort(candidates, candidates + candidateCount,
+              [](const Candidate& left, const Candidate& right) {
+                  return DescendingNaNLast(left.penetration, right.penetration);
+              });
 
     manifold.pointCount = std::min(candidateCount, CollisionSAT::kMaxContactPoints);
     for (int i = 0; i < manifold.pointCount; ++i) {

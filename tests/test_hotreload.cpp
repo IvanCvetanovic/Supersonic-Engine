@@ -130,6 +130,36 @@ static void testABrokenPluginThatChangesIsTriedAgain() {
                   std::to_string(engine.GetLoadAttempts()) + ")");
 }
 
+static void testACopyThatIsNotKeptIsNotLeftBehind() {
+    // Every load is made from a private copy beside the plugin, and a load that
+    // fails left its copy there: with two reused names that was two files for
+    // ever, and with a name per load it would be one more for every failed
+    // attempt - a plugin that cannot work, polled for a day, a file per rebuild.
+    // A copy is deleted when the module it was opened for is not kept.
+    const std::string plugin = aBrokenPlugin("tidy_plugin.so");
+    if (plugin.empty()) {
+        CHECK_MSG(true, "no shared library to stand in for a plugin on this machine");
+        return;
+    }
+
+    const auto copiesBesidePlugin = [&]() {
+        size_t found = 0;
+        std::error_code ec;
+        for (const auto& entry : fs::directory_iterator(fs::path(plugin).parent_path(), ec)) {
+            const std::string stem = entry.path().stem().string();
+            if (stem.rfind("tidy_plugin.loaded", 0) == 0) ++found;
+        }
+        return found;
+    };
+
+    HotReloadEngine engine;
+    engine.WatchPlugin(plugin);
+    CHECK(!engine.IsLoaded());
+    for (int attempt = 0; attempt < 5; ++attempt) engine.ReloadNow();
+    CHECK_MSG(engine.GetLoadAttempts() >= 6, "the attempts were made");
+    CHECK_EQ(copiesBesidePlugin(), size_t{0});
+}
+
 static void testAMissingPluginIsNotAnError() {
     HotReloadEngine engine;
     engine.WatchPlugin((scratch() / "no_such_plugin.so").string());
@@ -141,6 +171,7 @@ static void testAMissingPluginIsNotAnError() {
 static void runTests() {
     testABrokenPluginIsTriedOnceAndNotEveryOtherFrame();
     testABrokenPluginThatChangesIsTriedAgain();
+    testACopyThatIsNotKeptIsNotLeftBehind();
     testAMissingPluginIsNotAnError();
 }
 

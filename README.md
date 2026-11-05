@@ -1332,6 +1332,24 @@ HUSK's nineteen animated models. What is left is here.
   checkpoint is necessary and not sufficient: a scene edited in a way the hash
   cannot see still replays wrongly and says nothing until the difference reaches
   a transform.
+- **Which contact points a hull keeps is the C++ library's choice when the
+  depths tie.** A hull resting flat on another gives every clipped candidate the
+  same depth, the solver keeps the deepest four, and `std::sort` orders equal
+  elements however the implementation likes: libstdc++ reorders them above
+  sixteen candidates and MSVC above thirty-two. A 17-sided cap on a 17-sided cap
+  therefore keeps different points, and applies them in a different order, in a
+  Windows build and in a Linux one of the same game, and `kCanonical` does not
+  cover a manifold that large. A stable sort would make the two agree and would
+  change which points are kept - on every platform, for some manifolds - so every
+  baseline holding one would have to be re-recorded. That is a decision for the
+  owner and has not been made: a change that did it quietly was taken back.
+- **A project folder named outside the Windows ANSI code page cannot load the
+  script plugin.** The plugin's path travels as a narrow string from
+  `scriptPluginPath()` to `HotReloadEngine`, and `path::string()` converts
+  through the ANSI code page, so the name is lost (or the conversion throws)
+  before the loader is reached. Loading with `LoadLibraryW` alone changes
+  nothing; the path has to stay a wide `std::filesystem::path` from the
+  executable's own path to the loader. Not done, and not testable off Windows.
 - **Determinism crosses compilers and C runtimes, measured on x64.**
   `test_determinism` pins the hash of four seconds of the fixture scene as one
   constant: `6794834318059694172`. It holds on MSVC 14.50 against the UCRT and

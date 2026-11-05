@@ -795,6 +795,57 @@ static void testAnAttributeShorterThanThePositionsIsIgnored() {
     }
 }
 
+static void testAnImageViewThatWrapsPastItsBufferIsRefused() {
+    // The embedded image's bounds test was `offset + length > size`, and a crafted
+    // offset wraps past the top of the integer: 2^64 - 2 plus a length of four is
+    // two, which is not greater than the buffer, so the loader took the view as
+    // inside it and copied four bytes from just BEFORE the buffer into a file it
+    // then handed to the renderer as a texture. Each term is compared against what
+    // is left now. The file is the shared triangle with a material whose base
+    // colour texture is an image living in that view.
+    const std::string text = std::string(R"({
+  "asset": { "version": "2.0" },
+  "scene": 0,
+  "scenes": [ { "nodes": [0] } ],
+  "nodes": [ { "mesh": 0 } ],
+  "meshes": [ { "primitives": [ { "attributes": { "POSITION": 0 }, "indices": 1, "material": 0 } ] } ],
+  "materials": [ { "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } } } ],
+  "textures": [ { "source": 0 } ],
+  "images": [ { "bufferView": 2, "mimeType": "image/png" } ],
+  "buffers": [ { "byteLength": 76, "uri": ")") + kSharedBuffer + R"(" } ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0,  "byteLength": 36 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 6  },
+    { "buffer": 0, "byteOffset": 18446744073709551614, "byteLength": 4 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0] },
+    { "bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR" }
+  ]
+})";
+
+    const std::string path = writeTempGltf("supersonic_wrapview.gltf", text.c_str());
+    GltfLoader::Scene scene;
+    bool threw = false;
+    try {
+        scene = GltfLoader::Load(path);
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    std::filesystem::remove(path);
+
+    CHECK_MSG(!threw, "the importer threw on a crafted bufferView instead of refusing it");
+    // The file may be refused whole (tinygltf validates views on some builds) or
+    // loaded without the texture; what it must not do is hand back a texture path
+    // for bytes that were never inside the buffer.
+    if (scene.ok && !scene.submeshes.empty()) {
+        CHECK_MSG(scene.submeshes[0].material.albedoTexturePath.empty(),
+                  "an image view that wraps past its buffer yields no texture");
+    } else {
+        CHECK_MSG(true, "refused whole");
+    }
+}
+
 static void testAZeroNormalIsNotNormalisedIntoNaN() {
     // glm::normalize of a zero vector divides by zero, and a NaN normal is NaN
     // lighting on every pixel of the triangle it belongs to. A zero normal is easy to
@@ -1010,6 +1061,7 @@ static void runTests() {
     testAnAttributeIndexOutsideTheFileIsIgnored();
     testAnAttributeShorterThanThePositionsIsIgnored();
     testAnAttributeOfTheWrongShapeIsIgnored();
+    testAnImageViewThatWrapsPastItsBufferIsRefused();
     testAZeroNormalIsNotNormalisedIntoNaN();
     testSkinningInfluencesOfTheWrongShapeAreIgnored();
     testAnIndexNoVertexAnswersToDropsItsWholeTriangle();

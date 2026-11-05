@@ -160,6 +160,12 @@ private:
     std::string m_scenePathAtPlay;
     bool m_dirtyAtPlay{false};
 
+    // Keeps that memory true however Play began or ended: noted on the first
+    // frame the editor finds itself playing - the app enters Play itself for
+    // --scene and for a packaged game's manifest, with no toolbar press - and
+    // acted on, once, on the first frame it finds itself editing again.
+    void settlePlayMemory();
+
     // Must be called right after DockSpace(), before any panel is submitted.
     void buildLayout(unsigned int dockspaceId, int preset);
 

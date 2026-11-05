@@ -3,6 +3,7 @@
 #include "core/ScriptRegistry.hpp"
 #include "core/ScriptPluginApi.h"
 
+#include <atomic>
 #include <iostream>
 
 #if defined(_WIN32)
@@ -20,9 +21,14 @@ namespace {
 
 void* openLibrary(const std::string& path) {
 #if defined(_WIN32)
-    // The wide entry point: LoadLibraryA reads the path in the ANSI code page
-    // and fails on a project folder named outside it.
-    return reinterpret_cast<void*>(LoadLibraryW(std::filesystem::path(path).c_str()));
+    // The ANSI entry point, and a known limit rather than an oversight: the path
+    // arrives here as a narrow string (SupersonicApp's scriptPluginPath builds it
+    // with path::string(), which converts through the ANSI code page), so a project
+    // folder named outside that code page is already lost before this line, and
+    // LoadLibraryW over a narrow string would decode it through the same page.
+    // Fixing it means the plugin path staying a wide std::filesystem::path from
+    // the executable's own path to here; see the README's roadmap.
+    return reinterpret_cast<void*>(LoadLibraryA(path.c_str()));
 #else
     return dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif
@@ -70,14 +76,29 @@ constexpr std::chrono::milliseconds kRetryInterval{250};
 
 } // namespace
 
+// Process-wide, not per engine: a suite builds several engines in one process, and
+// the property below is about the process.
+std::atomic<uint32_t> g_shadowSerial{0};
+
 HotReloadEngine::~HotReloadEngine() {
     unload();
 }
 
-std::filesystem::path HotReloadEngine::shadowPathFor(int slot) const {
+// A name this process has never opened a library under.
+//
+// glibc decides whether dlopen needs to map anything by walking the libraries it
+// already holds and comparing NAMES, and only then looking at the file. A library
+// that dlclose could not unmap - any with a STB_GNU_UNIQUE symbol, which every C++
+// plugin with a template static or an inline-function static has - stays in that
+// list under the name it was opened with. A reload that opened the same path again,
+// whatever the file now holds, was handed the old image back, and the engine
+// reported "loaded (reload #N)" while running the code it had before. Two names
+// alternated, as they used to be, are reused every second reload; a serial is not.
+// The packager skips anything whose stem contains ".loaded", which this keeps.
+std::filesystem::path HotReloadEngine::shadowPathFor(uint32_t serial) const {
     const fs::path source(m_pluginPath);
     return source.parent_path() /
-           (source.stem().string() + ".loaded" + std::to_string(slot) + source.extension().string());
+           (source.stem().string() + ".loaded" + std::to_string(serial) + source.extension().string());
 }
 
 void HotReloadEngine::WatchPlugin(const std::string& pluginPath) {
@@ -176,17 +197,18 @@ bool HotReloadEngine::ReloadNow() {
     // them silently fell back to nothing in the meantime.
     void* newHandle = nullptr;
     SupersonicScriptPluginRegisterFn registerFn = nullptr;
-    const int newSlot = 1 - m_shadowSlot;
+    fs::path newShadow;
 
-    if (!openPlugin(newSlot, newHandle, registerFn)) {
+    if (!openPlugin(++g_shadowSerial, newHandle, registerFn, newShadow)) {
         return false; // m_status explains why; the old plugin is still live
     }
 
-    // Only now is it safe to drop the previous module and its function pointers.
+    // Only now is it safe to drop the previous module and its function pointers -
+    // and its copy: unload() deletes the file the OLD module was opened from.
     unload();
 
     m_library = newHandle;
-    m_shadowSlot = newSlot;
+    m_shadowPath = newShadow;
 
     SupersonicScriptHost host{};
     host.apiVersion = SUPERSONIC_SCRIPT_API_VERSION;
@@ -201,7 +223,9 @@ bool HotReloadEngine::ReloadNow() {
     return true;
 }
 
-bool HotReloadEngine::openPlugin(int slot, void*& outHandle, SupersonicScriptPluginRegisterFn& outRegister) {
+bool HotReloadEngine::openPlugin(uint32_t serial, void*& outHandle,
+                                 SupersonicScriptPluginRegisterFn& outRegister,
+                                 fs::path& outShadow) {
     std::error_code ec;
 
     if (!fs::exists(m_pluginPath, ec)) {
@@ -211,19 +235,16 @@ bool HotReloadEngine::openPlugin(int slot, void*& outHandle, SupersonicScriptPlu
 
     // Copy before loading. On Windows a mapped DLL is locked, so rebuilding the
     // plugin would fail while the engine is running; loading a private copy
-    // leaves the build output free to be replaced. Two slots are alternated so
-    // the new copy never collides with the one still mapped.
-    // Into a NEW file, renamed over the slot's path, rather than written over
-    // the file already there. The slot's previous copy was unloaded two
-    // reloads ago, and on Linux dlclose does not unmap a library that holds
-    // a STB_GNU_UNIQUE symbol - which any C++ plugin with a template static
-    // can - so overwriting it in place wrote into a mapped image (a SIGBUS
-    // on the next call into it), and dlopen of the same path, which glibc
-    // matches by inode, handed back the old image and the reload did nothing.
-    // A rename gives the slot a new inode; whatever is still mapped keeps the
-    // old one. On Windows the slot's old DLL is unmapped by FreeLibrary and
-    // the rename replaces it as the overwrite did.
-    const fs::path shadow = shadowPathFor(slot);
+    // leaves the build output free to be replaced.
+    //
+    // Under a name never used before in this process (see shadowPathFor), so a
+    // library the loader could not unmap is never matched by name against the
+    // new one - and never overwritten in place either: the copy used to land on
+    // top of the file the module from two reloads ago was mapped from, which on
+    // Linux (a STB_GNU_UNIQUE plugin survives dlclose) wrote into a mapped image.
+    // Staged and renamed, so a copy that dies part-way is never a file a later
+    // load could open half written.
+    const fs::path shadow = shadowPathFor(serial);
     const fs::path staged = shadow.string() + ".staged";
     fs::remove(staged, ec);
     ec.clear();
@@ -235,9 +256,18 @@ bool HotReloadEngine::openPlugin(int slot, void*& outHandle, SupersonicScriptPlu
         return false;
     }
 
+    // From here the copy is ours to delete if this load does not become the live
+    // one. Unlinking a file that is still mapped is harmless on Linux, and on
+    // Windows the module is closed first, so the delete is of an unmapped file.
+    const auto discard = [&shadow]() {
+        std::error_code removeError;
+        fs::remove(shadow, removeError);
+    };
+
     void* handle = openLibrary(shadow.string());
     if (!handle) {
         m_status = "failed to load " + shadow.string() + ": " + lastLibraryError();
+        discard();
         return false;
     }
 
@@ -250,6 +280,7 @@ bool HotReloadEngine::openPlugin(int slot, void*& outHandle, SupersonicScriptPlu
         m_status = std::string("plugin is missing ") + SUPERSONIC_SCRIPT_PLUGIN_VERSION_SYMBOL +
                    " / " + SUPERSONIC_SCRIPT_PLUGIN_REGISTER_SYMBOL;
         closeLibrary(handle);
+        discard();
         m_failureIsPermanent = true;
         return false;
     }
@@ -262,12 +293,14 @@ bool HotReloadEngine::openPlugin(int slot, void*& outHandle, SupersonicScriptPlu
                    " does not match engine version " + std::to_string(SUPERSONIC_SCRIPT_API_VERSION) +
                    "; rebuild the plugin";
         closeLibrary(handle);
+        discard();
         m_failureIsPermanent = true;
         return false;
     }
 
     outHandle = handle;
     outRegister = registerFn;
+    outShadow = shadow;
     return true;
 }
 
@@ -279,6 +312,16 @@ void HotReloadEngine::unload() {
     if (m_library) {
         closeLibrary(m_library);
         m_library = nullptr;
+    }
+
+    // The copy the closed module was opened from. Two of them used to sit beside
+    // the plugin for ever; now one does, while it is loaded. A failure to delete
+    // (Windows keeping a module mapped a moment longer) is not worth reporting:
+    // the next load is under a different name, and the packager skips ".loaded".
+    if (!m_shadowPath.empty()) {
+        std::error_code ec;
+        fs::remove(m_shadowPath, ec);
+        m_shadowPath.clear();
     }
 }
 
