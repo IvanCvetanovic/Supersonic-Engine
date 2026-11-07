@@ -1846,6 +1846,17 @@ in the position pass, exactly as the linear half of every joint is walked out by
 moving it. Measured: a door shoved at six radians a second now rests at 89.95
 degrees with 0.05 left in it.
 
+The angle is an `atan2`, so it reads in (-pi, pi], and a stop may lie past pi: a
+game that authors "so far each way from where the hinge rests" gets a window that
+runs over pi when the hinge rests near it (Magic Portals' 2-31 seesaw: 1.6251 to
+3.1958). The limit is therefore measured on the turn of the circle nearest the
+window's middle (`limitAngle`), in the velocity half and in the position pass
+alike. Without it a body that crossed pi read about -3.1, 4.7 radians *below* the
+lower stop, and the position pass turned it 270 degrees in one step onto the far
+stop. A window a turn wide or more has no nearest turn and keeps the plain
+reading. The spring's rest angle is not unwrapped the same way: a spring whose
+rest angle is within a few degrees of pi wraps.
+
 That rotation only became writable once `TransformComponent::EulerFromRotation`
 existed. See below.
 
