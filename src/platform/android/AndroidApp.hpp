@@ -112,8 +112,13 @@ bool TakeResumedFromSuspend();
 // native window: whatever was made from it must be gone when it returns.
 void SetSurfaceLostCallback(std::function<void()> callback);
 
-// Called with true when the activity pauses and false when it resumes, so a
-// sound stream stops with the game instead of playing on in the background.
+// Called with true when the activity pauses and false when the app is certainly
+// in front again (focus gained with a window, a finger on it, or a second after
+// the resume on a phone that sends no focus: platform/AudioWake.hpp decides, and
+// it is NOT at the resume command itself), so a sound stream stops with the game
+// instead of playing on in the background. The handler is meant to CLOSE the
+// stream on true and open a NEW one on false; false is called again, after a
+// true, when the focus arrives after the fallback started the sound without it.
 void SetAudioSuspendHandler(std::function<void(bool suspended)> handler);
 
 // WindowControl::SetPreferredRefreshRate on Android: kHighestRefreshRate, a

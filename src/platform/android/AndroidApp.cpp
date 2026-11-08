@@ -30,6 +30,7 @@
 
 #include "core/Log.hpp"
 #include "core/WindowControl.hpp"
+#include "platform/AudioWake.hpp"
 #include "platform/SafeArea.hpp"
 
 namespace Supersonic::Android {
@@ -91,6 +92,7 @@ struct State {
 
     std::function<void()> surfaceLost;
     std::function<void(bool)> audioSuspend;
+    AudioWake audioWake;   // when the sound stops and starts: the commands below are forwarded to it
 
     std::array<bool, Key::Last + 1> keysDown{};
     std::array<bool, Key::Last + 1> keysPressed{};   // went down since the last snapshot
@@ -112,6 +114,32 @@ struct State {
 };
 
 State g;
+
+// ---- The sound's lifecycle ------------------------------------------------------
+
+// Carries out what AudioWake decided. THE SOUND STARTS WHEN THE APP IS CERTAINLY IN FRONT (GAINED_FOCUS with a window,
+// a finger on the window, or a second after RESUME on a phone that never sends the focus), NOT WHEN RESUME IS READ, and
+// never from the RESUME and INIT_WINDOW handlers, which the glue's UI thread waits on. The reasoning, and what is and
+// is not known of it, is in platform/AudioWake.hpp; the handler opens a NEW stream on every Wake
+// (core/AudioStreamKeeper.hpp), so nothing that began before is trusted.
+void applyAudio(AudioWake::Action action) {
+    if (!g.audioSuspend) return;
+    switch (action) {
+    case AudioWake::Action::None:
+        break;
+    case AudioWake::Action::Suspend:
+        g.audioSuspend(true);
+        break;
+    case AudioWake::Action::Wake:
+        g.audioSuspend(false);
+        break;
+    case AudioWake::Action::Rewake:
+        // A suspend closes the stream and a resume opens a new one: exactly the reopen asked for.
+        g.audioSuspend(true);
+        g.audioSuspend(false);
+        break;
+    }
+}
 
 bool findTouchConst(int32_t id) {
     for (const Finger& touch : g.touches) {
@@ -459,6 +487,7 @@ int32_t handlePointerMotion(const AInputEvent* event) {
         // in a while so a log shows that it happened.
         if (g.resumed && g.window && !g.focused) {
             g.focused = true;
+            applyAudio(g.audioWake.OnFocus(true));
             static double lastWarning = -1.0e9;
             if (Now() - lastWarning > 10.0) {
                 lastWarning = Now();
@@ -633,6 +662,8 @@ void onAppCmd(android_app* app, int32_t cmd) {
     switch (cmd) {
     case APP_CMD_INIT_WINDOW:
         g.window = app->window;
+        // Tracked, not acted on: the glue's UI thread waits for this handler, and no stream is opened under it.
+        applyAudio(g.audioWake.OnWindow(true));
         g.width = 0;
         g.height = 0;
         refreshWindowSize();
@@ -644,6 +675,7 @@ void onAppCmd(android_app* app, int32_t cmd) {
         // first, or the swapchain is presenting to freed memory.
         if (g.surfaceLost) g.surfaceLost();
         g.window = nullptr;
+        applyAudio(g.audioWake.OnWindow(false));
         break;
     case APP_CMD_WINDOW_RESIZED:
     case APP_CMD_CONTENT_RECT_CHANGED:
@@ -653,14 +685,18 @@ void onAppCmd(android_app* app, int32_t cmd) {
         break;
     case APP_CMD_GAINED_FOCUS:
         g.focused = true;
+        applyAudio(g.audioWake.OnFocus(true));
         break;
     case APP_CMD_LOST_FOCUS:
         g.focused = false;
+        applyAudio(g.audioWake.OnFocus(false));
         releaseAllInput();
         break;
     case APP_CMD_RESUME:
         g.resumed = true;
-        if (g.audioSuspend) g.audioSuspend(false);
+        // Not the sound (see applyAudio): the focus, a touch or a later frame wakes it. Only the clock of the
+        // fallback starts here.
+        applyAudio(g.audioWake.OnResume(Now()));
         break;
     case APP_CMD_PAUSE:
         g.resumed = false;
@@ -669,7 +705,7 @@ void onAppCmd(android_app* app, int32_t cmd) {
         // kLeavingGraceSeconds) are how the game finds out.
         g.focused = false;
         g.leavingUntil = Now() + kLeavingGraceSeconds;
-        if (g.audioSuspend) g.audioSuspend(true);
+        applyAudio(g.audioWake.OnPause());
         releaseAllInput();
         break;
     default:
@@ -904,6 +940,10 @@ void WaitUntilDrawable() {
     // that changes without a command is still picked up. Two cheap local
     // queries.
     refreshWindowSize();
+    // The sound's fallback for a phone that resumes without ever sending GAINED_FOCUS: a resumed app with a window gets
+    // here every frame, which is the clock AudioWake counts its second on. Also where a focus that came before the
+    // window is acted on.
+    applyAudio(g.audioWake.Tick(Now()));
 }
 
 void WindowSize(int& width, int& height) {
@@ -927,9 +967,10 @@ void SetSurfaceLostCallback(std::function<void()> callback) { g.surfaceLost = st
 
 void SetAudioSuspendHandler(std::function<void(bool)> handler) {
     g.audioSuspend = std::move(handler);
-    // A handler installed while the app is already in the background starts
-    // suspended, rather than playing until the next pause.
-    if (g.audioSuspend && g.app && !g.resumed) g.audioSuspend(true);
+    if (!g.audioSuspend) return;
+    // The stream the handler belongs to has just been opened, running; one installed while the app is already in the
+    // background starts suspended, rather than playing until the next pause.
+    applyAudio(g.audioWake.OnHandlerInstalled(!g.app || g.resumed));
 }
 
 void FillRawInput(RawInputState& state) {
