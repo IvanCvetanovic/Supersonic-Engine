@@ -105,7 +105,12 @@ std::vector<std::string> AssetDatabase::CollectAssets(const std::string& root) {
     std::error_code ec;
     if (!fs::exists(root, ec) || !fs::is_directory(root, ec)) return found;
 
-    for (fs::recursive_directory_iterator it(root, ec), end; it != end; it.increment(ec)) {
+    // skip_permission_denied: one subdirectory the process may not read ended the
+    // WHOLE scan - the loop breaks on the first error - so every asset after it in
+    // the walk got no identity and a scene's references to it fell back to paths.
+    // It is skipped now, as the walk itself would otherwise report and stop.
+    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+         it != end; it.increment(ec)) {
         if (ec) break;
         if (!it->is_regular_file(ec)) continue;
         const std::string path = NormalisePath(it->path().generic_string());
@@ -256,7 +261,8 @@ AssetDatabase::ScanResult AssetDatabase::Scan(const std::string& root) {
     // Sidecars whose asset is gone. Counted rather than deleted: this is the
     // trace a rename leaves behind, and Import is what turns it back into a
     // working reference.
-    for (fs::recursive_directory_iterator it(root, ec), end; it != end; it.increment(ec)) {
+    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+         it != end; it.increment(ec)) {
         if (ec) break;
         if (!it->is_regular_file(ec)) continue;
         const std::string path = NormalisePath(it->path().generic_string());
@@ -317,7 +323,8 @@ AssetDatabase::ImportResult AssetDatabase::Import(const std::string& root) {
         Entry entry;
     };
     std::vector<Orphan> orphans;
-    for (fs::recursive_directory_iterator it(root, ec), end; it != end; it.increment(ec)) {
+    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+         it != end; it.increment(ec)) {
         if (ec) break;
         if (!it->is_regular_file(ec)) continue;
         const std::string path = NormalisePath(it->path().generic_string());

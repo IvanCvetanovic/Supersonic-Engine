@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <clocale>
 #include <cstdlib>
 #include <map>
 #include <memory>
@@ -156,6 +157,21 @@ private:
 // Escapes a string for embedding in JSON. Entity tags are free-form user text;
 // writing them raw produced unparseable files the moment someone used a quote,
 // and allowed a crafted tag to inject document structure.
+// The text strtod is handed for a JSON number, given the decimal point the C
+// locale uses. JSON's point is always '.', while strtod reads the one LC_NUMERIC
+// names: a game that calls setlocale(LC_NUMERIC, "de_DE") - for a number it
+// formats for a player - made "1.5" parse as 1, silently, in every scene, material
+// and prefab loaded afterwards. Putting the locale's own point in the token makes
+// strtod read the whole number, whatever the locale. A no-op in the C locale, which
+// is every run that was already working.
+inline std::string NumberTextForStrtod(std::string token, const char* decimalPoint) {
+    if (decimalPoint == nullptr || decimalPoint[0] == '\0') return token;
+    if (decimalPoint[0] == '.' && decimalPoint[1] == '\0') return token;
+    const size_t dot = token.find('.');
+    if (dot != std::string::npos) token.replace(dot, 1, decimalPoint);
+    return token;
+}
+
 inline std::string Escape(const std::string& in) {
     std::string out;
     out.reserve(in.size() + 8);
@@ -397,7 +413,9 @@ private:
         }
         if (!anyDigits) return fail("invalid number");
 
-        out = Value(std::strtod(m_text.substr(start, m_pos - start).c_str(), nullptr));
+        const std::string token = NumberTextForStrtod(
+            m_text.substr(start, m_pos - start), std::localeconv()->decimal_point);
+        out = Value(std::strtod(token.c_str(), nullptr));
         return true;
     }
 

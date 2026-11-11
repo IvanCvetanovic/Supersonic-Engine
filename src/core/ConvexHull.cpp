@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <set>
+#include <unordered_map>
 
 namespace Supersonic {
 
@@ -46,25 +48,114 @@ bool makeTriangle(const std::vector<glm::vec3>& points, uint32_t a, uint32_t b, 
 // points in eight places. Feeding those to the hull is not wrong so much as
 // wasteful - but a pair of coincident points also has no plane between them,
 // which is the degenerate case above waiting to happen.
-std::vector<glm::vec3> deduplicate(const std::vector<glm::vec3>& points) {
+//
+// See the declaration in the header for why this is a grid rather than the loop
+// over every kept point it used to be, and for the guarantee that the answer is
+// unchanged.
+bool nearlyTheSame(const glm::vec3& kept, const glm::vec3& point) {
+    return glm::dot(kept - point, kept - point) < 1.0e-12f;
+}
+
+} // namespace
+
+std::vector<glm::vec3> DeduplicatePoints(const std::vector<glm::vec3>& points) {
     std::vector<glm::vec3> unique;
     unique.reserve(points.size());
 
-    for (const glm::vec3& point : points) {
-        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
-            continue;
-        }
-        bool seen = false;
-        for (const glm::vec3& kept : unique) {
-            if (glm::dot(kept - point, kept - point) < 1.0e-12f) {
-                seen = true;
+    const auto isFinite = [](const glm::vec3& p) {
+        return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+    };
+
+    // A grid only pays once there are many points, and only holds while the cell
+    // index of a coordinate fits an integer: past about 1e12 metres (nothing a
+    // collider has) the all-pairs loop is used, exactly as before.
+    constexpr size_t kGridThreshold = 64;
+    constexpr double kCell = 4.0e-6;      // four times the 1e-6 tolerance
+    constexpr float kLargest = 1.0e12f;
+    bool useGrid = points.size() > kGridThreshold;
+    if (useGrid) {
+        for (const glm::vec3& p : points) {
+            if (isFinite(p) && (std::fabs(p.x) > kLargest || std::fabs(p.y) > kLargest ||
+                                std::fabs(p.z) > kLargest)) {
+                useGrid = false;
                 break;
             }
         }
-        if (!seen) unique.push_back(point);
+    }
+
+    if (!useGrid) {
+        for (const glm::vec3& point : points) {
+            if (!isFinite(point)) continue;
+            bool seen = false;
+            for (const glm::vec3& kept : unique) {
+                if (nearlyTheSame(kept, point)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) unique.push_back(point);
+        }
+        return unique;
+    }
+
+    // Cell -> the most recently kept point in it, with `next` chaining the earlier
+    // ones. Keyed by a hash of the three cell indices, so two cells can share a
+    // chain: that costs a few extra distance tests and never a wrong answer, since
+    // every candidate is tested for real.
+    const auto cellOf = [](float v) { return static_cast<int64_t>(std::floor(static_cast<double>(v) / kCell)); };
+    const auto keyOf = [](int64_t x, int64_t y, int64_t z) {
+        uint64_t h = static_cast<uint64_t>(x) * 0x9E3779B97F4A7C15ull;
+        h ^= static_cast<uint64_t>(y) + 0x7F4A7C15ull + (h << 6) + (h >> 2);
+        h *= 0xC2B2AE3D27D4EB4Full;
+        h ^= static_cast<uint64_t>(z) + 0x165667B1ull + (h << 6) + (h >> 2);
+        return h;
+    };
+
+    std::unordered_map<uint64_t, uint32_t> head;
+    head.reserve(points.size());
+    std::vector<uint32_t> next;
+    next.reserve(points.size());
+    constexpr uint32_t kNone = 0xFFFFFFFFu;
+
+    for (const glm::vec3& point : points) {
+        if (!isFinite(point)) continue;
+
+        const int64_t cx = cellOf(point.x);
+        const int64_t cy = cellOf(point.y);
+        const int64_t cz = cellOf(point.z);
+
+        bool seen = false;
+        for (int64_t dx = -1; dx <= 1 && !seen; ++dx) {
+            for (int64_t dy = -1; dy <= 1 && !seen; ++dy) {
+                for (int64_t dz = -1; dz <= 1 && !seen; ++dz) {
+                    const auto found = head.find(keyOf(cx + dx, cy + dy, cz + dz));
+                    if (found == head.end()) continue;
+                    for (uint32_t i = found->second; i != kNone; i = next[i]) {
+                        if (nearlyTheSame(unique[i], point)) {
+                            seen = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (seen) continue;
+
+        const auto index = static_cast<uint32_t>(unique.size());
+        unique.push_back(point);
+        const uint64_t key = keyOf(cx, cy, cz);
+        const auto [slot, inserted] = head.try_emplace(key, index);
+        if (inserted) {
+            next.push_back(kNone);
+        } else {
+            next.push_back(slot->second);
+            slot->second = index;
+        }
     }
     return unique;
 }
+
+namespace {
 
 // Four points that actually enclose a volume.
 //
@@ -150,7 +241,7 @@ bool ConvexHull::Build(const std::vector<glm::vec3>& points) {
     m_boundsMin = glm::vec3(0.0f);
     m_boundsMax = glm::vec3(0.0f);
 
-    const std::vector<glm::vec3> cloud = deduplicate(points);
+    const std::vector<glm::vec3> cloud = DeduplicatePoints(points);
 
     uint32_t seed[4];
     if (!findSeed(cloud, seed)) return false;

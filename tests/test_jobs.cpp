@@ -225,6 +225,22 @@ static void testInitializeIsIdempotentAndShutdownIsSafe() {
     JobSystem::Shutdown();
 }
 
+static void testAHugeGroupSizeStillRunsTheTask() {
+    // The group count was `(jobCount + groupSize - 1) / groupSize` in 32 bits. With a
+    // pool running, a job count of 2 and a group size of 0xFFFFFFFF wrapped to zero
+    // groups: nothing was queued and the task silently never ran.
+    JobSystem::Initialize(4);
+    std::atomic<int> counter{0};
+    JobSystem::Dispatch(2, 0xFFFFFFFFu, [&counter](JobSystem::JobArgs) { counter.fetch_add(1); });
+    JobSystem::Wait();
+    CHECK_MSG(counter.load() == 2, "both items run with a group size larger than the job count");
+
+    counter = 0;
+    JobSystem::Dispatch(1000, 0x80000000u, [&counter](JobSystem::JobArgs) { counter.fetch_add(1); });
+    JobSystem::Wait();
+    CHECK_MSG(counter.load() == 1000, "and with a group size of two to the thirty-first");
+}
+
 static void runTests() {
     testDispatchRunsInlineWithoutAPool();
     testEveryItemRunsExactlyOnce();
@@ -234,6 +250,7 @@ static void runTests() {
     testExecuteRunsSingleTasks();
     testAThrowingJobDoesNotHangTheFence();
     testDegenerateArgumentsAreHarmless();
+    testAHugeGroupSizeStillRunsTheTask();
     testInitializeIsIdempotentAndShutdownIsSafe();
 }
 

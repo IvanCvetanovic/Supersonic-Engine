@@ -3,6 +3,8 @@
 #include <filesystem>
 #include <string>
 
+#include "imgui.h"
+
 namespace Supersonic {
 
 class ThumbnailCache;
@@ -38,6 +40,11 @@ public:
 
 private:
     std::string createMaterial();
+
+    // The box above the grid: tiles whose name does not match are not drawn. The
+    // hierarchy panel has one; the browser, where a folder of a few hundred files is
+    // ordinary, had none (and a comment elsewhere said it did).
+    ImGuiTextFilter m_filter;
 
     std::filesystem::path m_assetsDirectory;
     std::filesystem::path m_currentDirectory;

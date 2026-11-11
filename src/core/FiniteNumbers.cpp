@@ -39,9 +39,17 @@ FiniteNumbersOnly::FiniteNumbersOnly(std::ostream& out) : m_out(out) {
 
     // The locale takes ownership of the facet. It is kept alive by the stream's
     // copy until the guard restores the old one, and the count is read before that.
+    //
+    // On top of the CLASSIC locale, not the stream's own. A stream takes the global
+    // locale when it is made, so a program that called std::locale::global(de_DE) -
+    // to format a number for a player - had every scene, material and prefab written
+    // with "1,5" and a thousands separator, which Json::Parse reads as a different
+    // number or refuses. A scene is data, not text for a person: it is written the
+    // same way whatever the program's locale is. Every finite value is still
+    // formatted by the standard facet with the stream's flags and precision.
     auto* facet = new FiniteNumPut;
     m_facet = facet;
-    m_previous = out.imbue(std::locale(out.getloc(), facet));
+    m_previous = out.imbue(std::locale(std::locale::classic(), facet));
     m_installed = true;
 }
 

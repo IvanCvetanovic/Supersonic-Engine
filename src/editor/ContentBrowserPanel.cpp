@@ -3,12 +3,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cfloat>
 #include "editor/Theme.hpp"
 #include "editor/ThumbnailCache.hpp"
 #include "core/MaterialLibrary.hpp"
 #include "imgui.h"
 
 #include <system_error>
+#include <vector>
 
 namespace Supersonic {
 
@@ -130,6 +132,17 @@ std::string ContentBrowserPanel::OnImGuiRender() {
         }
     }
 
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    m_filter.Draw("##contentfilter");
+    if (!m_filter.IsActive() && !ImGui::IsItemActive()) {
+        // A hint in the empty box, so it says what it is for without a label that a
+        // narrow panel cuts off.
+        const ImVec2 min = ImGui::GetItemRectMin();
+        ImGui::GetWindowDrawList()->AddText(ImVec2(min.x + 6.0f, min.y + 3.0f),
+                                            ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                                            "Filter files");
+    }
+
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -158,10 +171,35 @@ std::string ContentBrowserPanel::OnImGuiRender() {
             // through the throwing one, so an entry that vanished between two
             // frames, or one the process may not stat, threw
             // filesystem_error out of the middle of the ImGui frame.
+            std::vector<std::filesystem::directory_entry> entries;
             for (; it != std::filesystem::directory_iterator() && !ec; it.increment(ec)) {
-                const auto& directoryEntry = *it;
+                entries.push_back(*it);
+            }
+            ec.clear();
+
+            // Folders first, then by name without regard to case. The operating
+            // system hands entries back in whatever order its file system keeps
+            // them, which is not alphabetical on most of them and changes when a
+            // file is added: tiles jumped about while a folder was being edited.
+            const auto lowered = [](const std::filesystem::directory_entry& entry) {
+                std::string name = entry.path().filename().string();
+                std::transform(name.begin(), name.end(), name.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return name;
+            };
+            std::error_code statusError;
+            std::stable_sort(entries.begin(), entries.end(),
+                [&](const std::filesystem::directory_entry& a, const std::filesystem::directory_entry& b) {
+                    const bool aDirectory = a.is_directory(statusError);
+                    const bool bDirectory = b.is_directory(statusError);
+                    if (aDirectory != bDirectory) return aDirectory;
+                    return lowered(a) < lowered(b);
+                });
+
+            for (const auto& directoryEntry : entries) {
                 const auto& path = directoryEntry.path();
                 const std::string filenameString = path.filename().string();
+                if (m_filter.IsActive() && !m_filter.PassFilter(filenameString.c_str())) continue;
 
                 ImGui::PushID(filenameString.c_str());
 

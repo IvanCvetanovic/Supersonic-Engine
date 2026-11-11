@@ -20,6 +20,8 @@
 #include "TestHarness.hpp"
 #include "core/Json.hpp"
 
+#include <clocale>
+
 #include <string>
 #include <utility>
 #include <vector>
@@ -309,6 +311,41 @@ static void testAByteOrderMarkIsNotPartOfTheDocument() {
     CHECK(!Json::Parse("\xEF\xBB", other, error));
 }
 
+static void testANumberIsReadWhateverTheLocalesDecimalPointIs() {
+    // strtod reads the decimal point LC_NUMERIC names, JSON's is always '.': a game
+    // that set a German locale made "1.5" parse as 1, silently, in every scene
+    // loaded afterwards. The token handed to strtod carries the locale's own point.
+    CHECK_MSG(Json::NumberTextForStrtod("1.5", ",") == "1,5", "a comma locale gets a comma");
+    CHECK_MSG(Json::NumberTextForStrtod("-0.25e-3", ",") == "-0,25e-3", "exponent and sign untouched");
+    CHECK_MSG(Json::NumberTextForStrtod("1.5", ".") == "1.5", "the C locale's token is unchanged");
+    CHECK_MSG(Json::NumberTextForStrtod("42", ",") == "42", "an integer has no point to change");
+    CHECK_MSG(Json::NumberTextForStrtod("1.5", "") == "1.5", "an empty point is left alone");
+    CHECK_MSG(Json::NumberTextForStrtod("1.5", nullptr) == "1.5", "and so is a null one");
+
+    // End to end, where the machine has a comma locale installed (this one may not:
+    // the check is skipped rather than failed).
+    const char* candidates[] = {"de_DE.UTF-8", "de_DE", "German_Germany.1252", "German", "fr_FR.UTF-8"};
+    const std::string saved = std::setlocale(LC_NUMERIC, nullptr);
+    bool changed = false;
+    for (const char* name : candidates) {
+        if (std::setlocale(LC_NUMERIC, name) != nullptr &&
+            std::string(std::localeconv()->decimal_point) != ".") {
+            changed = true;
+            break;
+        }
+    }
+    if (changed) {
+        Json::Value root;
+        std::string error;
+        CHECK_MSG(Json::Parse("{\"x\": 1.5, \"y\": [0.25, -3.75e1]}", root, error), error);
+        CHECK_NEAR(static_cast<float>(root["x"].AsNumber(0.0)), 1.5f);
+        CHECK_NEAR(static_cast<float>(root["y"].AsArray()[1].AsNumber(0.0)), -37.5f);
+    } else {
+        CHECK_MSG(true, "no comma-decimal locale installed here; the helper checks above cover the logic");
+    }
+    std::setlocale(LC_NUMERIC, saved.c_str());
+}
+
 static void runTests() {
     testParsesTheShapesTheEngineWrites();
     testDeepNestingIsRefusedRatherThanRecursedInto();
@@ -326,6 +363,7 @@ static void runTests() {
     testCopiesAndMovesKeepTheOrder();
     testAnythingButAnObjectHasNoKeys();
     testAByteOrderMarkIsNotPartOfTheDocument();
+    testANumberIsReadWhateverTheLocalesDecimalPointIs();
 }
 
 TEST_MAIN("test_json", 70)

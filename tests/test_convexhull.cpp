@@ -25,6 +25,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <random>
+#include <cstring>
 #include <vector>
 
 using namespace Supersonic;
@@ -704,6 +706,87 @@ void testTiedContactsKeepTheirOrderWhenTheSwitchIsOn() {
     }
 }
 
+// The all-pairs loop DeduplicatePoints replaced, copied verbatim: the grid version is
+// held to producing the same points in the same order, bit for bit.
+std::vector<glm::vec3> referenceDeduplicate(const std::vector<glm::vec3>& points) {
+    std::vector<glm::vec3> unique;
+    unique.reserve(points.size());
+    for (const glm::vec3& point : points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
+        bool seen = false;
+        for (const glm::vec3& kept : unique) {
+            if (glm::dot(kept - point, kept - point) < 1.0e-12f) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) unique.push_back(point);
+    }
+    return unique;
+}
+
+bool sameBits(const std::vector<glm::vec3>& a, const std::vector<glm::vec3>& b) {
+    return a.size() == b.size() &&
+           (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(glm::vec3)) == 0);
+}
+
+void testTheGridDeduplicationKeepsTheSamePointsInTheSameOrder() {
+    // A mesh has one vertex per corner per face, so a hull builder is handed the
+    // same point many times over, plus points a rounding error apart, plus the odd
+    // NaN. The grid has to drop exactly what the all-pairs loop dropped, and keep
+    // the first of each group, whatever the scale and however the points cluster.
+    std::mt19937 rng(20261105);
+    std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
+
+    struct Case { const char* name; size_t count; float scale; float jitter; };
+    const Case cases[] = {
+        {"a few points, below the grid threshold", 40, 1.0f, 0.0f},
+        {"just past the threshold",                70, 1.0f, 5.0e-7f},
+        {"unit cloud, exact duplicates",         2000, 1.0f, 0.0f},
+        {"unit cloud, jitter under the tolerance", 2000, 1.0f, 8.0e-7f},
+        {"jitter at the tolerance",              2000, 1.0f, 1.0e-6f},
+        {"jitter just over it",                  2000, 1.0f, 1.5e-6f},
+        {"jitter at several cell widths",        2000, 1.0f, 4.0e-6f},
+        {"a tiny cloud, everything close",       2000, 1.0e-5f, 5.0e-7f},
+        {"a large offset, where floats are coarse", 2000, 1.0e5f, 0.0f},
+        {"a mesh-sized cloud",                  30000, 50.0f, 1.0e-6f},
+    };
+
+    for (const Case& c : cases) {
+        std::vector<glm::vec3> cloud;
+        cloud.reserve(c.count);
+        for (size_t i = 0; i < c.count; ++i) {
+            // Draw from a pool a fifth the size so duplicates and near-duplicates are common.
+            if (!cloud.empty() && (rng() % 5) != 0) {
+                glm::vec3 p = cloud[rng() % cloud.size()];
+                p += glm::vec3(unit(rng), unit(rng), unit(rng)) * c.jitter;
+                cloud.push_back(p);
+            } else {
+                cloud.push_back(glm::vec3(unit(rng), unit(rng), unit(rng)) * c.scale);
+            }
+        }
+        // Non-finite points are skipped, wherever they sit.
+        cloud.insert(cloud.begin() + static_cast<std::ptrdiff_t>(cloud.size() / 3),
+                     glm::vec3(std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f));
+        cloud.push_back(glm::vec3(std::numeric_limits<float>::infinity(), 1.0f, 1.0f));
+
+        const auto expected = referenceDeduplicate(cloud);
+        const auto actual = DeduplicatePoints(cloud);
+        CHECK_MSG(sameBits(expected, actual),
+                  std::string(c.name) + ": " + std::to_string(actual.size()) + " points against " +
+                      std::to_string(expected.size()) + " from the all-pairs loop");
+    }
+
+    // The empty and the single point, and a cloud past the grid's range, which falls
+    // back to the loop rather than overflowing a cell index.
+    CHECK(DeduplicatePoints({}).empty());
+    CHECK_EQ(DeduplicatePoints({glm::vec3(1.0f)}).size(), size_t{1});
+    std::vector<glm::vec3> huge;
+    for (int i = 0; i < 100; ++i) huge.push_back(glm::vec3(1.0e15f + static_cast<float>(i % 7) * 1.0e9f, 0.0f, 0.0f));
+    CHECK_MSG(sameBits(referenceDeduplicate(huge), DeduplicatePoints(huge)),
+              "coordinates beyond the grid's range take the all-pairs path and agree with it");
+}
+
 void runTests() {
     testTooFewPointsIsNotAHull();
     testInvalidateDropsOnlyTheHullsBuiltFromThatFile();
@@ -733,6 +816,7 @@ void runTests() {
     testTheVertexCapIsHonestAboutWhatItCost();
     testAHullIsTheSameHullTwice();
     testTiedContactsKeepTheirOrderWhenTheSwitchIsOn();
+    testTheGridDeduplicationKeepsTheSamePointsInTheSameOrder();
 }
 
 } // namespace

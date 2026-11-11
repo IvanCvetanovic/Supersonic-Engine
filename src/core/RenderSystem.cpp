@@ -1131,7 +1131,13 @@ void RenderSystem::Render(
     // frustum rather than passed in beside it.
     const glm::vec3 viewDirection = frustum.ViewDirection();
 
-    std::vector<TransparentDraw> transparent;
+    // A scratch kept between frames: a vector's capacity survives clear(), so a
+    // frame that draws what the last one drew allocates nothing. These were fresh
+    // vectors every frame, sized by the draw count - eight allocations and frees a
+    // frame in the engine's busiest function. Cleared at the top of each use, and
+    // only ever filled and read inside the one call, so nothing outlives it.
+    static thread_local std::vector<TransparentDraw> transparent;
+    transparent.clear();
 
     // ONE ITEM PER DRAW A PASS WILL SUBMIT, gathered before any of it is
     // recorded.
@@ -1252,7 +1258,8 @@ void RenderSystem::Render(
     // after binding its own pipeline, which is the sort of thing that is
     // invisible when it is missing until two passes disagree about what is
     // bound.
-    std::vector<OpaqueDraw> opaque;
+    static thread_local std::vector<OpaqueDraw> opaque;
+    opaque.clear();
 
     auto view = registry.view<WorldTransformComponent, RenderableComponent>();
     for (auto entity : view) {
@@ -1324,7 +1331,8 @@ void RenderSystem::Render(
     // because it is a descriptor bound once. Everything else - the transform,
     // the colour, the roughness, the skin range - travels in the instance
     // record and is free to differ.
-    std::vector<PassItem> opaqueItems;
+    static thread_local std::vector<PassItem> opaqueItems;
+    opaqueItems.clear();
     opaqueItems.reserve(opaque.size());
 
     for (const OpaqueDraw& draw : opaque) {
@@ -1425,7 +1433,8 @@ void RenderSystem::Render(
     // loop that used to decide as it went is gone, and with it the chance for
     // a counter and a submission to drift apart.
     {
-        std::vector<PassDraw> keys;
+        static thread_local std::vector<PassDraw> keys;
+        keys.clear();
         keys.reserve(opaqueItems.size());
         for (const PassItem& item : opaqueItems) keys.push_back(item.key);
 
@@ -1502,7 +1511,8 @@ void RenderSystem::Render(
             // the difference between a correct frame and a wrong one. That rule
             // is PlanPass's now, and it is the same rule - which is the point of
             // there being one.
-            std::vector<PassItem> blendedItems;
+            static thread_local std::vector<PassItem> blendedItems;
+            blendedItems.clear();
             blendedItems.reserve(run.count);
 
             for (uint32_t i = run.first; i < run.first + run.count; ++i) {
@@ -1536,7 +1546,8 @@ void RenderSystem::Render(
                 blendedItems.push_back(item);
             }
 
-            std::vector<PassDraw> keys;
+            static thread_local std::vector<PassDraw> keys;
+            keys.clear();
             keys.reserve(blendedItems.size());
             for (const PassItem& item : blendedItems) keys.push_back(item.key);
 
@@ -1572,7 +1583,8 @@ void RenderSystem::Render(
     const GpuMesh* particleMesh = meshes.Get(meshes.GetCubeMesh());
     if (!particleMesh || particleMesh->indexCount == 0) return;
 
-    std::vector<ParticleDraw> particles;
+    static thread_local std::vector<ParticleDraw> particles;
+    particles.clear();
 
     // Reserved against every emitter's POOL, not against the live count. A pool
     // is what the emitter has already paid for, so the upper bound is free to

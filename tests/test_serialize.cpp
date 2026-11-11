@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <locale>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -1668,6 +1669,40 @@ static void testWorldPhysicsSurvivesARoundTrip() {
     CHECK_NEAR(settings.groundPlaneY, -12.5f);
 }
 
+namespace {
+// A locale like a German one: a comma for the decimal point and a dot for
+// thousands, grouped in threes.
+struct CommaNumpunct : std::numpunct<char> {
+    char do_decimal_point() const override { return ','; }
+    char do_thousands_sep() const override { return '.'; }
+    std::string do_grouping() const override { return "\3"; }
+};
+} // namespace
+
+static void testASceneIsWrittenTheSameWhateverTheProgramsLocaleIs() {
+    // A stream takes the GLOBAL locale when it is made, so a program that set a
+    // German one to format a number for a player wrote every scene, material and
+    // prefab with "1,5" and a thousands separator - which the reader takes for a
+    // different number or refuses. The finite-number guard is built on the classic
+    // locale now. Checked with a comma locale made in code, so it needs nothing
+    // installed on the machine.
+    const std::locale previous = std::locale::global(std::locale(std::locale::classic(), new CommaNumpunct));
+
+    std::ostringstream plain;
+    plain << 1234.5f;
+    const std::string withoutGuard = plain.str();
+
+    std::ostringstream guarded;
+    {
+        FiniteNumbersOnly guard(guarded);
+        guarded << 1234.5f << ' ' << 0.25f << ' ' << 1000000.0f;
+    }
+    std::locale::global(previous);
+
+    CHECK_MSG(withoutGuard == "1.234,5", "the comma locale does reach a bare stream: " + withoutGuard);
+    CHECK_MSG(guarded.str() == "1234.5 0.25 1e+06", "a guarded stream writes it the way a scene file reads it: " + guarded.str());
+}
+
 static void testTheOptInPhysicsSwitchesAreWrittenOnlyWhenOn() {
     // Two switches that change what a tick computes (stable hull contact order,
     // sorted contact exits). They are written to a scene file only when ON, so a
@@ -2520,6 +2555,7 @@ static void runTests() {
     testTheScenesLookSurvivesARoundTrip();
     testASceneWithNoLookGetsTheDefaultOne();
     testWorldPhysicsSurvivesARoundTrip();
+    testASceneIsWrittenTheSameWhateverTheProgramsLocaleIs();
     testTheOptInPhysicsSwitchesAreWrittenOnlyWhenOn();
     testASnapshotKeepsEveryFloatAndAFileKeepsItsSixDigits();
     testAStackAndItsRankingSurviveARoundTrip();

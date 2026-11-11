@@ -23,6 +23,21 @@ namespace Supersonic {
 // every vertex behind every face plane - and a DIFFERENTIAL check that a hull
 // built from a cube's eight corners collides exactly the way the box path
 // already does.
+// The points that are not the same point: every finite point, in the order first
+// seen, dropping any within 1e-6 of one already kept. Public because the hull
+// builder runs it over EVERY vertex of a mesh and it is tested against the
+// all-pairs version it replaced.
+//
+// Linear in the number of points (a grid of cells wider than the tolerance, each
+// point compared with the kept points in its own cell and the twenty-six around
+// it) where the loop it replaced was quadratic: a collider built from a
+// fifty-thousand-triangle mesh compared a hundred and fifty thousand points
+// against each other and stalled PhysicsSystem::Update for seconds. The answer is
+// the same set in the same order, because the tolerance is unchanged and a cell is
+// four times wider than it: any kept point close enough to matter is in the
+// neighbourhood.
+std::vector<glm::vec3> DeduplicatePoints(const std::vector<glm::vec3>& points);
+
 class ConvexHull {
 public:
     // A polygon, not a triangle.

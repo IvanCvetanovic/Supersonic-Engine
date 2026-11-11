@@ -163,7 +163,13 @@ void JobSystem::Dispatch(uint32_t jobCount, uint32_t groupSize,
     // Inline when there is no pool, or when the whole dispatch is one group -
     // handing a single group to a worker and then waiting for it costs more than
     // doing it here.
-    const uint32_t groupCount = (jobCount + groupSize - 1) / groupSize;
+    //
+    // In 64 bits: `jobCount + groupSize - 1` wraps in 32 when the group size is
+    // large - jobCount 2 with a group size of 0xFFFFFFFF made zero groups, so with
+    // a pool running the task was queued as nothing and never ran, with no error.
+    // The count itself is at most jobCount, so it fits the narrower type again.
+    const auto groupCount = static_cast<uint32_t>(
+        (static_cast<uint64_t>(jobCount) + groupSize - 1) / groupSize);
     if (!IsInitialized() || groupCount == 1) {
         for (uint32_t i = 0; i < jobCount; ++i) {
             task(JobArgs{i, 0});
@@ -179,8 +185,9 @@ void JobSystem::Dispatch(uint32_t jobCount, uint32_t groupSize,
             Job job;
             job.task = task;
             job.groupIndex = group;
-            job.begin = group * groupSize;
-            job.end = std::min(job.begin + groupSize, jobCount);
+            job.begin = group * groupSize;   // below jobCount by construction, so it fits
+            job.end = static_cast<uint32_t>(
+                std::min<uint64_t>(static_cast<uint64_t>(job.begin) + groupSize, jobCount));
             p.queue.push_back(std::move(job));
         }
     }
