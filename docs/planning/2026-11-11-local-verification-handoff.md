@@ -715,3 +715,247 @@ included.
   no `--timeout`, so a CRT dialog holds a run until something else stops it: 86 minutes on the
   hosted runner, until the job's own cap. A `--timeout` would turn that into one failed test. I
   changed neither file.
+
+---
+
+## Outcome, third run (late evening of 11 November 2026)
+
+**The third run went through every step it could. L1 passes in both configurations, the negative
+control for the harness change behaves as specified, L2, L3, L4 and L9 pass, CI is green after a
+transient outage, and no game behaves differently with this engine than at its own pin. L7 and L8
+need a person and were not run; L6 was checked headlessly, which is partial.** Nothing in the
+engine, a test, a golden or a baseline was changed (the unpatched header of the negative control was
+put back byte for byte, below). It tested `3a77d3f`, which is the second run's `c4490ba` plus the
+owner's `3b6c6da` (the `tinygltf` guard, the harness change, the 300 s suite timeout, the arm64
+gate); the engine and test sources are those of `3b6c6da`. Machine and toolchain are the first run's.
+
+### Surprises first
+
+**1. CI could not start for a stretch, then could.** Six dispatches between 20:25 and 20:48 UTC all
+ended `startup_failure` with no job, no check run and no message, and the next attempt, at 21:12
+UTC, started normally:
+
+| Run | Leg, ref | Dispatched (UTC) | Result |
+|---|---|---|---|
+| 43095941650, 43095952201 | `all`, `arm64`, the fixed branch | 20:25 | `startup_failure` |
+| 43097716534 | `quick`, the fixed branch | 20:43 | `startup_failure` |
+| 43097725860 | `quick`, **`main`** (workflow unchanged) | 20:43 | `startup_failure` |
+| 43098137977, 43098140788 | `all`, `arm64`, the fixed branch | 20:47 | `startup_failure` |
+| 43101016689 | `quick`, the fixed branch | 21:12 | **success** |
+| 43101144995, 43101171042 | `all`, `arm64`, the fixed branch | 21:13 | **success** (below) |
+
+It was not the workflow file: `main`'s file, which is identical to the one that started normally on
+the branch at 16:50, failed the same way at 20:43, and the branch's file, which failed from 20:25 to
+20:47, started normally at 21:12 with no change in between. `ci.yml` also parses, has no tab or
+non-ASCII byte, and both `uses:` actions still resolve. GitHub's status page reported all systems operational and Actions was enabled on a public
+repository. I did not edit CI and I never learned the cause; the run page, which I cannot read, may
+say. Treat it as a transient platform failure unless it recurs.
+
+**2. Penumbra's own baseline is red on this PC, before this engine is involved.**
+`test_pn_render_hud` reports `15461 checks, 18 failures` at Penumbra's own pin (`4261485`), all at
+`tests/test_pn_render_hud.cpp:2600`: `2400x1080 es "Jogador versus Jogador": a glyph at (640.685181,
+285.703705)-(646.592590, 310.944427) past the box …`, a glyph-fit check on localized text (the code
+has Arabic-specific slack and refers to an "Arial line box"), on a 1920x1080 144 Hz desktop. With
+this engine the suite's whole output, 453 lines including all 18 messages and their float
+coordinates, is identical except the build directory in two lines, and Penumbra's own combined
+runner gives `16 passed, 1 failed` at both engines (L5). So the engine changes nothing here and the
+game's own suite is not green on this machine. I did not investigate why (fonts or display are my
+guess, not a finding).
+
+**3. Smart App Control decided what I could see of Penumbra, and I rebuilt once to get a clean pair.**
+`test_pn_all.exe`, Penumbra's own runner (it runs each suite as a child process of itself), was
+blocked on all three attempts at the pin, so I first ran the 17 suites individually through ctest,
+where 6 of them never ran, `test_pn_formats` (the scene writer compared with the shipped scenes byte
+for byte) among them. With this engine `test_pn_all.exe` ran at once. To pair them I rebuilt
+Penumbra at its pin, which makes a new executable and not a fourth try at the blocked one, and
+`test_pn_all.exe` ran on its first attempt: **all 17 verdicts now exist at both engines, and
+`test_pn_formats` passed at both** (L5).
+
+**4. The harness change works on a real MSVC**, which is what it was written without (details
+under the negative control): a Debug CRT assertion now ends the suite with exit code 3 and a line on
+stderr, with no dialog, in about a second.
+
+**5. Bugs in my own driver, so you know what was discarded.** The first Penumbra "pin tests"
+result (`exit 0` in 2 s, an empty log) was not a result: `test_pn_all.exe` was blocked, and a
+PowerShell native command that cannot start leaves `$LASTEXITCODE` as it was, so my driver read a
+stale 0. I threw it away, fixed the driver to read an exit code only from a process that started,
+and reran. Separately, a single result object has no `.Count` in Windows PowerShell 5.1, so my
+driver logged Magic Portals' pin run as "never started" although it had run (`exit 0`, `91 suites,
+91 passed`), and, before I fixed it, did the same to Penumbra's first run at the new engine: it
+ignored a `test_pn_all.exe` that had run (exit 1, the known `render_hud` failure) and fell back to
+ctest. I found that only by checking the driver log against my draft of this record. Every figure
+below is from a suite's own output, and the Penumbra comparison below is from `test_pn_all.exe`
+at both engines.
+
+### L1
+
+- **Merge and the correction bullet.** `3b6c6da` merged cleanly (`3a77d3f`). I read the "Second
+  correction" bullet first and confirmed what it says: **`test_gltf` passes, with 352 checks and 0
+  failures in Debug**, exit 0, no dialog. It is no longer an open finding.
+- **Warning gate.** `SUPERSONIC_WERROR=ON`, `/W4 /permissive- /WX`, MSVC 19.51: configure exit 0;
+  Debug build 2.2 min, Release 3.5 min, both exit 0 with **no diagnostic of any kind**. The new
+  `crtdbg.h` code in `tests/TestHarness.hpp` compiled under `/W4 /WX` first time.
+- **Debug ctest** (254 s): 66 of 67 `Passed`; `test_draworder` `Not Run` (Smart App Control), then
+  **ran by hand on attempt 1, exit 0, 119 checks, 0 failures**.
+- **Release ctest** (260 s): **67 of 67 `Passed`**, no `Not Run`, no `Skipped`. That includes the
+  six suites Smart App Control blocked in the second run (`test_transform`, `test_sat`,
+  `test_heightfield`, `test_draworder`, `test_camera`, `test_audiostreamkeeper`): all six ran and
+  passed locally this time, so the hosted result is not needed to cover them.
+- `test_device` (#66) and `test_reporttext` (#67) `Passed` in both configurations; `test_determinism`
+  (#34), `test_replay` (#35) and `test_componentfields` (#38) too. No suite reached the new 300 s
+  `TIMEOUT`.
+- 17 of 17 shaders recompiled in each build with this PC's `glslc` and `git status` was empty at
+  the end.
+
+### The negative control for the harness change
+
+1. Saved the patched header (SHA-256 `15d5f673f2274d08…`), then
+   `git show 9c983cc:third_party/tinygltf/tiny_gltf.h > third_party/tinygltf/tiny_gltf.h`
+   (`8ad5e2b6b72db17e…`, no `SUPERSONIC PATCH` in it). `git status` showed only that file.
+2. Rebuilt `test_gltf` in Debug (exit 0, 8 s). I checked it was real: `GltfLoader.cpp` and
+   `TinyGltfImplementation.cpp` recompiled, `SupersonicCore.lib` and `test_gltf.exe` relinked.
+3. Ran it directly from the repository root: **exit code 3, no dialog**, and on stderr
+   `CRT assertion (the suite is ended, not left on a dialog): C:\Program Files (x86)\Microsoft Visual
+   Studio\18\BuildTools\VC\Tools\MSVC\14.51.36231\include\vector(1949) : Assertion failed: vector
+   subscript out of range`. Three bare runs took 1.02, 1.02 and 1.01 s of wall time, which is just
+   over the "within a second" you expected and mostly the suite's own earlier cases; 1.35 s with my
+   guard's 0.4 s polling. The guard (which would have pressed Abort and recorded a dialog) found none.
+4. `git checkout -- third_party/tinygltf/tiny_gltf.h`: `git status` empty, SHA-256 identical to the
+   saved patched header. Rebuilt Debug (exit 0, 9 s) and ran `test_gltf`: **exit 0, 352 checks, 0
+   failures**, no dialog.
+
+### L2 to L4
+
+- **L2 passes.** `powershell.exe -NoProfile -File tools/verify-replay.ps1 -Config Release` (Windows
+  PowerShell 5.1; nothing in the script needed PowerShell 7), exit 0 in 13.1 s: `180 tick(s), 4
+  checkpoint(s), 0.4 KB`; `Replay reproduced 180 of 180 recorded tick(s) across 4 checkpoint(s)`;
+  the corrupted checkpoint (`deadbeefdeadbeef` = 16045690984833335023) was caught: `[Replay]
+  diverged at tick 180: expected 16045690984833335023, got 4210035900597215456`. That last number is
+  this PC's real hash at tick 180 of `MainScene`; it is recorded nowhere in the repository, so I
+  cannot say it matches Linux's.
+- **L3 passes.** `SUPERSONIC_REQUIRE_DEVICE=1`: `test_device` **34 checks, 0 failures**, `Passed`, in
+  Release (0.13 s) and Debug (10.40 s, a validation build), on `AMD Radeon 780M Graphics` (Integrated),
+  Vulkan 1.4.349, driver `0x80018b`. Debug `SupersonicEngine.exe --hidden --fixed-step --frames 120`
+  on `AllPasses` and `MainScene` with `VK_LAYER_VALIDATE_SYNC=1` and `VK_LOADER_DEBUG=layer`: both
+  exit 0, `Rendered 120 frame(s)`, `Clean exit with validation active`; the loader names
+  `VK_LAYER_KHRONOS_validation` four times per run, including `Inserted device layer … (C:\VulkanSDK\
+  1.4.357.0\Bin\VkLayer_khronos_validation.dll)`; **0 validation errors, 0 warnings**. (The logs do
+  not separately confirm that sync validation was on beyond the variable being set. The loader also
+  prints `Failed to open JSON file …\Steam\SteamOverlayVulkanLayer64.json` and `…SteamFossilize…`:
+  stale Steam layer registrations on this PC, noise and not an error.)
+- **L4 passes.** Base `4261485` built Release in a worktree (8 min, without `WERROR`: the base
+  cannot compile the three old loops under `/WX`). Each of base and branch run twice per scene,
+  `--hidden --fixed-step --window 1280x720`:
+
+  | Scene | Files | Bytes | SHA-256 (all four identical) |
+  |---|---|---|---|
+  | `AllPasses`, 40 frames | base 1, 2; branch 1, 2 | 144139 | `d508e7b9a27b42f015b03c6bc7f6916c84773eb8ecdaf4e2c78b83e92441a20a` |
+  | `MainScene`, 120 frames | base 1, 2; branch 1, 2 | 139056 | `71d386364f75e3540fc08c4491d6fe2d42da28651de71774e62e3e8050f8b023` |
+
+  The base reproduces itself, so the comparison means something; base and branch are
+  byte-identical, and so are the 12-line `[Counts]` blocks. I looked at both pictures: real lit
+  scenes (boxes, a glass sphere, bloom, shadows, a grid). Not compared with the Linux md5s, as asked.
+
+### L5, the four games (their own suites, at the pin first, then with this engine)
+
+Each game on a scratch branch `lv-scratch`, built Release with Ninja and `cl` as its own
+`build.bat` does (validation ON, the real `glslc`), in `build-lv-pin` then `build-lv-new`; the engine
+submodule moved from its own pin to `3a77d3f` between them and **nothing pushed or committed**.
+Afterwards each repository was put back and checked independently: same branch and HEAD as at the
+start, same submodule pin, `git status` empty, no `lv-*` branch, no build tree. (Their engine
+object stores still hold the fetched commit; no ref points at it.) After every build the engine
+submodule's own `git status` was empty, so no shader blob was rewritten in any game.
+
+| Game (pin) | Pin | With `3a77d3f` | Difference |
+|---|---|---|---|
+| Wolf Brigade (`4bfcf67`) | 18 of 18 suites passed | 18 of 18 | **none**: all 18 check counts identical |
+| HUSK (`4bfcf67`) | 3 of 3 passed | 3 of 3 | **none**: `test_husk_scenarios` 142 checks (68 golden `.hashes`), `foundation` 69, `layer` 30, identical |
+| Magic Portals (`a2f4873`) | `91 suites, 91 passed, 0 skipped, 0 failed` | the same | **none**: 91 of 91 suites identical, 212082 checks, 0 failures in both (`layer` 12991, `routes` 2420, `controls` 13856, `adjust` 24755, `movers` 9477, `timebase` 495) |
+| Penumbra (`4261485`) | `17 suites: 16 passed, 1 failed, 0 skipped, 0 not run` | the same | **none**: 17 verdicts identical (below) |
+
+Penumbra, with its own runner, `build-lv-pin/tests/test_pn_all.exe` (the pin rebuilt after a first
+build was blocked) against `build-lv-new/tests/test_pn_all.exe`: **both `17 suites: 16 passed, 1
+failed, 0 skipped, 0 not run`**. The failing one is `test_pn_render_hud` at both (item 2). The 17
+verdicts are identical, so are the 63 scenario lines (`=== N. name: PASS (0 failed checks, 0 new
+script aborts)`), and `test_pn_formats` **passed at both**. Of the 1230 output lines and 106 failure
+lines, the only differences are 64 stdout and 16 stderr lines of timings (`slow tick … ms`, `per
+tick … mean … ms`) and random temp-directory names; I filtered exactly those and nothing else
+remained. The earlier individual runs through ctest agree wherever a suite ran on both sides: audio
+321, boot 199, particles 81, render_input 19756, render_interp 189, render_particles 137,
+render_textures 191, runtime 306 checks, 0 failures, and `render_hud` 15461 checks, 18 failures,
+all identical; the rest ran on one side only before Smart App Control let the combined runner through.
+
+The Wolf Brigade and HUSK pins also differ from this branch by two asset files that `main`
+changed long before this branch (`assets/shaders/shader.frag` and `frag.spv`), so for those two a
+difference would have needed a third point to attribute; there was none.
+
+### L6 (headless, partial), L7, L8
+
+- **L6 partial.** Debug editor, `--hidden --frames 4000..6000`, `GameScripts` rebuilt against it:
+  `reload #1` to `#5` all logged; the shadow copies carry unique, never-reused names
+  (`GameScripts.loaded1`, `3`, `4`, `6`, …) and exactly one exists at a time; a clean exit leaves
+  only `GameScripts.dll` and `.pdb`. **New code really runs**: I renamed one registration in
+  `plugins/sample_scripts/SampleScripts.cpp` (`OrbitScript` to `OrbitScriptLV1`, then `LV2`) and the
+  registry logged the *new* name after each reload and never the old, then `git checkout` and a
+  rebuild brought `OrbitScript` back (`git status` empty). A garbage file written over the DLL gave
+  exactly one line, `failed to load …GameScripts.loaded7.dll: OS error 193`, and nothing further in
+  the next ten seconds: tried once and left alone. Not seen: the statistics panel's counter, which
+  needs a person. One oddity I did not chase: the log has four `Detected change` lines for five file
+  changes.
+- **L7 and L8: not run, they need a person.** Their unit-level neighbours passed
+  (`test_componentfields`, `test_undo`, in both configurations).
+
+### L9
+
+Release, `physics_bench`, five runs each alternating base and branch, nothing else running.
+**All three checksums are identical between base and branch and stable across all ten runs**
+(`stacks` `983ab6873932e470`, `queries` `dcd33f0aa4af802c`, `chains` `a52c5fcc5f140423`). Timings,
+ms/step, median of five: `stacks` 0.946 to 0.848, `queries` 6.115 to 2.603 (-57%), `chains` 0.307 to
+0.289 (within the noise: the base has a 0.604 outlier). On the Linux numbers quoted above: `stacks`
+and `chains` start the same eight hex digits here, `queries` does not; I did not look into it. The
+branch's `dedupe_bench`: grid and all-pairs keep the same counts (1666 and 6666), the grid 0.77 vs
+2.62 ms at 5000 points and 2.95 vs 42.34 ms at 20000.
+
+### L10 and L11
+
+- **`legs=all`, run 43101144995 on `3b6c6da`: success.**
+
+  | Job | Result | Time |
+  |---|---|---|
+  | Documented counts match the build | success | 6 s |
+  | Shaders compile from source | success | 19 s |
+  | Windows (MSVC) | **success** | 4 m 03 s (Build 2 m 57 s, **Test 20 s**) |
+  | Configure with tests and plugin OFF | success | 4 m 24 s |
+  | Linux (GCC 15.2.0) | success | 5 m 46 s |
+  | Validation layers (lavapipe) | success | 9 m 26 s (`test_device` `Passed`, device required) |
+  | ASan + UBSan (Linux), now with `-D_GLIBCXX_ASSERTIONS` | success | 23 m 34 s |
+  | Suites on Linux arm64 | skipped (not part of `all`, by design) | |
+
+  The Windows job used the same compiler as this PC (MSVC 19.51.36260.0) and ran `ctest -C Debug`:
+  67 entries, `100% tests passed out of 67`, `test_device` the one `Skipped` (no GPU on the runner),
+  `test_gltf` #59 `Passed` in 3.22 s (the previous run hung there for 86 minutes), `test_determinism`
+  #34 `Passed`. **It covers Debug only** (`cmake --build build --config Debug`), not Release; the
+  six Release suites you asked about all ran and passed here, as above.
+- **`legs=arm64`, run 43101171042: success** in 3 m 52 s. The new step printed `aarch64`, then
+  `Linux runnervmkb2gk 7.0.0-1017-azure #17~24.04.1-Ubuntu SMP PREEMPT Thu Sep 24 19:06:39 UTC 2026
+  aarch64 aarch64 aarch64 GNU/Linux`, and passed its `test "$(uname -m)" = "aarch64"` gate. 67
+  entries, `100% tests passed`, `test_determinism` #34 and `test_replay` #35 `Passed`, `test_device`
+  `Skipped`. That closes the second run's "the log never prints `uname -m`".
+- `legs=quick`, run 43101016689: success (shader compare and documented counts).
+- **L11 passes.** Git Bash (the `bash` on `PATH` in PowerShell is the WSL launcher). `install-hooks.sh`
+  installed (`core.hooksPath` = `tools/git-hooks`); `git check-attr eol` says `lf` and
+  `git ls-files --eol` says `w/lf` despite `core.autocrlf=true`. `git push --dry-run origin HEAD` ran
+  `tools/check.sh docs`, which passed, and no shader step (this push touches none). A dry-run push of a
+  tag ran no checks. A dry-run deletion of a branch that does not exist is refused by git before any
+  hook runs, so for deletions the evidence is feeding the hook git's own input: a deletion and a tag
+  each exit 0 in silence, an ordinary update runs the docs check. `--remove` restored the setting
+  (`core.hooksPath` unset, and a second `--remove` says there is nothing to remove).
+
+### For the owner
+
+- **No finding in this run points at an engine change.** The open items are about this PC and the
+  record: Penumbra's `test_pn_render_hud` is red at its own pin here (item 2), which is worth a look
+  on its own account; and L7 and L8 still need a person.
+- Look at the `startup_failure` window (item 1) if it recurs; I could not see a cause.
+- **Not checked, still:** the editor by hand, Android, macOS, iOS, Clang, GCC 11 and Clang 13, and the
+  statistics panel's reload counter.
