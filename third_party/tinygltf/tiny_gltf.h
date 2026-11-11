@@ -6410,10 +6410,22 @@ bool TinyGLTF::LoadFromString(Model *model, std::string *err, std::string *warn,
           }
           return false;
         }
+        // SUPERSONIC PATCH (listed in THIRD_PARTY_LICENSES.md): the bytes were taken as
+        // `&buffer.data[bufferView.byteOffset]` whatever the view said, so a crafted
+        // `byteOffset` indexed far outside the vector before the callback - or any
+        // check a caller makes - ever ran. That is undefined behaviour, and an
+        // assertion in a checked standard library (MSVC's debug STL, libstdc++ with
+        // _GLIBCXX_ASSERTIONS). A view that is not inside its buffer is now handed to
+        // the callback as no bytes at all. A view that is inside it gets the same
+        // pointer and length as before, so a valid file loads exactly as it did.
+        const bool viewInBuffer =
+            bufferView.byteOffset <= buffer.data.size() &&
+            bufferView.byteLength <= buffer.data.size() - bufferView.byteOffset;
         bool ret = LoadImageData(
             &image, idx, err, warn, image.width, image.height,
-            &buffer.data[bufferView.byteOffset],
-            static_cast<int>(bufferView.byteLength), load_image_user_data);
+            viewInBuffer ? buffer.data.data() + bufferView.byteOffset : nullptr,
+            viewInBuffer ? static_cast<int>(bufferView.byteLength) : 0,
+            load_image_user_data);
         if (!ret) {
           return false;
         }

@@ -11,7 +11,41 @@
 #include <cstdlib>
 #include <string>
 
+#if defined(_MSC_VER)
+#include <crtdbg.h>
+#endif
+
 namespace test {
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+// The debug CRT reports an assertion - including MSVC's checked STL ("vector subscript out
+// of range") - through _CrtDbgReport, which opens a modal dialog and WAITS FOR A CLICK. In
+// CI nobody clicks: one such assertion held a job for 86 minutes until its cap cancelled
+// it. The hook prints the message and ends the process with a failing exit code instead,
+// so it costs the one test and says what happened.
+inline int __cdecl crtReportHook(int type, char* message, int* returnValue) {
+    if (type == _CRT_ASSERT || type == _CRT_ERROR) {
+        std::fprintf(stderr, "CRT assertion (the suite is ended, not left on a dialog): %s\n",
+                     message != nullptr ? message : "(no message)");
+        std::fflush(stderr);
+        std::_Exit(3);
+    }
+    if (returnValue != nullptr) *returnValue = 0;
+    return 0;   // _CRT_WARN and the rest: carry on as the CRT would
+}
+#endif
+
+// Called first by TEST_MAIN. No dialogs from the runtime: neither the CRT's assertions
+// (above) nor abort()'s message box, and runtime errors go to stderr. A no-op off MSVC.
+inline void noModalDialogs() {
+#if defined(_MSC_VER)
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    _set_error_mode(_OUT_TO_STDERR);
+#if defined(_DEBUG)
+    _CrtSetReportHook(&crtReportHook);
+#endif
+#endif
+}
 
 inline int g_failures = 0;
 inline int g_checks = 0;
@@ -83,4 +117,4 @@ inline int summary(const char* suite, int minChecks) {
 // would let a new suite be written without one, which is the case the floor
 // exists to catch.
 #define TEST_MAIN(suite, minChecks) \
-    int main() { runTests(); return ::test::summary(suite, minChecks); }
+    int main() { ::test::noModalDialogs(); runTests(); return ::test::summary(suite, minChecks); }

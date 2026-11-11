@@ -152,6 +152,16 @@ inside the file:
   [dlib](http://dlib.net) (Boost Software License, © 2003 Davis E. King) — both
   noted inline in `tiny_gltf.h`.
 
+## Local changes to vendored code
+
+Marked `SUPERSONIC PATCH` in the source, so an upgrade can find and re-apply or drop them.
+
+- `third_party/tinygltf/tiny_gltf.h`, `ParseImage`: an image's buffer view is bounds-checked
+  before `&buffer.data[byteOffset]` is formed. A crafted `byteOffset` (2^64 - 2 in
+  `test_gltf`) used to index far outside the vector - undefined behaviour, and a modal CRT
+  assertion under MSVC's debug STL that hung a CI job for 86 minutes. A view outside its
+  buffer is passed to the image callback as no bytes; a view inside it is unchanged.
+
 Dear ImGui embeds the ProggyClean bitmap font by Tristan Grimmer, covered by
 ImGui's own MIT licence.
 

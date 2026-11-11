@@ -18,6 +18,10 @@ set(SUPERSONIC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 # subproject reaches it too. The engine's own suites keep this name for it.
 function(add_engine_test name)
     supersonic_add_test(${name} ${ARGN})
+    # A cap on ONE test, so a hang costs that test and not the job: the longest suite takes
+    # seconds, even under the sanitizers. Here, not in supersonic_add_test: a game's suites
+    # may legitimately run for minutes, and they are not this file's to limit.
+    set_tests_properties(${name} PROPERTIES TIMEOUT 300)
 endfunction()
 
 add_engine_test(test_transform)
@@ -162,4 +166,5 @@ add_test(NAME test_reporttext
         "-DJAVAC=${SUPERSONIC_JAVAC}" "-DJAVA=${SUPERSONIC_JAVA}"
         "-DENGINE_DIR=${SUPERSONIC_SRC}" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/test_reporttext"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/java/run_java_test.cmake")
-set_tests_properties(test_reporttext PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED: test_reporttext needs a JDK")
+set_tests_properties(test_reporttext PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED: test_reporttext needs a JDK"
+                                                TIMEOUT 300)

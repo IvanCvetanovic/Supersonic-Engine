@@ -327,8 +327,11 @@ check_asan() {
     # readable report, and -O0 across this tree is what exhausts a small machine.
     configure_and_build "$BUILD_ROOT/asan" "" \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+        -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS" \
         -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+    # -D_GLIBCXX_ASSERTIONS turns an out-of-range vector subscript into an abort, as MSVC's
+    # debug STL does. A test that indexed past a vector was silent on GCC and a modal dialog
+    # on MSVC; this is how Linux sees it too.
     # Leaks and undefined behaviour both fail the run. The suites only: the engine
     # itself needs a device, and a driver's own allocations are somebody else's.
     #

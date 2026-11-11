@@ -132,6 +132,15 @@ canvas and its input routing, the audio mixer and decoders, the job system,
 the script registry, packaged-game manifests and command-line parsing. Disable
 with `-DSUPERSONIC_BUILD_TESTS=OFF`.
 
+**A suite that hangs costs one test, not the job.** Every engine suite has a 300-second
+`TIMEOUT`, and under MSVC Debug the harness (`tests/TestHarness.hpp`, `noModalDialogs`, run
+by `TEST_MAIN`) turns a CRT assertion - including the checked STL's "vector subscript out of
+range" - into a message on stderr and exit code 3. Before that it opened a modal dialog and
+waited for a click, and one such assertion held a CI job for 86 minutes. A program that does
+not use `TEST_MAIN` (the editor, a game's own `main`) still shows the dialog. The Linux
+sanitizer build compiles with `-D_GLIBCXX_ASSERTIONS` for the same reason: an out-of-range
+subscript is an abort there too, not silence.
+
 One more test is listed beside them and is not an executable: `test_reporttext`, the
 Android crash report's wording, which is Java (`tests/java/`). It needs a JDK, not a
 compiler: `cmake` looks for `javac` and `java` in `JAVA_HOME`, then on `PATH`, when it
