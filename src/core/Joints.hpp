@@ -116,6 +116,10 @@ struct Constraint {
     // configuration rather than a meaningful one, which is why the inspector
     // shows the live angle: limits are authored by looking at the number, not
     // by predicting it.
+    //
+    // The stops are a RANGE of angles and may lie past +-pi (HingeAngle itself reads in (-pi, pi]): a window under a turn wide is measured against
+    // the turn of the circle nearest its middle, so a stop at 3.2 holds a body that reads -3.08. A window a turn wide or more, or with an infinite
+    // bound, is compared with the plain reading.
     bool useLimit{false};
     float minAngle{0.0f};
     float maxAngle{0.0f};

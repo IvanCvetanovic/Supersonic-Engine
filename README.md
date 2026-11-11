@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-64%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-66%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT-0](https://img.shields.io/badge/license-MIT--0-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 [![Free to use](https://img.shields.io/badge/price-free-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#license)
@@ -171,11 +171,21 @@ as clicks and loads its first level. What that took, all of it under
   latched like keys). Measured: taps and holds, Back, and injected gamepad
   buttons reaching the game. Not measured: more than one finger at a time
   (`adb shell input` injects one pointer) and pad sticks, triggers and hats.
-- **Audio**: AAudio, with `AudioMixer` pulled from its data callback, paused
-  with the activity and reopened when the output device goes away. Measured
-  only through `dumpsys audio` - the stream started, paused on Home, started
-  again on return and was released on quit - because the emulator ran with
-  `-no-audio`; nothing was heard, and the reopen on a disconnect is unexercised.
+- **Audio**: AAudio, with `AudioMixer` pulled from its data callback. The
+  stream is closed when the activity pauses and a NEW one is opened when the
+  app is certainly in front (focus gained with a window, a finger on it, or a
+  second after the resume on a phone that never sends the focus; never from the
+  resume itself), retried on a 1, 2, 4 ... 30 s schedule if the open fails, and
+  reopened when the output device goes away or the client sees the stream
+  disconnected. **Nothing was ever heard on a device**: the emulator ran with
+  `-no-audio`, and only `dumpsys audio` was read (the stream started, paused on
+  Home, started again on return, released on quit). A report that the sound is
+  gone after a minimise on an Android 17 phone (2026-11-08) has NO confirmed
+  cause; this lifecycle is the defensive answer, its policy is tested on the host
+  (`test_audiowake`, `test_audiostreamkeeper`), and the log says what a device
+  did (`AAudio suspend` / `AAudio resume` lines, the frames pulled two seconds
+  after). The AAudio calls themselves, and the reopen on a disconnect, are
+  unexercised.
 - **Vulkan**: the vendored headers (the NDK has no `vulkan.hpp`), the NDK's
   loader, VMA's entry points fetched at run time (`libvulkan.so` below API 28
   does not export the 1.1 ones), no validation layers.
@@ -531,7 +541,7 @@ units that exist only to compile VMA, tinygltf, stb_vorbis and stb_image.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Sixty-four suites, each a plain executable with no test framework behind it —
+Sixty-six suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 One of them, `test_device`, runs the renderer's own code against a real Vulkan device: it
@@ -605,6 +615,8 @@ verified by a screenshot of geometry it never touched.
 | `test_uicanvas` | Canvas layout, anchoring, rect resolution, and a stack landing where one element of its size would at scales other than 1, on its own and through the layout pass with a nested stack |
 | `test_uiinput` | UI hit testing, press and release routing |
 | `test_screenoverlay` | The screen overlay drawn after the tone map: where a quad lands in clip space and texture space, that order is draw order, the blend it is drawn with, and that the shader carries the same vertex table. And the composite under it: the four numbers each scene encoding sends, and that the shader's branches are numbered as the enum is |
+| `test_audiowake` | When an Android app's sound stops and starts (`src/platform/AudioWake.hpp`): the order an API 33 emulator logged for a minimise and return (no wake at RESUME or INIT_WINDOW, exactly one at GAINED_FOCUS), a phone that never sends the focus woken a second after the resume, a pause cancelling that, one suspend per pause, a focus that arrives before its window, and focus arriving after the fallback asking for one fresh stream. Policy only: whether the sound is HEARD needs a device |
+| `test_audiostreamkeeper` | What to do with the output stream (`core/AudioStreamKeeper.hpp`), against a fake that records calls and scripts failures: suspend closes, resume opens a new stream and never reuses one, a repeated resume and a resume over a running stream open nothing, a failed open retried at 1, 2, 4, 8, 16, 30, 30 seconds, a disconnected stream reopened, nothing opening while suspended, and a stream that dies at once not reopened every frame |
 | `test_mixer` | Voice mixing: volume, summing, clamping rather than wrapping, looping, pitch and sample-rate conversion, panning, mono and 8-bit clips. There is no bus gain to test — the only volume is per voice |
 | `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths, and where a game's files resolve from: its own folder, the working directory, or the engine root the build named. And the window: the `Fullscreen` key and which of it and the two flags wins, how a `--hidden` run starts (windowed, fitted to nothing, whatever the manifest says), a windowed game's manifest unchanged byte for byte, and `WindowControl`'s latch against a stand-in window — nothing applies until taken, the last request wins, a refused size latches nothing, hiding the cursor leaves a lock alone, a fullscreen mode rides on the fullscreen request and one the monitor does not offer is refused — with the modes a menu lists, the rate a fullscreen mode runs at, and the monitor a window goes fullscreen on. And the opt-ins of a slow start: `pumpEventsDuringStartup` off by default and never in the manifest's text, and the file log's elapsed times (`INFO +1.234s [Category] message`: written only when asked, rising, the console and the buffer unstamped). And the minimum Vulkan version a game may ask for (`minimumVulkanMinor`: 2 by default, clamped into 1 to 2, never in the manifest's text) and the version the allocator is told (the device's own, capped at 2). And the performance-measurement opt-ins (`perfOverlay`, `perfLogSeconds`, `assetWatching`: off or as before by default, never in the manifest's text), the frame statistics (median, 95th percentile, counts of long frames, the verdict from the split), the overlay's report of each fixed size it measured, and the profiler's idle-wait zone and count. And the scene-performance opt-ins (`spritesOnlyScenePipelines`, `dynamicResolution`: off by default and never in the manifest's text) and the dynamic-resolution controller on stand-in GPUs, now also: a frame with a fixed share keeps a step that bought a real gain and does not hunt, and a live `Reconfigure`: a slow one settles in a few steps and holds, a fast one is never touched, one that cannot meet the target stops at the floor, one with room rises to where it still has 20% to spare, a hitch, a pause or a nonsense frame decides nothing, and a self-contradicting config is mended |
 | `test_launchoptions` | Argument parsing, missing values, malformed counts, `--fullscreen` refused beside `--windowed`, and `--hidden` composing with a capture run, refused beside `--fullscreen` and warning without `--frames`. And `--screenshot-ui`: which frames are read back from the swapchain, decided before each is drawn, and their stamped names. And how many PNGs a `--frames` run owes, counted as the loop picks them, with fewer written than owed a failure |

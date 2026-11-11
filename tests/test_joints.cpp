@@ -15,6 +15,7 @@
 #include "TestHarness.hpp"
 
 #include <cmath>
+#include <limits>
 
 using namespace Supersonic;
 
@@ -558,6 +559,101 @@ void testAStopPushesBackAndNeverPulls() {
     CHECK_MSG(joint.limitImpulse >= 0.0f, "the accumulated stop impulse never goes negative");
 }
 
+void testALimitWindowThatRunsPastPiIsHeldNotWrapped() {
+    // HingeAngle is an atan2 and reads in (-pi, pi]; a window whose upper stop is past pi (Magic Portals' 2-31 seesaw: 1.6251 to 3.1958, the stop
+    // 0.054 past it) has to be measured against the reading's SAME turn of the circle. Before, a body at 3.17 read -3.11 and was 4.7 radians
+    // "below" the lower stop: the position pass turned it 270 degrees in one step, onto the far stop, and it flipped again every 31 ticks.
+    const float pi = 3.14159265f;
+    Joints::Constraint joint = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+    joint.useLimit = true;
+    joint.minAngle = 1.6251f;
+    joint.maxAngle = 3.1958f;
+
+    for (const float turn : {1.7f, 2.4f, 3.0f, pi - 0.01f, pi + 0.02f, pi + 0.05f, 3.19f}) {
+        turnA(joint, turn);
+        CHECK_MSG(Joints::LimitOvershoot(joint) == 0.0f,
+                  "a hinge turned to an angle inside the window is inside it, on either side of pi");
+    }
+
+    turnA(joint, 3.2458f);   // 0.05 past the upper stop, and past pi: the reading is -3.04
+    CHECK_MSG(Joints::HingeAngle(joint) < 0.0f, "the reading wrapped, which is what this test is about");
+    CHECK_MSG(test::nearly(Joints::LimitOvershoot(joint), -0.05f, 2e-3f),
+              "and the overshoot is the small push back from the upper stop, not 4.7 radians the other way");
+
+    turnA(joint, 1.5751f);   // 0.05 below the lower stop
+    CHECK_MSG(test::nearly(Joints::LimitOvershoot(joint), 0.05f, 2e-3f), "the lower stop still reads as it did");
+
+    // The velocity half sees the same angle: a door past its upper stop that is still opening is stopped there.
+    Joints::Body frame = immovable(glm::vec3(0.0f));
+    Joints::Body door = freeBody(glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.5f);
+    door.angularVelocity = glm::vec3(0.0f, 3.0f, 0.0f);
+    joint.armA = glm::vec3(-1.0f, 0.0f, 0.0f);
+    turnA(joint, 3.2458f);
+    for (int pass = 0; pass < 8; ++pass) Joints::SolveVelocity(joint, door, frame);
+    CHECK_MSG(door.angularVelocity.y <= 0.0f, "a door past a stop that lies beyond pi is not still opening");
+    CHECK_MSG(joint.limitImpulse > 0.0f, "and the stop is what stopped it");
+    CHECK(finiteVec(door.angularVelocity));
+}
+
+void testAWindowStraddlingMinusPiIsHeldToo() {
+    // The mirror of the case above: the reading wraps the other way, from -pi to +pi.
+    Joints::Constraint joint = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+    joint.useLimit = true;
+    joint.minAngle = -3.5f;
+    joint.maxAngle = -2.8f;
+    turnA(joint, -3.18f);   // inside, and the reading is +3.10
+    CHECK_MSG(Joints::HingeAngle(joint) > 0.0f, "the reading wrapped");
+    CHECK_MSG(Joints::LimitOvershoot(joint) == 0.0f, "inside the window all the same");
+    turnA(joint, -3.56f);   // 0.06 below the lower stop
+    CHECK_MSG(test::nearly(Joints::LimitOvershoot(joint), 0.06f, 2e-3f), "a small push, not a turn the long way round");
+}
+
+void testAWindowATurnWideOrInfiniteKeepsThePlainReading() {
+    // A window of a turn or more has no nearest turn, and a bound at infinity (the serializer writes one as +-FLT_MAX) has no middle: both are
+    // compared with the plain reading, as they always were, so a one-sided stop does not vanish.
+    Joints::Constraint wide = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+    wide.useLimit = true;
+    wide.minAngle = 2.0f;
+    wide.maxAngle = 9.0f;
+    turnA(wide, 7.0f);   // reads 0.717: below the lower stop, plainly
+    const float plain = Joints::HingeAngle(wide);
+    CHECK_MSG(Joints::LimitOvershoot(wide) == wide.minAngle - plain, "a window wider than a turn is read as the plain angle");
+
+    Joints::Constraint oneSided = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+    oneSided.useLimit = true;
+    oneSided.minAngle = 0.0f;
+    oneSided.maxAngle = std::numeric_limits<float>::infinity();
+    turnA(oneSided, -0.5f);
+    CHECK_MSG(test::nearly(Joints::LimitOvershoot(oneSided), 0.5f, 2e-3f), "a stop with no upper bound still holds its lower one");
+    oneSided.maxAngle = 3.0e38f;   // what the serializer makes of an infinity
+    CHECK_MSG(test::nearly(Joints::LimitOvershoot(oneSided), 0.5f, 2e-3f), "and so does one written as FLT_MAX");
+}
+
+void testTheUnwrapChangesNoWindowThatWasFineBefore() {
+    // A reading within half a turn of the window's middle takes a turn count of zero and must come back as the SAME float: the recorded runs that
+    // hash their physics (test_determinism) and every hinge in the games built on this engine depend on a limit being bit for bit what it was.
+    const float windows[][2] = {{-1.0f, 1.0f}, {0.0f, 1.5708f}, {-1.5708f, 1.5708f}, {-2.0f, 0.5f}, {0.3f, 2.9f}};
+    for (const auto& window : windows) {
+        Joints::Constraint joint = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+        joint.useLimit = true;
+        joint.minAngle = window[0];
+        joint.maxAngle = window[1];
+        const float middle = 0.5f * (window[0] + window[1]);
+        for (int step = -12; step <= 12; ++step) {
+            const float turn = middle + 0.25f * static_cast<float>(step);   // within 3 radians of the middle: under half a turn
+            turnA(joint, turn);
+            const float angle = Joints::HingeAngle(joint);
+            float expected = 0.0f;
+            if (angle < joint.minAngle) expected = joint.minAngle - angle;
+            else if (angle > joint.maxAngle) expected = joint.maxAngle - angle;
+            // Away from the wrap the reading IS the turn; where it has wrapped (turn past pi) this comparison is the other test's business.
+            if (turn > -3.1f && turn < 3.1f) {
+                CHECK_MSG(Joints::LimitOvershoot(joint) == expected, "the overshoot is exactly what the plain reading gives");
+            }
+        }
+    }
+}
+
 // --- motors -----------------------------------------------------------------
 
 void testAMotorDrivesTheJointToItsSpeed() {
@@ -736,6 +832,10 @@ void runTests() {
     testALimitDoesNothingInsideItsRange();
     testALimitCatchesADoorAtItsStop();
     testAStopPushesBackAndNeverPulls();
+    testALimitWindowThatRunsPastPiIsHeldNotWrapped();
+    testAWindowStraddlingMinusPiIsHeldToo();
+    testTheUnwrapChangesNoWindowThatWasFineBefore();
+    testAWindowATurnWideOrInfiniteKeepsThePlainReading();
     testAMotorDrivesTheJointToItsSpeed();
     testAMotorsTorqueCapIsWhatStopsItGoingThroughWalls();
     testAWeldHoldsBothBodiesStillRelativeToEachOther();

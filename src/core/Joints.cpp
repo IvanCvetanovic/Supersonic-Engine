@@ -350,10 +350,31 @@ void solveSpring(Constraint& joint, Body& a, Body& b) {
     applyAxisImpulse(joint, a, b, joint.axisA, lambda);
 }
 
+// The hinge angle on the turn of the circle that holds the limits.
+//
+// HingeAngle is an atan2, so it reads in (-pi, pi] and can never read past +pi. A stop can sit past it: a limit is stated as a range of angles,
+// and a game that authors "so far each way from where the hinge rests" gets a window that runs over pi when the hinge rests near it (Magic
+// Portals' 2-31 seesaw rests at 2.7576 and runs 1.6251 to 3.1958, its upper stop 0.054 past pi). A body that turned a hair past pi then read
+// about -3.1, which is 4.7 radians BELOW the window's lower stop, and the position pass turned it 270 degrees in one step to put it back,
+// onto the far stop: the stop it had just reached could never hold it.
+//
+// So the reading is moved by whole turns to the copy nearest the MIDDLE of the window, which is the copy inside it whenever the window is
+// under a turn wide. A reading already within half a turn of the middle gets a turn count of zero and comes back as the same float, so no
+// window of under a turn that was fine before changes by a bit. A window a turn wide or more has no 'nearest copy' (every reading is inside
+// some turn of it) and one with an infinite bound has no middle: those keep the plain reading, as they always had. floor, + - * / only
+// (DetMath's rule: nothing a libm may round differently).
+float limitAngle(const Constraint& joint) {
+    constexpr float kTurn = 6.28318530717958647692f;
+    const float angle = HingeAngle(joint);
+    if (!(joint.maxAngle - joint.minAngle < kTurn)) return angle;   // also false for NaN and for an infinite bound
+    const float middle = 0.5f * (joint.minAngle + joint.maxAngle);
+    return angle + kTurn * std::floor((middle - angle) / kTurn + 0.5f);
+}
+
 void solveLimit(Constraint& joint, Body& a, Body& b) {
     if (!joint.useLimit) return;
 
-    const float angle = HingeAngle(joint);
+    const float angle = limitAngle(joint);
 
     // Which stop it is pressing against, if either. Away from both, a limit is
     // not a constraint at all - that is the difference between a hinge that
@@ -455,7 +476,7 @@ float HingeAngle(const Constraint& joint) {
 float LimitOvershoot(const Constraint& joint) {
     if (!joint.useLimit) return 0.0f;
 
-    const float angle = HingeAngle(joint);
+    const float angle = limitAngle(joint);
     if (angle < joint.minAngle) return joint.minAngle - angle;   // turn positively to return
     if (angle > joint.maxAngle) return joint.maxAngle - angle;   // negatively
     return 0.0f;

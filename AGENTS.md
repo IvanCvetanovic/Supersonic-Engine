@@ -113,7 +113,7 @@ subproject build would define twice.
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Sixty-four suites. Rather than repeat the list here - the copy that used to
+Sixty-six suites. Rather than repeat the list here - the copy that used to
 live in this file had fallen thirteen entries behind - see the table in
 [README.md](README.md#testing), or read it from the build, which is where CI
 gets it:

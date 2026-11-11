@@ -21,10 +21,12 @@
 #include <aaudio/AAudio.h>
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 
 #include "core/AudioMixer.hpp"
+#include "core/AudioStreamKeeper.hpp"
 #include "platform/android/AndroidApp.hpp"
 #elif defined(SUPERSONIC_AUDIO_COREAUDIO)
 // AssertMacros.h, which Apple's framework headers can reach, otherwise defines
@@ -334,34 +336,62 @@ bool AudioEngine::IsVoicePlaying(VoiceId voice) const {
 //
 // Two things a desktop device never does happen here as a matter of course,
 // and both are handled on the engine's side of the stream:
-//  - THE APP GOES TO THE BACKGROUND. The stream is paused with the activity
-//    (AndroidApp's suspend handler) and started again when it resumes;
-//    otherwise the game's music would play on over the home screen, with the
-//    simulation that drives it stopped.
+//  - THE APP GOES TO THE BACKGROUND. The stream is CLOSED with the activity
+//    (AndroidApp's suspend handler) and a NEW one is opened when the app is
+//    certainly in front again (platform/AudioWake.hpp says when); otherwise
+//    the game's music would play on over the home screen, with the simulation
+//    that drives it stopped. Closed, not paused, because of an unconfirmed
+//    suspicion: a stream that was started again may carry whatever the system
+//    decided about it while the app was away, and Android 17 is documented to
+//    silence audio made outside a visible activity with no error. Nothing was
+//    heard on any device to say whether that is the cause of "the sound is
+//    gone after a minimise" (planning step 235); a stream with no past is the
+//    defence that holds either way. The voices are in the mixer and keep
+//    their place.
 //  - THE DEVICE GOES AWAY - headphones pulled, a Bluetooth headset connected.
 //    AAudio reports a disconnect on its callback thread, where the stream must
 //    not be closed, so a thread of the engine's closes it and opens another.
 //    The voices live in the mixer, not the stream, and carry on.
+// What to do with the stream on each of these, and when an open that failed is
+// tried again, is AudioStreamKeeper's (a header with no AAudio in it, tested
+// on its own); this struct is the AAudio calls and the lock around them.
 // ---------------------------------------------------------------------------
 namespace {
 constexpr int32_t kAAudioRate = 48000;
 constexpr int32_t kAAudioChannels = 2;
 } // namespace
 
-struct AudioEngine::Impl {
+struct AudioEngine::Impl : AudioStreamKeeper::Ops {
     std::unique_ptr<AudioMixer> mixer;
 
-    std::mutex streamMutex;   // open, close, pause and start
+    std::mutex streamMutex;   // open, close, and the keeper's state
     AAudioStream* stream{nullptr};
     int32_t rate{kAAudioRate};
-    bool suspended{false};    // under streamMutex
+    AudioStreamKeeper keeper{*this};   // under streamMutex
 
     std::atomic<bool> reopening{false};
     std::thread reopenThread;
 
+    // What the callback has been asked for, as the CoreAudio path keeps: a stream can be "started" and silent
+    // (the system suppressed it, or it died without an error), and only a count that stops, or runs on while
+    // nothing is heard, says which. Counted across streams; the checks below take their difference.
+    std::atomic<uint64_t> framesPulled{0};
+    std::atomic<uint64_t> callbacks{0};
+
+    // Game thread, under streamMutex: the check the log is owed two seconds after a resume.
+    double checkAt{0.0};
+    uint64_t pulledAtResume{0};
+    bool checkPending{false};
+
+    static double nowSeconds() {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
     static aaudio_data_callback_result_t onData(AAudioStream*, void* user, void* audioData, int32_t frames) {
         auto* impl = static_cast<Impl*>(user);
         impl->mixer->MixInt16(static_cast<int16_t*>(audioData), static_cast<size_t>(frames));
+        impl->framesPulled.fetch_add(static_cast<uint64_t>(frames), std::memory_order_relaxed);
+        impl->callbacks.fetch_add(1, std::memory_order_relaxed);
         return AAUDIO_CALLBACK_RESULT_CONTINUE;
     }
 
@@ -375,15 +405,26 @@ struct AudioEngine::Impl {
         if (impl->reopenThread.joinable()) impl->reopenThread.join();
         impl->reopenThread = std::thread([impl] {
             std::lock_guard<std::mutex> lock(impl->streamMutex);
-            impl->closeLocked();
-            std::string error;
-            if (impl->openLocked(error)) {
+            const auto report = impl->keeper.Reopen(nowSeconds());
+            if (report.opened) {
                 SUPERSONIC_LOG_INFO("AudioEngine") << "AAudio stream reopened on the new device.";
+            } else if (report.tried) {
+                SUPERSONIC_LOG_ERROR("AudioEngine") << report.error << " (the next try is Maintain's).";
             } else {
-                SUPERSONIC_LOG_ERROR("AudioEngine") << error;
+                // Suspended: no stream and no error, and the resume opens one once the app is in front.
+                SUPERSONIC_LOG_INFO("AudioEngine") << "AAudio stream lost while the app is in the background; nothing opened.";
             }
             impl->reopening.store(false);
         });
+    }
+
+    // AudioStreamKeeper::Ops, over the real stream. All of them are called with streamMutex held.
+    bool OpenStream(std::string& error) override { return openLocked(error); }
+    void CloseStream() override { closeLocked(); }
+    bool HasStream() const override { return stream != nullptr; }
+    // The client's last word, which does not block (it asks the system nothing).
+    bool StreamDisconnected() const override {
+        return stream != nullptr && AAudioStream_getState(stream) == AAUDIO_STREAM_STATE_DISCONNECTED;
     }
 
     bool openLocked(std::string& error) {
@@ -427,13 +468,11 @@ struct AudioEngine::Impl {
             return false;
         }
 
-        if (!suspended) {
-            result = AAudioStream_requestStart(stream);
-            if (result != AAUDIO_OK) {
-                error = std::string("AAudioStream_requestStart failed: ") + AAudio_convertResultToText(result);
-                closeLocked();
-                return false;
-            }
+        result = AAudioStream_requestStart(stream);
+        if (result != AAUDIO_OK) {
+            error = std::string("AAudioStream_requestStart failed: ") + AAudio_convertResultToText(result);
+            closeLocked();
+            return false;
         }
         return true;
     }
@@ -445,14 +484,72 @@ struct AudioEngine::Impl {
         stream = nullptr;
     }
 
-    void setSuspended(bool suspend) {
+    // One line of what the stream is and has done, for the log at every suspend and resume.
+    void logStateLocked(const char* what) const {
+        SUPERSONIC_LOG_INFO("AudioEngine") << what << ": "
+                                           << (stream ? AAudio_convertStreamStateToText(AAudioStream_getState(stream)) : "no stream")
+                                           << ", " << framesPulled.load(std::memory_order_relaxed) << " frames pulled in "
+                                           << callbacks.load(std::memory_order_relaxed) << " callbacks.";
+    }
+
+    // The activity paused (AndroidApp's handler, on the game's thread). Idempotent.
+    void suspend() {
         std::lock_guard<std::mutex> lock(streamMutex);
-        suspended = suspend;
-        if (!stream) return;
-        const aaudio_result_t result = suspend ? AAudioStream_requestPause(stream) : AAudioStream_requestStart(stream);
-        if (result != AAUDIO_OK) {
-            SUPERSONIC_LOG_WARN("AudioEngine") << "AAudio " << (suspend ? "pause" : "start")
-                                               << " failed: " << AAudio_convertResultToText(result) << ".";
+        logStateLocked("AAudio suspend");
+        const auto report = keeper.Suspend(nowSeconds());
+        checkPending = false;
+        if (report.closed) SUPERSONIC_LOG_INFO("AudioEngine") << "AAudio suspend: the stream is closed.";
+    }
+
+    // The app is certainly in front (AudioWake's Wake): a NEW stream. The open is a low-latency one on the game's
+    // thread, so what it costs is in the log.
+    void resume() {
+        std::lock_guard<std::mutex> lock(streamMutex);
+        logStateLocked("AAudio resume, before");
+        const auto began = std::chrono::steady_clock::now();
+        const auto report = keeper.Resume(nowSeconds());
+        const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+        if (!report.tried) {
+            SUPERSONIC_LOG_INFO("AudioEngine") << "AAudio resume: the stream is running; nothing to open.";
+            return;
+        }
+        if (report.opened) {
+            SUPERSONIC_LOG_INFO("AudioEngine") << "AAudio resume: a NEW stream opened in " << millis << " ms.";
+        } else {
+            SUPERSONIC_LOG_ERROR("AudioEngine") << report.error << " (after " << millis << " ms; tried again in "
+                                                << report.retryAfter << " s).";
+        }
+        pulledAtResume = framesPulled.load(std::memory_order_relaxed);
+        checkAt = nowSeconds() + 2.0;
+        checkPending = true;
+    }
+
+    // Once a frame, from the game's thread (AudioEngine::ReapFinishedVoices): brings back a stream that is missing or
+    // that the client knows is disconnected - a failed reopen or resume, a disconnect callback that was dropped - on
+    // the keeper's schedule, and says in the log what a resume produced two seconds on. try_lock: this is the game's
+    // thread, and a reopen in flight owns the mutex (and is already doing this).
+    void maintain() {
+        if (reopening.load()) return;
+        std::unique_lock<std::mutex> lock(streamMutex, std::try_to_lock);
+        if (!lock.owns_lock()) return;
+        const double now = nowSeconds();
+        if (checkPending && now >= checkAt) {
+            checkPending = false;
+            // Frames moving here while nothing is heard is a stream the system has silenced; none moving is a dead one.
+            SUPERSONIC_LOG_INFO("AudioEngine") << "AAudio, two seconds after the resume: "
+                                               << (stream ? AAudio_convertStreamStateToText(AAudioStream_getState(stream)) : "no stream")
+                                               << ", " << (framesPulled.load(std::memory_order_relaxed) - pulledAtResume)
+                                               << " frames pulled since the resume.";
+        }
+        const auto report = keeper.Maintain(now);
+        if (!report.tried) return;
+        if (report.opened) {
+            SUPERSONIC_LOG_INFO("AudioEngine") << "AAudio stream restored.";
+            pulledAtResume = framesPulled.load(std::memory_order_relaxed);
+            checkAt = now + 2.0;
+            checkPending = true;
+        } else {
+            SUPERSONIC_LOG_WARN("AudioEngine") << report.error << " (tried again in " << report.retryAfter << " s).";
         }
     }
 };
@@ -469,7 +566,13 @@ AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
     }
 
     Impl* impl = m_impl.get();
-    Android::SetAudioSuspendHandler([impl](bool suspended) { impl->setSuspended(suspended); });
+    Android::SetAudioSuspendHandler([impl](bool suspended) {
+        if (suspended) {
+            impl->suspend();
+        } else {
+            impl->resume();
+        }
+    });
 
     m_available = true;
     m_status = "AAudio output stream ready (" + std::to_string(m_impl->rate) + " Hz)";
@@ -746,6 +849,11 @@ void AudioEngine::Stop(VoiceId voice) {
 }
 
 std::size_t AudioEngine::ReapFinishedVoices() {
+#if defined(SUPERSONIC_AUDIO_AAUDIO)
+    // The engine's one per-frame audio call, so the AAudio stream's upkeep rides on it (Impl::maintain). It is called
+    // from AudioSystem::Update, which runs on simulated frames: a game paused through PlayMode does not heal here.
+    if (m_available) m_impl->maintain();
+#endif
     std::size_t freed = 0;
     for (auto it = m_voicePaths.begin(); it != m_voicePaths.end();) {
         // A looping voice always has a buffer queued, so it is never finished

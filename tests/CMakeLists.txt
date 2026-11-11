@@ -82,6 +82,10 @@ add_engine_test(test_gameruntime)
 add_engine_test(test_packaging)
 add_engine_test(test_userdata)
 add_engine_test(test_mixer)
+# The Android sound's policy, pure and header-only: when a stream is closed, opened anew and retried
+# (core/AudioStreamKeeper.hpp), and when the app has earned its sound back (platform/AudioWake.hpp).
+add_engine_test(test_audiostreamkeeper)
+add_engine_test(test_audiowake)
 add_engine_test(test_undo)
 add_engine_test(test_materials)
 add_engine_test(test_physics)

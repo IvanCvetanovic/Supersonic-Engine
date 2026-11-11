@@ -1846,6 +1846,17 @@ in the position pass, exactly as the linear half of every joint is walked out by
 moving it. Measured: a door shoved at six radians a second now rests at 89.95
 degrees with 0.05 left in it.
 
+The angle is an `atan2`, so it reads in (-pi, pi], and a stop may lie past pi: a
+game that authors "so far each way from where the hinge rests" gets a window that
+runs over pi when the hinge rests near it (Magic Portals' 2-31 seesaw: 1.6251 to
+3.1958). The limit is therefore measured on the turn of the circle nearest the
+window's middle (`limitAngle`), in the velocity half and in the position pass
+alike. Without it a body that crossed pi read about -3.1, 4.7 radians *below* the
+lower stop, and the position pass turned it 270 degrees in one step onto the far
+stop. A window a turn wide or more has no nearest turn and keeps the plain
+reading. The spring's rest angle is not unwrapped the same way: a spring whose
+rest angle is within a few degrees of pi wraps.
+
 That rotation only became writable once `TransformComponent::EulerFromRotation`
 existed. See below.
 
@@ -3116,9 +3127,45 @@ nothing above `AudioEngine` carries a platform branch.
 | Windows | XAudio2 | XAudio2 itself — one source voice per sound onto the mastering voice | unconditional; `xaudio2` and `ole32` ship with the OS |
 | Linux, ALSA headers present | ALSA | `AudioMixer`, on a thread the engine owns | `SUPERSONIC_AUDIO_ALSA=1`, defined when `find_path` and `find_library` both succeed |
 | Linux, headers absent | none | — | CMake prints `Audio backend: none (install libasound2-dev for sound on Linux)` and carries on |
-| Android | AAudio | `AudioMixer`, pulled from AAudio's data callback on AAudio's own thread; the stream pauses with the activity and is reopened on a thread of the engine's when the device disconnects (the reopen is unexercised; the rest was seen only through `dumpsys audio` on an emulator run with `-no-audio`) | `SUPERSONIC_AUDIO_AAUDIO=1`, unconditional under the NDK (API 26+) |
+| Android | AAudio | `AudioMixer`, pulled from AAudio's data callback on AAudio's own thread; the stream is closed with the activity and a NEW one opened when the app is certainly in front (below), reopened on a thread of the engine's when the device disconnects, and by `maintain()` once a frame when it is missing or disconnected. The policy is tested on the host; **nothing was ever heard on a device** and the AAudio calls and the reopen are unexercised (the emulator ran with `-no-audio`; only `dumpsys audio` was read) | `SUPERSONIC_AUDIO_AAUDIO=1`, unconditional under the NDK (API 26+) |
 | macOS, iOS | CoreAudio | `AudioMixer`, pulled from an output audio unit's render callback (the default output unit on macOS, RemoteIO on iOS), which converts the mixer's 48 kHz 16-bit stereo to the device's format; on iOS stopped when the app leaves the screen or its audio session is interrupted. Measured on GitHub's macOS runners: 384000 frames pulled in 750 callbacks by the macOS game's virtual sound device, and RemoteIO pulling in the iOS simulator; the stop and restart are unexercised | `SUPERSONIC_AUDIO_COREAUDIO=1`, unconditional under `APPLE` |
 | anything else | none | — | falls through to the `#else` no-op |
+
+**The Android sound across a minimise.** Reported on 2026-11-08 (an Android 17
+phone): "when I minimize the app and come back to it, it loses the sound". The
+cause is NOT CONFIRMED; the pause and the restart of the stream were only ever
+read through `dumpsys audio` on an emulator run with `-no-audio`. Candidates, in
+the order the investigation ranked them: (1) Android 17's background-audio
+hardening silences audio interactions made outside a visible activity, with no
+error, and the glue holds the UI thread inside `Activity.onResume` until the game
+thread has read `APP_CMD_RESUME`, so a stream started from that command may count
+as outside (developer.android.com/about/versions/17/changes/bg-audio, read by the
+investigation, not measured); (2) a dead stream that nothing reopened; (3) another
+system mute. The change is defensive, so it holds whichever is true, and it
+touches only the AAudio backend and `AndroidApp.cpp`:
+
+- `src/platform/AudioWake.hpp` decides WHEN, from the commands `AndroidApp.cpp`
+  forwards. `PAUSE` suspends (once, however many pauses follow); `RESUME` and
+  `INIT_WINDOW` start nothing; the sound wakes at `GAINED_FOCUS` with a window,
+  at a finger on the window (the existing "focus restored" heal), or a second
+  after the resume on a phone that never sends the focus. A focus that arrives
+  after the fallback wake asks for one fresh stream, since the one opened without
+  focus is the one that cannot be trusted. The order an API 33 emulator logged, which it is tested against:
+  PAUSE, LOST_FOCUS, TERM_WINDOW, STOP, START, RESUME, INIT_WINDOW (+49 ms),
+  WINDOW_RESIZED, GAINED_FOCUS (+470 ms).
+- `core/AudioStreamKeeper.hpp` decides WHAT, behind an interface the AAudio
+  `Impl` implements: suspend CLOSES the stream (not a pause), resume opens a NEW
+  one and never reuses an old one, a resume is idempotent and self-healing, nothing
+  opens while suspended, and an open that failed (or a stream the client calls
+  disconnected) is retried by `maintain()`, which `ReapFinishedVoices` calls once a
+  frame, after 1, 2, 4 ... 30 seconds. The limit: `ReapFinishedVoices` runs from
+  `AudioSystem::Update`, on simulated frames, so a game paused through `PlayMode`
+  does not heal a dead stream until it runs again; the wake path does not depend
+  on it.
+- The log says what happened: a state line with the frames pulled at every
+  suspend and resume, the open's duration in ms, and two seconds after a resume
+  the number of frames pulled since (frames moving with nothing heard is the
+  system muting the stream; none moving is a dead one).
 
 A missing ALSA package must not fail the build for someone who does not care
 about sound, so the no-backend path is a real implementation rather than a
