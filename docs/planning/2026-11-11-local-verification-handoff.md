@@ -503,7 +503,9 @@ git worktree add ..\engine-base 4261485                # removed again afterward
 
 **The second run stopped at L1 as well, by the same rule, for a different reason. L1's warning
 gate is now green in both configurations; one suite fails in Debug, and the cause is not the PC.
-L2 to L11 were not run.** Nothing in the engine, the tests, a golden or a baseline was changed
+L2 to L11 were not run.** CI on `9c983cc` agrees with this PC: `arm64` and six of the seven `all`
+jobs are green, and the hosted `Windows (MSVC)` job hung in the same `test_gltf` and was cancelled
+at its 90-minute cap. Nothing in the engine, the tests, a golden or a baseline was changed
 by this run. It tested `313d3b7`, which is the first run's commit `349cae7` plus the owner's
 `9c983cc` (the three `C4702` loops, and the Corrections block above); the engine and test sources
 are those of `9c983cc`. The machine and toolchain are the first run's (see above).
@@ -522,10 +524,18 @@ Expression: vector subscript out of range
 ```
 
 - **It blocks, it does not just fail.** The Debug CRT shows this as a dialog and the process waits
-  for a click. Under ctest it sat on it for 465 s, until I found it (ctest's default per-test
-  timeout is 1500 s). I posted the dialog's own `IDABORT` (what pressing Abort does); ctest then
-  recorded `test_gltf (Failed)`. Anything that runs the Debug suites unattended on a desktop
-  session can hang on this, once per occurrence; `ctest --timeout` bounds it.
+  for a click. Under ctest it sat on it for 465 s, until I found it; ctest set no per-test timeout
+  (CI's hosted run, below, sat on the same test for 86 minutes). I posted the dialog's own
+  `IDABORT` (what pressing Abort does); ctest then recorded `test_gltf (Failed)`. Anything that
+  runs the Debug suites unattended on a desktop session can hang on this, once per occurrence;
+  `ctest --timeout` bounds it.
+- **CI's hosted Windows job shows the same hang, on a machine with no Smart App Control.** Run
+  43062298112, job `Windows (MSVC)`: Visual Studio 18 2026, MSVC 19.51.36260.0 (this PC's
+  compiler), `ctest --test-dir build -C Debug --output-on-failure` with no `--timeout`. The log has
+  58 of 58 results `Passed`, then `Start 59: test_gltf`, then nothing until the job's own 90-minute
+  cap cancelled it (`##[error]The operation was canceled.`, 18:20:46 UTC; Test step 16:54:38 to
+  18:20:46). The dialog's text is not in that log, because nobody was there to read it; what matches
+  is the test, its position (#59) and the hang. The hosted build itself had no `warning C` line.
 - **Deterministic.** By hand, from the repository root, under a guard that records the dialog and
   aborts it: Debug exits **3** with the same text; Release exits **0** with `test_gltf: 350 checks,
   0 failures` (and Release ctest `Passed` it).
@@ -654,12 +664,12 @@ included.
   | Validation layers (lavapipe) | success | 13 m 47 s |
   | ASan + UBSan (Linux) | success | 30 m 37 s |
   | Suites on Linux arm64 | skipped (not part of `all`, by design) | |
-  | **Windows (MSVC)** | **PENDING when this was written** | |
+  | **Windows (MSVC)** | **cancelled**: stuck in `test_gltf` until the job's 90-minute cap | 1 h 30 m |
 
-  The Windows job runs the suites in Debug (`config: Debug` in the matrix). Its Build step finished
-  at 16:54:38 UTC and its Test step was still running at 17:36 UTC, about 41 minutes later, when
-  the Debug suites take a few minutes here. That is consistent with the same dialog sitting on the hosted desktop, but
-  it is not yet evidence: the log cannot be read until the run ends. Its result is added below.
+  The run's conclusion is therefore `cancelled`, not `failure`. The Windows job runs the suites in
+  Debug (`config: Debug` in the matrix); its Build step took 3 m 14 s and passed with no warning,
+  and its Test step ran from 16:54:38 to 18:20:46 UTC, stuck at test #59 (item 1 above). I did
+  not cancel, re-dispatch or edit anything; the job was left to reach its own cap.
 
 ### Step by step
 
@@ -667,7 +677,7 @@ included.
 |---|---|
 | L1 | **Failed in Debug** (`test_gltf`, item 1); Release: no failure, 6 suites never ran (machine). |
 | L2 to L9, L11 | Not run: stopped at L1. L7 and L8 also need a person. |
-| L10 | Run first, as asked: `arm64` success; `all` six jobs success, Windows pending (above). |
+| L10 | Run first, as asked: `arm64` success; `all`: six jobs success, `Windows (MSVC)` cancelled at the 90-minute cap, stuck in `test_gltf` (above). |
 | L5 | Not run. |
 
 ### For the owner
@@ -677,5 +687,7 @@ included.
   a `C4702` nor a warning, so it is outside what you authorised me to route round.
 - Decide how Debug MSVC should treat the vendored `tinygltf` index (item 1). Nothing else in this run
   needs a decision.
-- A `ctest --timeout 180` (or similar) in `AGENTS.md`'s MSVC Debug instructions would keep a CRT
-  dialog from holding a run for 25 minutes.
+- CI's Windows Test step (`ci.yml:146-147`) and `AGENTS.md`'s MSVC Debug instructions run ctest with
+  no `--timeout`, so a CRT dialog holds a run until something else stops it: 86 minutes on the
+  hosted runner, until the job's own cap. A `--timeout` would turn that into one failed test. I
+  changed neither file.
