@@ -1373,9 +1373,10 @@ BoxColliderComponent boxWith(const std::string& layer, const std::string& collid
     entt::registry registry;
     const SerializationResult result = SceneSerializer::DeserializeFromString(registry, text);
     CHECK_MSG(result.ok, result.message);
-    for (const entt::entity e : registry.view<BoxColliderComponent>()) {
-        return registry.get<BoxColliderComponent>(e);
-    }
+    // front(), not a loop that returns on its first pass: MSVC reports the increment of
+    // such a loop as unreachable code (C4702), an error under /WX.
+    const entt::entity first = registry.view<BoxColliderComponent>().front();
+    if (first != entt::null) return registry.get<BoxColliderComponent>(first);
     return BoxColliderComponent{};
 }
 
@@ -1385,9 +1386,8 @@ int maxLengthWith(const std::string& number) {
     entt::registry registry;
     const SerializationResult result = SceneSerializer::DeserializeFromString(registry, text);
     CHECK_MSG(result.ok, result.message);
-    for (const entt::entity e : registry.view<UITextFieldComponent>()) {
-        return registry.get<UITextFieldComponent>(e).maxLength;
-    }
+    const entt::entity first = registry.view<UITextFieldComponent>().front();
+    if (first != entt::null) return registry.get<UITextFieldComponent>(first).maxLength;
     return -999;
 }
 

@@ -629,9 +629,13 @@ static void testAFileWithNoAnimationIsUntouched() {
 
     CHECK_MSG(scene.skeletons.empty(), "an unanimated file gets no skeleton");
     CHECK_MSG(scene.clips.empty(), "and no clips");
+    // Every primitive, and at least one to check. This was a loop that left on its
+    // first pass, which checked only the first and passed on an empty list - and which
+    // MSVC reports as unreachable code (C4702, an error under /WX): the increment can
+    // never run.
+    CHECK_MSG(!scene.submeshes.empty(), "the file has a primitive to check");
     for (const auto& submesh : scene.submeshes) {
         CHECK_MSG(submesh.skinIndex == -1, "and its primitives stay unskinned");
-        break;
     }
 }
 

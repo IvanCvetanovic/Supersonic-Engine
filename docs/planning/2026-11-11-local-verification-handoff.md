@@ -24,6 +24,48 @@ sections above [Outcome](#outcome) to match what you find. Append to Outcome.
 > Do your work on a new branch, `local-verification`, and push the Outcome to that — not to
 > `main`. The owner merges it.
 
+> **Corrections after the first local run (same day).** The first run stopped at L1 and was
+> right to. What it found, and what changes for the next run:
+>
+> - **L1's `C4702` is fixed.** Three test loops whose body always exits (`test_gltf.cpp`,
+>   twice in `test_serialize.cpp`) made MSVC `/W4 /WX` fail; they predate the branch
+>   (September and October commits) and no code in `src/` is involved. They are rewritten
+>   on branch `claude/beautiful-cray-qs85oy` without a suppression. **Merge that branch
+>   into `local-verification` first**, then rerun L1 with `SUPERSONIC_WERROR=ON`, **Debug
+>   and Release** (C4702 is optimiser-adjacent, so Release may report more). A further
+>   `C4702` on a loop whose body always exits, in test code: fix it the same way and say so.
+>   Anything else — a different warning, or anything in `src/` — record it and stop. The
+>   earlier line "fix it in that code" applies to code this branch wrote.
+> - **Commands that did not run on that PC.** `-G "Visual Studio 17 2022"` is an example, not
+>   a requirement: use the generator the installed Visual Studio offers (`cmake -B build`
+>   picks the newest), with Visual Studio's bundled CMake if the one on `PATH` lacks it.
+>   `pwsh` may be absent: run `powershell.exe -NoProfile -File tools/verify-replay.ps1
+>   -Config Release`, and if the script needs PowerShell 7, say what failed. `bash` on `PATH`
+>   may be the WSL launcher: for L11 use Git Bash, `"C:\Program Files\Git\bin\bash.exe"`.
+>   Wherever this document says 65 ctest entries, it is **67**.
+> - **L5 is not about replay files.** None of the four games tracks a `.replay`, and none
+>   compares `StateHash` outside a document. Each guards with its own suites and goldens
+>   (Penumbra: 17 suites, one byte-comparing its scene writer to the shipped scenes; Magic
+>   Portals: ~94 entries with `tests/golden/*.json` and 128 win routes; Wolf Brigade: its
+>   Godot-derived constants and an in-process replay; HUSK: 68 golden `.hashes` files, and
+>   `/fp:precise` on `HuskSim`). So L5 is: **for each game, run its own suites at its current
+>   engine pin first** (that is its baseline, and it separates what the engine did from what
+>   the PC does), **then with this engine**, and report any difference in a golden, a hash,
+>   a byte comparison or a route. Never update a golden. Penumbra and Magic Portals ship
+>   releases, so they go first, then Wolf Brigade and HUSK. They build with Ninja and `cl`
+>   (pass `-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl`; a GCC earlier on `PATH` wins
+>   otherwise), `build-lv` is not git-ignored in three of them, and screenshot paths must be
+>   absolute or they land inside the engine submodule. Work on scratch branches; push nothing.
+> - **Smart App Control** may block freshly built executables at random, one notification
+>   each. A `Not Run` test (exit 126) is the machine, not the code: rerun that executable by
+>   hand up to three times and record each as ran-and-passed, ran-and-failed (a finding), or
+>   never ran. Do not turn Smart App Control off. L10 runs the suites on a hosted Windows
+>   runner with none of this, which is why it can be run first, in parallel with the rest.
+> - **The repository is public** (GitHub says so; `AGENTS.md` and `ci.yml` still reason from
+>   it being private). Hosted Actions minutes are free for a public repository, so the
+>   "CI spend" concern does not apply to L10 while it stays public. Whether it should be
+>   public is the owner's call, not yours.
+
 ## Rules
 
 1. **A failing check is a finding, not an obstacle.** Do not weaken a test, widen a
