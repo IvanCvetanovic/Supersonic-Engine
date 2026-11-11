@@ -783,7 +783,17 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         std::ostringstream members;
         bool any = false;
         for (const auto& extension : registeredComponents()) {
+            // The scratch stream shares the destination's locale and precision. Its
+            // locale is the guard writeScene (or Write, above) installed: a NaN
+            // from a game's writer used to reach the file as "nan", which makes
+            // the whole scene unreadable, and a global locale with a decimal comma
+            // wrote "1,5". Its precision is the snapshot's nine digits: a game's own
+            // floats are where its state lives, and rounding them to six defeated
+            // the exact Stop restore. A saved scene is unchanged - the default
+            // precision, the classic locale, and no non-finite value to substitute.
             std::ostringstream value;
+            value.imbue(out.getloc());
+            value.precision(out.precision());
             if (!extension.writer(registry, entity, value)) continue;
             if (any) members << ",\n";
             members << indent << "  \"" << Json::Escape(extension.key)

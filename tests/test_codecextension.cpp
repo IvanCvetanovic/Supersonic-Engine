@@ -14,6 +14,8 @@
 #include "core/Components.hpp"
 #include "core/Json.hpp"
 
+#include <cstdio>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -243,7 +245,81 @@ static void testAWholeSceneCarriesGameComponents() {
     CHECK_MSG(total == 30, "with its values: got " + std::to_string(total));
 }
 
+// A game component with a float, written by hand the way the facility's own
+// writers are: straight to the stream it is handed.
+struct Weight {
+    float kilos{0.0f};
+};
+
+static void registerWeight() {
+    ComponentCodec::ClearRegisteredComponents();
+    ComponentCodec::RegisterComponent(
+        "Weight",
+        [](const entt::registry& registry, entt::entity entity, std::ostream& out) {
+            const auto* weight = registry.try_get<Weight>(entity);
+            if (!weight) return false;
+            out << "{ \"Kilos\": " << weight->kilos << " }";
+            return true;
+        },
+        [](entt::registry& registry, entt::entity entity, const Json::Value& value) {
+            registry.emplace_or_replace<Weight>(entity).kilos = value["Kilos"].AsFloat(-1.0f);
+        });
+}
+
+static void testAGameWriterIsHeldToTheSameFiniteNumbersAsTheEngine() {
+    // Every engine field is written through FiniteNumbersOnly because one NaN in a
+    // file makes Json::Parse refuse the whole scene. A game's writer got its own
+    // scratch stream, which had no such guard, so one NaN in a game's component
+    // made the scene unreadable - the failure the guard exists to prevent, one
+    // layer out.
+    registerWeight();
+    entt::registry registry;
+    const auto e = registry.create();
+    registry.emplace<TagComponent>(e, "Heavy");
+    registry.emplace<TransformComponent>(e);
+    registry.emplace<Weight>(e, Weight{std::numeric_limits<float>::quiet_NaN()});
+
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("nan") == std::string::npos && text.find("inf") == std::string::npos,
+              "no nan or inf reaches the file: " + text);
+
+    entt::registry loaded;
+    const auto result = SceneSerializer::DeserializeFromString(loaded, text);
+    CHECK_MSG(result.ok, "so the scene still reads: " + result.message);
+    ComponentCodec::ClearRegisteredComponents();
+}
+
+static void testASnapshotKeepsEveryBitOfAGameFloat() {
+    // SerializeSnapshot writes nine digits so Stop restores the registry exactly.
+    // The game's scratch stream had the default six, so a game's own floats - which
+    // is where its state lives - came back rounded, and the very thing the nine
+    // digits were added for did not hold for them.
+    registerWeight();
+    const float awkward = 1234.56775f;
+    entt::registry registry;
+    const auto e = registry.create();
+    registry.emplace<TagComponent>(e, "Awkward");
+    registry.emplace<TransformComponent>(e);
+    registry.emplace<Weight>(e, Weight{awkward});
+
+    const std::string snapshot = SceneSerializer::SerializeSnapshot(registry);
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, snapshot).ok);
+    float back = -1.0f;
+    for (auto entity : loaded.view<Weight>()) back = loaded.get<Weight>(entity).kilos;
+    CHECK_MSG(back == awkward, "the float returns bit for bit through a snapshot");
+
+    // And the file format is unchanged: the same value saved normally keeps its six
+    // digits, because a shipped game's scenes are compared byte for byte.
+    const std::string saved = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(saved.find("\"Kilos\": 1234.57 }") != std::string::npos,
+              "a saved scene still writes six digits: " + saved);
+    ComponentCodec::ClearRegisteredComponents();
+}
+
 static void runTests() {
+    testAGameWriterIsHeldToTheSameFiniteNumbersAsTheEngine();
+    testASnapshotKeepsEveryBitOfAGameFloat();
     testAGameComponentSurvivesARoundTrip();
     testGameComponentsLiveInTheirOwnMember();
     testAnEntityWithoutTheComponentWritesNothingForIt();
@@ -252,4 +328,4 @@ static void runTests() {
     testAWholeSceneCarriesGameComponents();
 }
 
-TEST_MAIN("test_codecextension", 22)
+TEST_MAIN("test_codecextension", 28)
