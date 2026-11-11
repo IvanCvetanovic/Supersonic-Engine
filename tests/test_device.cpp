@@ -355,6 +355,28 @@ static void testADeferredDestroyWaitsForTheFrameItWasQueuedOn(DeviceFixture& f) 
     CHECK_MSG(ran == 3, "a flush runs what is still queued");
 }
 
+namespace {
+
+// SUPERSONIC_REQUIRE_DEVICE set to anything but "" or "0". getenv is what MSVC calls
+// unsafe (C4996, an error under /WX), and the engine reads the Windows environment
+// wide for the same reason (see ExecutablePath.cpp), so the Windows branch asks the CRT
+// for a copy.
+bool deviceIsRequired() {
+#ifdef _WIN32
+    char* value = nullptr;
+    size_t length = 0;
+    const bool set = _dupenv_s(&value, &length, "SUPERSONIC_REQUIRE_DEVICE") == 0 && value != nullptr &&
+                     value[0] != '\0' && std::strcmp(value, "0") != 0;
+    std::free(value);
+    return set;
+#else
+    const char* value = std::getenv("SUPERSONIC_REQUIRE_DEVICE");
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+#endif
+}
+
+} // namespace
+
 int main() {
     std::string whyNot;
     bool machineHasNone = false;
@@ -374,8 +396,7 @@ int main() {
         // set by `tools/check.sh device` and by CI's lavapipe job), and for it a missing
         // device is a failure too: the machine's setup is what broke (the ICD path, a
         // package that did not install), and green by skipping would hide it.
-        const char* required = std::getenv("SUPERSONIC_REQUIRE_DEVICE");
-        if (required != nullptr && required[0] != '\0' && std::strcmp(required, "0") != 0) {
+        if (deviceIsRequired()) {
             std::printf("FAILED: test_device was required to run (SUPERSONIC_REQUIRE_DEVICE is set) "
                         "and could not get a Vulkan device and a window: %s\n", whyNot.c_str());
             std::fflush(stdout);
