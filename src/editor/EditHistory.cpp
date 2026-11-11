@@ -6,7 +6,9 @@ namespace Supersonic {
 
 EditHistory::Snapshot EditHistory::capture(entt::registry& registry) {
     Snapshot snapshot;
-    snapshot.text = SceneSerializer::SerializeToString(registry);
+    // Full precision, so an undo restores what was there and a change smaller than
+    // the sixth digit is a change the history can see.
+    snapshot.text = SceneSerializer::SerializeSnapshot(registry);
     // Counted by walking the entity view rather than asking the registry for a
     // size: registry.size() includes destroyed handles still in the free list,
     // and storage<entt::entity>().in_use() is deprecated in this EnTT.

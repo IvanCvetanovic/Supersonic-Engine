@@ -133,6 +133,22 @@ bool RegisterContributor(std::string name, StateContributor contributor);
 // Forgets every contributor. For tests, and for a game shutting down.
 void ClearContributors();
 
+// OPT-IN: widens the oracle to state a tick writes and a later tick reads that
+// the default walk leaves out. Registers a contributor named "SupersonicExtended"
+// that folds in each joint's `broken` flag (a joint that let go stays let go, and
+// the next tick's solve reads it) and each body's `sleepPosition` (written when a
+// body falls asleep and compared against its transform every tick after, to decide
+// whether it was moved and must wake).
+//
+// Off by default and kept out of Compute for a reason that is not a preference:
+// the default hash is what every recording, every baseline and kCanonical were
+// made against, and folding more in would change all of them. A game that wants
+// the wider oracle calls this once at start-up, accepts that its recordings are
+// then made against it, and gets a replay that notices a joint breaking on a
+// different tick or a body sleeping somewhere else. Returns false if it was
+// already registered.
+bool RegisterExtendedCoverage();
+
 std::size_t ContributorCount();
 
 } // namespace StateHash

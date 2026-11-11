@@ -227,6 +227,57 @@ static void testATicksContactsAreThatTicksAlone() {
     }
 }
 
+static void testSortedExitsComeOutInAscendingPairOrder() {
+    // Exit events are produced by walking the set of last tick's pairs, and a set
+    // iterates in an order its C++ library chose - libstdc++, libc++ and MSVC
+    // differ - while a script reads events by index. With the switch on they come
+    // out in ascending pair order whatever the set did.
+    entt::registry registry;
+    const auto hub = registry.create();
+    std::vector<entt::entity> others;
+    for (int i = 0; i < 40; ++i) others.push_back(registry.create());
+
+    // The pairs arrive in a scrambled order, so ascending is not the input order.
+    std::vector<PhysicsSystem::Contact> touching;
+    for (int i = 0; i < 40; ++i) {
+        touching.push_back(makeContact(hub, others[static_cast<size_t>((i * 17) % 40)]));
+    }
+
+    ContactTracker tracker;
+    tracker.SetSortedExits(true);
+    tracker.Update(touching);
+    tracker.Update({});
+
+    const auto* events = tracker.For(hub);
+    CHECK_MSG(events != nullptr, "the hub has events");
+    if (events == nullptr) return;
+    CHECK_EQ(events->size(), size_t{40});
+    bool ascending = true;
+    for (size_t i = 1; i < events->size(); ++i) {
+        if (static_cast<uint32_t>((*events)[i].other) <= static_cast<uint32_t>((*events)[i - 1].other)) {
+            ascending = false;
+        }
+    }
+    CHECK_MSG(ascending, "with sorted exits on, the Exit events are in ascending order of the other entity");
+    for (const auto& event : *events) CHECK(event.phase == ContactTracker::Phase::Exit);
+}
+
+static void testExitsAreStillReportedWithTheSwitchOff() {
+    // The default path is untouched: the same events, in the set's own order. What
+    // is pinned is that nothing is lost or duplicated, not the order.
+    entt::registry registry;
+    const auto hub = registry.create();
+    std::vector<PhysicsSystem::Contact> touching;
+    for (int i = 0; i < 20; ++i) touching.push_back(makeContact(hub, registry.create()));
+
+    ContactTracker tracker;
+    CHECK_MSG(!tracker.SortedExits(), "off by default");
+    tracker.Update(touching);
+    tracker.Update({});
+    const auto* events = tracker.For(hub);
+    CHECK_MSG(events != nullptr && events->size() == 20, "every pair reports its Exit once");
+}
+
 static void runTests() {
     testATicksContactsAreThatTicksAlone();
     testFirstTouchIsEnterAndThenStay();
@@ -237,6 +288,8 @@ static void runTests() {
     testTriggersAreFlaggedAndStillReported();
     testClearForgetsThePreviousFrame();
     testSeveralPartnersAreAllReported();
+    testSortedExitsComeOutInAscendingPairOrder();
+    testExitsAreStillReportedWithTheSwitchOff();
 }
 
 TEST_MAIN("test_contacts", 16)

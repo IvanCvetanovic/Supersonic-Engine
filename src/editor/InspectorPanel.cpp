@@ -354,9 +354,14 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
             Theme::DrawVec3Control("Position", transform.position, 0.0f);
 
+            // Written back only when edited. Converting radians to degrees and back
+            // EVERY frame turns a rotation into itself plus a rounding error, and
+            // with the history at full precision that error is an edit: selecting
+            // a rotated entity recorded an undo step and marked the scene dirty.
             glm::vec3 rotDegrees = glm::degrees(transform.rotation);
-            Theme::DrawVec3Control("Rotation", rotDegrees, 0.0f);
-            transform.rotation = glm::radians(rotDegrees);
+            if (Theme::DrawVec3Control("Rotation", rotDegrees, 0.0f)) {
+                transform.rotation = glm::radians(rotDegrees);
+            }
 
             Theme::DrawVec3Control("Scale", transform.scale, 1.0f);
 

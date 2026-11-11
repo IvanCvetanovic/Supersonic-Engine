@@ -61,8 +61,26 @@ Instance InstanceFromObb(const CollisionSAT::Obb& box);
 // The cost is what the vertex cap in ConvexHull exists to bound: the edge pairs
 // are quadratic, so two hulls with three hundred edges each would be ninety
 // thousand axes.
+//
+// `stableContactOrder` is PhysicsSettings::stableContactOrder: when several
+// clipped points are equally deep it keeps them in the clip's own order, which is
+// the same on every C++ library, rather than in whatever order std::sort leaves
+// equal elements. Off is the sort this always used.
 CollisionSAT::Manifold CollideHullHull(const Instance& a, const Instance& b,
-                                       float speculativeMargin = 0.0f);
+                                       float speculativeMargin = 0.0f,
+                                       bool stableContactOrder = false);
+
+// One clipped point and how deep it is. Public so the ordering above can be
+// tested without building a hull that happens to clip to sixteen points.
+struct ContactCandidate {
+    glm::vec3 position{0.0f};
+    float penetration{0.0f};
+};
+
+// Orders candidates deepest first, NaN depths last. Stable (equal depths keep
+// their input order) when `stable`, std::sort otherwise - the second being a
+// decision rather than a default: see PhysicsSettings::stableContactOrder.
+void SortContactCandidates(ContactCandidate* candidates, int count, bool stable);
 
 // A capsule against a hull. The normal points from the HULL toward the capsule,
 // which is the a-toward-b convention when the hull is a.

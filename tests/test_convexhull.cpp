@@ -17,6 +17,7 @@
 #include "core/CollisionHull.hpp"
 #include "core/ConvexHull.hpp"
 #include "core/ConvexHullCache.hpp"
+#include <limits>
 #include "TestHarness.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -654,6 +655,55 @@ void testATrimKeepsWhatTheLastStepUsed() {
     CHECK_EQ(cache.size(), size_t{1});
 }
 
+void testTiedContactsKeepTheirOrderWhenTheSwitchIsOn() {
+    // A hull resting flat on another gives every clipped point the same depth, the
+    // solver keeps the first four after the sort, and std::sort leaves the order of
+    // equal elements to the C++ library: libstdc++ reorders them above sixteen
+    // candidates, MSVC above thirty-two. With stableContactOrder on, ties keep the
+    // order the clip produced them in - the same everywhere.
+    std::vector<CollisionHull::ContactCandidate> items(24);
+    for (size_t i = 0; i < items.size(); ++i) {
+        items[i].position = glm::vec3(static_cast<float>(i), 0.0f, 0.0f);
+        items[i].penetration = 0.25f;
+    }
+    items[5].penetration = 0.5f;
+    items[17].penetration = 0.5f;
+
+    auto stable = items;
+    CollisionHull::SortContactCandidates(stable.data(), static_cast<int>(stable.size()), true);
+    std::vector<float> order;
+    for (const auto& item : stable) order.push_back(item.position.x);
+    std::vector<float> expected{5, 17};
+    for (int i = 0; i < 24; ++i) {
+        if (i != 5 && i != 17) expected.push_back(static_cast<float>(i));
+    }
+    CHECK_MSG(order == expected, "deepest first, and every tie in the order it arrived");
+
+    // The default is still std::sort: deepest first and nothing lost, with the order
+    // among ties left to the library - so only the properties are pinned.
+    auto sorted = items;
+    CollisionHull::SortContactCandidates(sorted.data(), static_cast<int>(sorted.size()), false);
+    bool nonIncreasing = true;
+    for (size_t i = 1; i < sorted.size(); ++i) {
+        if (sorted[i].penetration > sorted[i - 1].penetration) nonIncreasing = false;
+    }
+    CHECK_MSG(nonIncreasing, "the default order is deepest first");
+    CHECK(sorted[0].penetration == 0.5f && sorted[1].penetration == 0.5f);
+    float sumX = 0.0f;
+    for (const auto& item : sorted) sumX += item.position.x;
+    CHECK_NEAR(sumX, 276.0f);   // 0 + 1 + ... + 23: a permutation, nothing lost or repeated
+
+    // A depth that is not a number goes last in both, so the predicate stays an
+    // ordering with one in the data.
+    for (const bool useStable : {false, true}) {
+        auto withNaN = items;
+        withNaN[3].penetration = std::numeric_limits<float>::quiet_NaN();
+        CollisionHull::SortContactCandidates(withNaN.data(), static_cast<int>(withNaN.size()), useStable);
+        CHECK_MSG(std::isnan(withNaN.back().penetration), "a NaN depth is last");
+        CHECK(withNaN[0].penetration == 0.5f);
+    }
+}
+
 void runTests() {
     testTooFewPointsIsNotAHull();
     testInvalidateDropsOnlyTheHullsBuiltFromThatFile();
@@ -682,6 +732,7 @@ void runTests() {
 
     testTheVertexCapIsHonestAboutWhatItCost();
     testAHullIsTheSameHullTwice();
+    testTiedContactsKeepTheirOrderWhenTheSwitchIsOn();
 }
 
 } // namespace

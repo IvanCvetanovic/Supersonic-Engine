@@ -240,6 +240,39 @@ static void testDestroyingManyParentsAtOncePromotesExactlyAsOneAtATime() {
               "and its transform is untouched");
 }
 
+static void testStopRestoresEveryFloatBitForBit() {
+    // The Play snapshot was text at the stream's six significant digits, so a
+    // position of 1234.5678 came back from Play then Stop as 1234.57 - for every
+    // entity, whether or not play touched it. Stop is documented as restoring the
+    // scene as it was; at six digits that was a rounding of it.
+    entt::registry registry;
+    const auto e = makeEntity(registry, "Precise", glm::vec3(1234.5678f, -0.000123456f, 3.14159265f));
+    registry.get<TransformComponent>(e).rotation = glm::vec3(0.123456789f, 2.718281828f, -1.0000001f);
+    registry.get<TransformComponent>(e).scale = glm::vec3(1.0000001f, 0.333333343f, 7.0f);
+    const TransformComponent authored = registry.get<TransformComponent>(e);
+
+    PlayMode play;
+    CHECK(play.Play(registry).ok);
+    registry.get<TransformComponent>(e).position = glm::vec3(0.0f);
+    CHECK(play.Stop(registry).ok);
+
+    // Handles are recycled by the restore, so the entity is found by its tag.
+    const TransformComponent* restored = nullptr;
+    for (auto entity : registry.view<TagComponent>()) {
+        if (registry.get<TagComponent>(entity).tag == "Precise") {
+            restored = &registry.get<TransformComponent>(entity);
+        }
+    }
+    CHECK_MSG(restored != nullptr, "the entity comes back");
+    if (restored == nullptr) return;
+    CHECK_MSG(std::memcmp(&authored.position, &restored->position, sizeof(authored.position)) == 0,
+              "the position is the same bits, not the same six digits");
+    CHECK_MSG(std::memcmp(&authored.rotation, &restored->rotation, sizeof(authored.rotation)) == 0,
+              "and the rotation");
+    CHECK_MSG(std::memcmp(&authored.scale, &restored->scale, sizeof(authored.scale)) == 0,
+              "and the scale");
+}
+
 static void testHierarchySurvivesSerialization() {
     entt::registry source;
     const auto parent = makeEntity(source, "Parent", glm::vec3(7.0f, 0.0f, 0.0f));
@@ -651,6 +684,7 @@ static void runTests() {
     testDetachPreservesWorldPosition();
     testCyclesAreRejected();
     testDestroyingParentPromotesChildren();
+    testStopRestoresEveryFloatBitForBit();
     testDestroyingManyParentsAtOncePromotesExactlyAsOneAtATime();
     testHierarchySurvivesSerialization();
     testPlayStopRestoresScene();

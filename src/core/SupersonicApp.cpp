@@ -27,6 +27,7 @@
 #include "core/EcsUtils.hpp"
 #include "core/TransformSystem.hpp"
 #include "core/SimulationClock.hpp"
+#include "core/PhysicsSettings.hpp"
 #include "core/StateHash.hpp"
 #include "core/Application.hpp"
 #include "core/InputRecording.hpp"
@@ -1921,6 +1922,13 @@ void SupersonicApp::Run() {
                 // the contacts this frame has produced so far rather than the
                 // previous frame's. Frame-cumulative rather than per tick,
                 // which is what it already was.
+                // The scene's choice, read each tick so a scene loaded with it on
+                // (or switched off) takes effect at once. Off is the order the
+                // set iterates in, which is what every recording was made against.
+                {
+                    const auto* physics = m_registry.ctx().find<PhysicsSettings>();
+                    m_contactTracker.SetSortedExits(physics != nullptr && physics->sortedContactExits);
+                }
                 m_contactTracker.Update(m_contacts);
 
                 { SUPERSONIC_PROFILE(Scripts); ScriptEngine::Update(m_registry, gameTick); }

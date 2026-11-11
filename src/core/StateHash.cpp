@@ -90,6 +90,36 @@ bool RegisterContributor(std::string name, StateContributor contributor) {
 
 void ClearContributors() { contributors().clear(); }
 
+bool RegisterExtendedCoverage() {
+    return RegisterContributor("SupersonicExtended", [](const entt::registry& registry, Mixer& out) {
+        // Per entity, added: EnTT's iteration order is not state, and a joint
+        // entity walked first in one run and last in another has not diverged.
+        uint64_t total = 0;
+        uint64_t count = 0;
+        const auto fold = [&](entt::entity entity, const JointComponent* joint,
+                              const RigidBodyComponent* body) {
+            Mixer one(1469598103934665603ull);
+            one.U64(static_cast<uint64_t>(entt::to_entity(entity)));
+            if (joint != nullptr) one.Bool(joint->broken);
+            if (body != nullptr) {
+                one.F32(body->sleepPosition.x);
+                one.F32(body->sleepPosition.y);
+                one.F32(body->sleepPosition.z);
+            }
+            total += one.Value();
+            ++count;
+        };
+        for (auto entity : registry.view<const entt::entity>()) {
+            const auto* joint = registry.try_get<const JointComponent>(entity);
+            const auto* body = registry.try_get<const RigidBodyComponent>(entity);
+            if (joint == nullptr && body == nullptr) continue;
+            fold(entity, joint, body);
+        }
+        out.U64(total);
+        out.U64(count);
+    });
+}
+
 std::size_t ContributorCount() { return contributors().size(); }
 
 uint64_t Compute(const entt::registry& registry) {
@@ -273,6 +303,16 @@ uint64_t Compute(const entt::registry& registry) {
         const unsigned char ground = physics->hasGroundPlane ? 1u : 0u;
         hash = mix(hash, &ground, 1);
         hash = mixFloat(hash, physics->groundPlaneY);
+
+        // The two opt-in switches change what a tick computes, so a run with one
+        // on is a different simulation from the same scene with it off. Folded in
+        // ONLY when on: with both off the hash is byte for byte what it was, which
+        // is what every recording and kCanonical were made against.
+        if (physics->stableContactOrder || physics->sortedContactExits) {
+            const unsigned char switches = static_cast<unsigned char>(
+                (physics->stableContactOrder ? 1u : 0u) | (physics->sortedContactExits ? 2u : 0u));
+            hash = mix(hash, &switches, 1);
+        }
     }
 
     // WHAT THE GAME SAYS ITS STATE IS, for the games whose state is not in the

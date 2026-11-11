@@ -14,6 +14,7 @@
 #include "core/RenderSettings.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -77,7 +78,13 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
              << physics.gravity.x << ", " << physics.gravity.y << ", "
              << physics.gravity.z << "], \"GroundPlane\": "
              << (physics.hasGroundPlane ? "true" : "false")
-             << ", \"GroundPlaneY\": " << physics.groundPlaneY << " },\n";
+             << ", \"GroundPlaneY\": " << physics.groundPlaneY;
+        // The two opt-in switches, and only when ON. A scene that does not use them
+        // is written byte for byte as it always was, so a game's baselines and a
+        // committed scene file do not move; a reader treats an absent key as off.
+        if (physics.stableContactOrder) file << ", \"StableContactOrder\": true";
+        if (physics.sortedContactExits) file << ", \"SortedContactExits\": true";
+        file << " },\n";
     }
 
     // How often the world thinks, in hertz. One scene, one answer - so it is a
@@ -313,6 +320,8 @@ void applyPhysicsSettings(entt::registry& registry, const Json::Value& root) {
         // intended break - a scene that wants the plane has to say so.
         physics.hasGroundPlane = node["GroundPlane"].AsBool(false);
         physics.groundPlaneY = node["GroundPlaneY"].AsFloat(0.0f);
+        physics.stableContactOrder = node["StableContactOrder"].AsBool(false);
+        physics.sortedContactExits = node["SortedContactExits"].AsBool(false);
     }
 
     registry.ctx().insert_or_assign<PhysicsSettings>(std::move(physics));
@@ -439,6 +448,17 @@ SerializationResult applyScene(entt::registry& registry, const Json::Array& enti
 
 std::string SceneSerializer::SerializeToString(entt::registry& registry) {
     std::ostringstream out;
+    writeScene(registry, out);
+    return out.str();
+}
+
+std::string SceneSerializer::SerializeSnapshot(entt::registry& registry) {
+    std::ostringstream out;
+    // max_digits10 for float: the fewest digits that name every float uniquely, so
+    // text written here reads back as the float that was written. The facet
+    // FiniteNumbersOnly installs formats a finite value with the stream's own
+    // precision, so this is the whole change.
+    out.precision(std::numeric_limits<float>::max_digits10);
     writeScene(registry, out);
     return out.str();
 }

@@ -34,6 +34,24 @@ struct PhysicsSettings {
     // ask for it, not reasons for it to be there uninvited.
     bool hasGroundPlane{false};
 
+    // OPT-IN, both off, and both written to a scene file only when on - so every
+    // scene, replay and hash that exists is exactly what it was.
+    //
+    // Which contact points a hull keeps when several are equally deep, and in
+    // what order the solver applies them, is simulation state; the sort that
+    // picks them leaves equal elements to the C++ library, which differs between
+    // them (libstdc++ above sixteen candidates, MSVC above thirty-two). On makes
+    // the order the clip's own, the same on every platform. It changes which
+    // points are kept for some large manifolds, so turning it on is a
+    // re-recording of any baseline that holds one: a decision for a game to make
+    // at a moment of its choosing, not one the engine makes for it.
+    bool stableContactOrder{false};
+
+    // Contact EXIT events reach a script in ascending pair order rather than in
+    // the order of the hash set that tracks them, which differs between standard
+    // libraries. A script reads events by index, so this is the same difference.
+    bool sortedContactExits{false};
+
     // Where that plane sits, when it is on. Measured against the BOTTOM of a
     // body's collider bounds in world space, not its transform origin.
     float groundPlaneY{0.0f};

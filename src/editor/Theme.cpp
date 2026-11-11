@@ -135,7 +135,8 @@ bool Theme::SectionHeader(const char* text, bool defaultOpen) {
     return open;
 }
 
-void Theme::DrawVec3Control(const std::string& label, glm::vec3& values, float resetValue, float columnWidth) {
+bool Theme::DrawVec3Control(const std::string& label, glm::vec3& values, float resetValue, float columnWidth) {
+    bool changed = false;
     ImGui::PushID(label.c_str());
 
     ImGui::Columns(2);
@@ -155,6 +156,7 @@ void Theme::DrawVec3Control(const std::string& label, glm::vec3& values, float r
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, Brand::AxisX);
     if (ImGui::Button("X", buttonSize)) {
         values.x = resetValue;
+        changed = true;
     }
     ImGui::PopStyleColor(3);
 
@@ -165,7 +167,7 @@ void Theme::DrawVec3Control(const std::string& label, glm::vec3& values, float r
     // back. A generous finite bound keeps dragging unrestricted in practice
     // while making a non-finite value impossible to author here.
     constexpr float kLimit = 1.0e9f;
-    ImGui::DragFloat("##X", &values.x, 0.05f, -kLimit, kLimit, "%.2f");
+    changed |= ImGui::DragFloat("##X", &values.x, 0.05f, -kLimit, kLimit, "%.2f");
     ImGui::PopItemWidth();
     ImGui::SameLine();
 
@@ -175,11 +177,12 @@ void Theme::DrawVec3Control(const std::string& label, glm::vec3& values, float r
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, Brand::AxisY);
     if (ImGui::Button("Y", buttonSize)) {
         values.y = resetValue;
+        changed = true;
     }
     ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
-    ImGui::DragFloat("##Y", &values.y, 0.05f, -kLimit, kLimit, "%.2f");
+    changed |= ImGui::DragFloat("##Y", &values.y, 0.05f, -kLimit, kLimit, "%.2f");
     ImGui::PopItemWidth();
     ImGui::SameLine();
 
@@ -189,17 +192,19 @@ void Theme::DrawVec3Control(const std::string& label, glm::vec3& values, float r
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, Brand::AxisZ);
     if (ImGui::Button("Z", buttonSize)) {
         values.z = resetValue;
+        changed = true;
     }
     ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
-    ImGui::DragFloat("##Z", &values.z, 0.05f, -kLimit, kLimit, "%.2f");
+    changed |= ImGui::DragFloat("##Z", &values.z, 0.05f, -kLimit, kLimit, "%.2f");
     ImGui::PopItemWidth();
 
     ImGui::PopStyleVar();
     ImGui::Columns(1);
 
     ImGui::PopID();
+    return changed;
 }
 
 } // namespace Supersonic

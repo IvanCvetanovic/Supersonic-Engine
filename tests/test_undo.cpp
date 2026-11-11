@@ -11,6 +11,8 @@
 #include "core/SceneSerializer.hpp"
 
 #include <string>
+#include <cstring>
+#include <cmath>
 
 using namespace Supersonic;
 
@@ -52,6 +54,30 @@ static void testCommitWithoutChangeRecordsNothing() {
     CHECK_MSG(!history.CommitIfChanged(registry), "an unchanged scene must not become a step");
     CHECK_MSG(!history.CommitIfChanged(registry), "however many times it is asked");
     CHECK_EQ(history.UndoDepth(), size_t{0});
+}
+
+static void testUndoRestoresAValueToTheBitAndSeesASmallEdit() {
+    // The history is text, and the text was at six significant digits: an undo
+    // rounded every transform it restored, and an edit smaller than the sixth
+    // digit changed nothing the history could see - the step was never recorded.
+    entt::registry registry;
+    const auto entity = addEntity(registry, "Cube");
+    registry.get<TransformComponent>(entity).position = glm::vec3(1234.5678f, 0.0f, 0.0f);
+
+    EditHistory history;
+    history.Reset(registry);
+
+    // 1234.5678f and its neighbour differ in the seventh digit.
+    const float before = registry.get<TransformComponent>(entity).position.x;
+    const float after = std::nextafter(before, 2000.0f);
+    registry.get<TransformComponent>(entity).position.x = after;
+    CHECK_MSG(history.CommitIfChanged(registry), "a change below the sixth digit is a change");
+
+    CHECK(history.Undo(registry));
+    float restored = 0.0f;
+    for (auto e : registry.view<TransformComponent>()) restored = registry.get<TransformComponent>(e).position.x;
+    CHECK_MSG(std::memcmp(&restored, &before, sizeof(before)) == 0,
+              "undo gives back the exact float, not the nearest six digits of it");
 }
 
 static void testUndoRestoresADeletedEntity() {
@@ -426,6 +452,7 @@ static void runTests() {
     testFreshHistoryHasNothingToUndo();
     testCommitWithoutChangeRecordsNothing();
     testUndoRestoresADeletedEntity();
+    testUndoRestoresAValueToTheBitAndSeesASmallEdit();
     testUndoRemovesACreatedEntity();
     testUndoRestoresAFieldEdit();
     testRedoReappliesTheChange();

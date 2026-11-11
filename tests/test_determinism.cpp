@@ -1052,6 +1052,74 @@ static void testAGamesOwnStateIsInvisibleUntilItRegisters() {
     StateHash::ClearContributors();
 }
 
+static void testExtendedCoverageIsOptInAndSeesWhatTheDefaultMisses() {
+    // The default hash does not see a joint's `broken` flag or a body's
+    // sleepPosition: a tick writes both and a later tick reads them, and a replay
+    // in which a joint let go on a different tick would reproduce regardless. That
+    // is pinned here as a known gap rather than fixed, because the default is what
+    // every recording and kCanonical were made against.
+    StateHash::ClearContributors();
+
+    entt::registry registry;
+    const auto anchor = registry.create();
+    registry.emplace<TransformComponent>(anchor);
+    const auto bob = registry.create();
+    registry.emplace<TransformComponent>(bob, glm::vec3(0.0f, -2.0f, 0.0f));
+    registry.emplace<RigidBodyComponent>(bob);
+    registry.emplace<JointComponent>(bob).connectedBody = anchor;
+
+    const uint64_t intact = StateHash::Compute(registry);
+    registry.get<JointComponent>(bob).broken = true;
+    CHECK_MSG(StateHash::Compute(registry) == intact,
+              "by default a joint breaking is invisible to the hash (the known gap)");
+    registry.get<JointComponent>(bob).broken = false;
+
+    CHECK_MSG(StateHash::RegisterExtendedCoverage(), "the extended coverage registers");
+    CHECK_MSG(!StateHash::RegisterExtendedCoverage(), "and only once");
+    const uint64_t widenedIntact = StateHash::Compute(registry);
+    CHECK_MSG(widenedIntact != intact, "registering it changes the number, as any contributor does");
+
+    registry.get<JointComponent>(bob).broken = true;
+    CHECK_MSG(StateHash::Compute(registry) != widenedIntact, "with it, a joint breaking is seen");
+    registry.get<JointComponent>(bob).broken = false;
+
+    registry.get<RigidBodyComponent>(bob).sleepPosition = glm::vec3(0.0f, -2.0f, 0.0f);
+    CHECK_MSG(StateHash::Compute(registry) != widenedIntact, "and so is where a body went to sleep");
+
+    StateHash::ClearContributors();
+    registry.get<RigidBodyComponent>(bob).sleepPosition = glm::vec3(0.0f);
+    CHECK_MSG(StateHash::Compute(registry) == intact, "cleared, the hash is what it always was");
+}
+
+static void testTheOptInPhysicsSwitchesAreInTheHashOnlyWhenOn() {
+    // Both switches change what a tick computes, so a run with one on is a
+    // different simulation from the same scene with it off - but with both off the
+    // hash must be byte for byte what it was, which is what every recording and
+    // kCanonical were made against.
+    StateHash::ClearContributors();
+
+    const auto hashWith = [](bool stable, bool sorted) {
+        entt::registry registry;
+        buildScene(registry);
+        PhysicsSettings settings;
+        settings.stableContactOrder = stable;
+        settings.sortedContactExits = sorted;
+        registry.ctx().insert_or_assign<PhysicsSettings>(std::move(settings));
+        return StateHash::Compute(registry);
+    };
+
+    const uint64_t off = hashWith(false, false);
+    entt::registry untouched;
+    buildScene(untouched);
+    untouched.ctx().insert_or_assign<PhysicsSettings>(PhysicsSettings{});
+    CHECK_MSG(StateHash::Compute(untouched) == off, "default settings hash as they always did");
+
+    CHECK_MSG(hashWith(true, false) != off, "stable contact order is part of the simulation");
+    CHECK_MSG(hashWith(false, true) != off, "and so is sorted contact exits");
+    CHECK_MSG(hashWith(true, true) != hashWith(true, false) && hashWith(true, true) != hashWith(false, true),
+              "and the two together are a third world");
+}
+
 static void testAnUnregisteredEngineHashesExactlyAsItAlwaysDid() {
     // The compatibility claim, and it is not cosmetic: a recording made before
     // this existed has to keep comparing against the engine that made it, or
@@ -1635,6 +1703,8 @@ static void runTests() {
     testAnEntityWithNoPlaceInTheWorldIsStillState();
     testWhereAScriptIsCountsAsState();
     testTheWorldsGravityIsPartOfTheState();
+    testExtendedCoverageIsOptInAndSeesWhatTheDefaultMisses();
+    testTheOptInPhysicsSwitchesAreInTheHashOnlyWhenOn();
     testAGamesOwnStateIsInvisibleUntilItRegisters();
     testAnUnregisteredEngineHashesExactlyAsItAlwaysDid();
     testTheOrderContributorsRegisteredInCannotMatter();

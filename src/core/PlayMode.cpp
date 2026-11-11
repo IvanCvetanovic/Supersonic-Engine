@@ -17,7 +17,9 @@ SerializationResult PlayMode::Play(entt::registry& registry) {
 
     // The snapshot is just a scene file that never touches the disk, so the
     // restore path is the same well-tested code as loading a scene.
-    m_snapshot = SceneSerializer::SerializeToString(registry);
+    // At the digits that read back as the same floats, so Stop restores the scene
+    // bit for bit rather than to six significant figures.
+    m_snapshot = SceneSerializer::SerializeSnapshot(registry);
     if (m_snapshot.empty()) {
         return { false, "Could not snapshot the scene; not entering play mode." };
     }

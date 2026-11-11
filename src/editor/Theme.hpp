@@ -52,7 +52,13 @@ public:
     // keeps its proportions on a high-DPI display instead of shrinking.
     static void ApplyEngineDarkTheme(float dpiScale = 1.0f);
 
-    static void DrawVec3Control(const std::string& label, glm::vec3& values,
+    // True when the user changed any component this frame (a drag, a typed value, or
+    // a reset button). A caller that converts units - degrees on screen, radians in
+    // the component - writes back only on true: converting every frame turns a
+    // value into itself plus a rounding error, which a full-precision undo history
+    // reads as an edit, so merely SELECTING a rotated entity would have marked the
+    // scene changed.
+    static bool DrawVec3Control(const std::string& label, glm::vec3& values,
                                 float resetValue = 0.0f, float columnWidth = 100.0f);
 
     // A small uppercase, letter-spaced, dimmed label - the section eyebrow used

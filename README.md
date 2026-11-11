@@ -1341,8 +1341,13 @@ HUSK's nineteen animated models. What is left is here.
   Windows build and in a Linux one of the same game, and `kCanonical` does not
   cover a manifold that large. A stable sort would make the two agree and would
   change which points are kept - on every platform, for some manifolds - so every
-  baseline holding one would have to be re-recorded. That is a decision for the
-  owner and has not been made: a change that did it quietly was taken back.
+  baseline holding one would have to be re-recorded. So it is a switch and not
+  a default: `"StableContactOrder": true` in a scene's `Physics` block (written
+  only when on, so no existing scene changes) keeps ties in the clip's own order
+  on every platform, and a game turns it on when it re-records. The same goes for
+  contact Exit events, which arrive in the order of a hash set that differs
+  between C++ libraries: `"SortedContactExits": true` sorts them. Both are folded
+  into the state hash only when on.
 - **A project folder named outside the Windows ANSI code page cannot load the
   script plugin.** The plugin's path travels as a narrow string from
   `scriptPluginPath()` to `HotReloadEngine`, and `path::string()` converts

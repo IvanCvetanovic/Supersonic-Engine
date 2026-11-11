@@ -21,6 +21,7 @@
 #include <limits>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -1667,6 +1668,72 @@ static void testWorldPhysicsSurvivesARoundTrip() {
     CHECK_NEAR(settings.groundPlaneY, -12.5f);
 }
 
+static void testTheOptInPhysicsSwitchesAreWrittenOnlyWhenOn() {
+    // Two switches that change what a tick computes (stable hull contact order,
+    // sorted contact exits). They are written to a scene file only when ON, so a
+    // scene that does not use them is byte for byte what it was - a game's
+    // baselines and the committed scenes do not move - and an absent key is off.
+    entt::registry plain;
+    plain.ctx().insert_or_assign<PhysicsSettings>(PhysicsSettings{});
+    const std::string off = SceneSerializer::SerializeToString(plain);
+    CHECK_MSG(off.find("StableContactOrder") == std::string::npos &&
+                  off.find("SortedContactExits") == std::string::npos,
+              "with both off, the scene text carries neither key");
+
+    entt::registry on;
+    PhysicsSettings settings;
+    settings.stableContactOrder = true;
+    settings.sortedContactExits = true;
+    on.ctx().insert_or_assign<PhysicsSettings>(std::move(settings));
+    const std::string text = SceneSerializer::SerializeToString(on);
+    CHECK_MSG(text.find("\"StableContactOrder\": true") != std::string::npos &&
+                  text.find("\"SortedContactExits\": true") != std::string::npos,
+              "with both on, both keys are written");
+
+    entt::registry loaded;
+    CHECK_MSG(SceneSerializer::DeserializeFromString(loaded, text).ok, "and the text loads");
+    const auto& read = loaded.ctx().get<PhysicsSettings>();
+    CHECK(read.stableContactOrder && read.sortedContactExits);
+
+    // A scene without the keys, loaded over one with them on, turns them OFF:
+    // every world setting is assigned on a load, never inherited.
+    CHECK(SceneSerializer::DeserializeFromString(loaded, off).ok);
+    const auto& cleared = loaded.ctx().get<PhysicsSettings>();
+    CHECK_MSG(!cleared.stableContactOrder && !cleared.sortedContactExits,
+              "a scene that does not ask for the switches does not inherit them");
+}
+
+static void testASnapshotKeepsEveryFloatAndAFileKeepsItsSixDigits() {
+    // The editor's Play snapshot and undo history are written at the digits that
+    // read back as the same float. A scene FILE is not: it keeps the stream's six,
+    // which is what is on disk, what a game's byte-exact baselines hold and what
+    // a person reads - SerializeToString and Serialize are untouched.
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TagComponent>(entity, "Precise");
+    registry.emplace<TransformComponent>(entity, glm::vec3(1234.5678f, 0.0f, 0.0f));
+
+    const std::string file = SceneSerializer::SerializeToString(registry);
+    const std::string snapshot = SceneSerializer::SerializeSnapshot(registry);
+    // The float nearest 1234.5678 is 1234.5677490..., which nine digits write as
+    // 1234.56775 and six write as 1234.57.
+    CHECK_MSG(file.find("1234.57") != std::string::npos && file.find("1234.5677") == std::string::npos,
+              "a scene file still writes six significant digits");
+    CHECK_MSG(snapshot.find("1234.56775") != std::string::npos,
+              "and a snapshot writes enough to name the float exactly");
+
+    entt::registry restored;
+    CHECK(SceneSerializer::DeserializeFromString(restored, snapshot).ok);
+    float x = 0.0f;
+    for (auto e : restored.view<TransformComponent>()) x = restored.get<TransformComponent>(e).position.x;
+    const float original = 1234.5678f;
+    CHECK_MSG(std::memcmp(&x, &original, sizeof(x)) == 0, "the snapshot reads back as the same bits");
+
+    // Stable across a round trip, which EditHistory's change detection relies on.
+    CHECK_MSG(SceneSerializer::SerializeSnapshot(restored) == snapshot,
+              "a snapshot written, read and written again is the same text");
+}
+
 static void testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt() {
     // registry.clear() does not touch the context, so a scene loaded over
     // another one would inherit the previous scene's gravity and keep a ground
@@ -2453,6 +2520,8 @@ static void runTests() {
     testTheScenesLookSurvivesARoundTrip();
     testASceneWithNoLookGetsTheDefaultOne();
     testWorldPhysicsSurvivesARoundTrip();
+    testTheOptInPhysicsSwitchesAreWrittenOnlyWhenOn();
+    testASnapshotKeepsEveryFloatAndAFileKeepsItsSixDigits();
     testAStackAndItsRankingSurviveARoundTrip();
     testAShapeSurvivesARoundTripIncludingItsKind();
     testTheBackgroundSurvivesARoundTripAndDefaultsToTheSky();

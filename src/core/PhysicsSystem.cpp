@@ -1363,7 +1363,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                     for (const CollisionHull::Instance& otherInstance : otherInstances) {
                         if (otherInstance.hull == nullptr) continue;
                         const CollisionSAT::Manifold pairManifold =
-                            CollisionHull::CollideHullHull(hullInstance, otherInstance, pairMargin);
+                            CollisionHull::CollideHullHull(hullInstance, otherInstance, pairMargin,
+                                                           settings.stableContactOrder);
                         if (!pairManifold.colliding || pairManifold.pointCount == 0) continue;
 
                         // From a toward b: the manifold speaks from the first
@@ -1378,7 +1379,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
                 if (other.shape == Shape::Box) {
                     manifold = CollisionHull::CollideHullHull(
-                        hullInstance, CollisionHull::InstanceFromObb(obbOf(other)), pairMargin);
+                        hullInstance, CollisionHull::InstanceFromObb(obbOf(other)), pairMargin,
+                        settings.stableContactOrder);
                 } else {
                     glm::vec3 endA(0.0f);
                     glm::vec3 endB(0.0f);

@@ -63,6 +63,13 @@ public:
     // away from itself.
     void Update(const std::vector<PhysicsSystem::Contact>& contacts);
 
+    // Whether Exit events come out in ascending pair order. Off, they come out in
+    // the iteration order of the set of last tick's pairs - which differs between
+    // C++ libraries, and a script reads events by index. See
+    // PhysicsSettings::sortedContactExits, which the app applies before each tick.
+    void SetSortedExits(bool sorted) { m_sortedExits = sorted; }
+    bool SortedExits() const { return m_sortedExits; }
+
     const std::vector<Event>* For(entt::entity entity) const;
     size_t CountFor(entt::entity entity) const;
 
@@ -82,6 +89,7 @@ private:
     std::unordered_map<entt::entity, std::vector<Event>> m_events;
     std::unordered_set<PairKey> m_previous;
     std::unordered_set<PairKey> m_current;
+    bool m_sortedExits{false};
 };
 
 } // namespace Supersonic

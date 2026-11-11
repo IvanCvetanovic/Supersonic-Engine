@@ -47,9 +47,7 @@ void ContactTracker::Update(const std::vector<PhysicsSystem::Contact>& contacts)
     }
 
     // Anything that was touching last frame and is not now has stopped.
-    for (const PairKey key : m_previous) {
-        if (m_current.count(key)) continue;
-
+    const auto reportExit = [&](PairKey key) {
         const auto a = static_cast<entt::entity>(static_cast<uint32_t>(key >> 32));
         const auto b = static_cast<entt::entity>(static_cast<uint32_t>(key & 0xFFFFFFFFull));
 
@@ -57,6 +55,26 @@ void ContactTracker::Update(const std::vector<PhysicsSystem::Contact>& contacts)
         // invented. Zero is the honest answer and scripts can test for it.
         record(a, b, glm::vec3(0.0f), false, Phase::Exit);
         record(b, a, glm::vec3(0.0f), false, Phase::Exit);
+    };
+
+    if (m_sortedExits) {
+        // Ascending pair order, which is the same on every C++ library. The set
+        // iterates in an order its implementation chose - libstdc++, libc++ and
+        // MSVC all differ - and a script reads events by index, so the default
+        // path below is a cross-platform difference a replay cannot see.
+        std::vector<PairKey> exited;
+        for (const PairKey key : m_previous) {
+            if (!m_current.count(key)) exited.push_back(key);
+        }
+        std::sort(exited.begin(), exited.end());
+        for (const PairKey key : exited) reportExit(key);
+    } else {
+        // The order this has always had, which the recordings on disk were made
+        // against; see PhysicsSettings::sortedContactExits.
+        for (const PairKey key : m_previous) {
+            if (m_current.count(key)) continue;
+            reportExit(key);
+        }
     }
 
     m_previous = m_current;
