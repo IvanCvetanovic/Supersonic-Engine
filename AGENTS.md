@@ -55,6 +55,7 @@ CI passes explicitly.
 | `SUPERSONIC_BUILD_EDITOR` | ON when the engine is the top-level project | The `SupersonicEngine` editor executable |
 | `SUPERSONIC_BUILD_SCRIPT_PLUGIN` | same | `GameScripts`, the sample hot-reload plugin |
 | `SUPERSONIC_BUILD_TESTS` | same | The engine's own suites |
+| `SUPERSONIC_BUILD_BENCHMARKS` | OFF everywhere | `tools/bench`: `physics_bench` (three scenes, ms/step and a bitwise checksum of the result) and `dedupe_bench` (hull deduplication, grid against all-pairs). Not in ctest - a timing has no pass or fail. Build Release, run before and after a change: the timings may move, the checksums must not |
 | `SUPERSONIC_WERROR` | OFF | Warnings in the engine's own code and suites are errors (vendored code is compiled with its warnings off, so it is not held to this). PRIVATE where applied, so it costs a game nothing. `tools/check.sh build` turns it on |
 | `SUPERSONIC_PRECOMPILE_HEADERS` | ON | Precompiles `vulkan.hpp`, EnTT, GLM and the standard headers for the engine's own translation units. PRIVATE to `SupersonicCore`, so a game's targets compile exactly as before; off if a build tool of yours dislikes a precompiled header (ccache caches nothing behind one without its `pch_defines,time_macros` sloppiness) |
 | `SUPERSONIC_ENABLE_VALIDATION` | `AUTO` | `ON`, `OFF` or `AUTO`. `AUTO` requests the validation layers on Debug only; `ON` validates in every configuration (CI's Release validation leg), `OFF` in none. A missing layer is a loud warning, not an error |

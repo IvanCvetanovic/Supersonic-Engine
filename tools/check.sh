@@ -174,14 +174,48 @@ check_docs() {
     # that passes.
     for f in tests/test_*.cpp; do
         suite=$(basename "$f" .cpp)
-        if ! echo "$registered" | grep -qx "$suite"; then
+        # A here-string, not `echo | grep -q`: grep -q leaves at its first match, the
+        # echo behind it can then take a SIGPIPE, and under pipefail that reports
+        # "not registered" for a suite that is. It did, at random, for whichever suites
+        # sat early in the list - two of five runs on unchanged files.
+        if ! grep -qx "$suite" <<< "$registered"; then
             fail_msg "$f" "is not registered with add_engine_test, so nothing builds or runs it"
             fail=1
         fi
     done
 
+    # A path a doc names in backticks is a promise that it exists. `platform/SafeArea.hpp`
+    # sat in ARCHITECTURE.md after the file moved to src/platform/, and nothing noticed:
+    # the counts above are gated and the references were not. Only a path under a
+    # top-level directory of this repository is checked, written in full and without a
+    # glob (`tests/test_*.cpp` names no file and is not matched), so a bare file name or
+    # an example is never flagged.
+    #
+    # The allowlist is the paths the docs name ON PURPOSE that live in a game's own
+    # repository. A heuristic cannot tell those from rot (the note saying where a file
+    # went can be on the next line), so each is listed, with where it is.
+    local external ref
+    external=$(cat <<'EXTERNAL'
+.github/workflows/apple.yml
+tools/build_android.sh
+docs/planning/2026-09-10-magic-portals-spike.md
+EXTERNAL
+)
+    # apple.yml and build_android.sh: the Penumbra repository. The spike note: the
+    # Magic-Portals-Remake repository, as ARCHITECTURE.md says beside it.
+    for f in README.md ARCHITECTURE.md AGENTS.md CONTRIBUTING.md; do
+        test -f "$f" || continue
+        while IFS= read -r ref; do
+            test -n "$ref" || continue
+            if [ ! -e "$ref" ] && ! grep -qxF "$ref" <<< "$external"; then
+                fail_msg "$f" "names \`${ref}\`, which does not exist (moved? add it to the allowlist in check_docs only if it lives in another repository on purpose)"
+                fail=1
+            fi
+        done < <(grep -oE '`(src|tests|tools|assets|docs|plugins|cmake|third_party|platform|\.github)/[A-Za-z0-9_./+-]*[A-Za-z0-9_]`' "$f" | tr -d '`' | sort -u)
+    done
+
     if [ "$fail" -eq 0 ]; then
-        echo "Documented counts, the badge, the table and the registrations agree."
+        echo "Documented counts, the badge, the table, the registrations and the named paths agree."
     fi
     return "$fail"
 }

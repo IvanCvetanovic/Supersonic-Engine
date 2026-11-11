@@ -171,7 +171,7 @@ if [ -z "$REPORTED" ]; then
     echo "It failed, but never said where. A divergence with no tick number is not a bug report." >&2
     exit 1
 fi
-if ! echo "$REPORTED" | grep -qE "tick ${TICK}([^0-9]|$)"; then
+if ! grep -qE "tick ${TICK}([^0-9]|$)" <<< "$REPORTED"; then
     cat "$OUT"
     echo "Reported the wrong tick. Corrupted $TICK, got: $REPORTED" >&2
     exit 1

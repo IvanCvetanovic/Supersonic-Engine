@@ -847,3 +847,11 @@ if (SUPERSONIC_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# Timings of the engine's hot paths (tools/bench), for comparing a change before and
+# after on a machine. Off everywhere by default: they take no part in CI or a game's
+# build, and a timing has no pass or fail.
+option(SUPERSONIC_BUILD_BENCHMARKS "Build the engine's benchmarks (tools/bench)" OFF)
+if (SUPERSONIC_BUILD_BENCHMARKS)
+    add_subdirectory(tools/bench)
+endif()
