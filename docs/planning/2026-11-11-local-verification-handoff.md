@@ -10,6 +10,20 @@ repository has been touched.
 Like the other records in this directory it is a dated snapshot: do not edit the
 sections above [Outcome](#outcome) to match what you find. Append to Outcome.
 
+> **Update, later the same day.** The branch has since been merged into `main` (merge
+> commit `ea5ed07`), so wherever this document says "the branch", use `main`; the checklist
+> is otherwise unchanged. The merge brought in two commits that landed on `main` in the
+> meantime — a hinge-limit fix in `Joints.cpp` and an Android audio-stream keeper with two
+> new suites — and the merged tree went through the same gates again (Release `-Werror`,
+> ASan/UBSan/LSan, replay round trip, frame repeatability, the device suite: all green;
+> the pictures, the physics checksums and the replay's pinned checkpoint hash identical to
+> before the merge). So expect **67** ctest entries (66 suites + `test_reporttext`), not 65.
+> The audio keeper's own behaviour on a phone or emulator was not exercised here — only its
+> pure-logic suites ran.
+>
+> Do your work on a new branch, `local-verification`, and push the Outcome to that — not to
+> `main`. The owner merges it.
+
 ## Rules
 
 1. **A failing check is a finding, not an obstacle.** Do not weaken a test, widen a
