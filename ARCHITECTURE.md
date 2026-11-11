@@ -2813,12 +2813,15 @@ default precision, the classic locale, and no non-finite value to substitute.
 **Describing a component instead of coding it.** Most components are a short list
 of plain fields, and for those the codec pair and the inspector section are the
 same list written three times. `RegisterDescribedComponent<C>("Key",
-Field("name", &C::member), ...)` (`core/ComponentFields.hpp`) takes the list once
+ComponentFields::Field("name", &C::member), ...)` (`core/ComponentFields.hpp`) takes the list once
 and registers both: the codec writer and reader, and an inspector section with Add
 and Remove Component. Fields may be `bool`, `int`, `float`, `std::string`,
 `glm::vec2`, `glm::vec3` or `glm::vec4`; anything else is a compile error naming the
 type, because a component half-saved is worse than one the author was told to write
-by hand. The reader starts from a default-constructed component, so a key a file
+by hand. A tag (no data) is a compile error too, and field names are the keys in the
+file, so an empty or repeated one refuses the registration. Registering again after
+`ClearRegisteredComponents` works: an inspector entry the codec no longer holds is
+stale and is replaced, not mistaken for a duplicate. The reader starts from a default-constructed component, so a key a file
 does not mention is what the type says it defaults to — adding a field later does
 not break a scene saved before it — and one bad value degrades that field alone.
 It is deliberately not reflection and does not touch the engine's own components,

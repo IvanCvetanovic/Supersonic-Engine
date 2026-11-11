@@ -1422,6 +1422,13 @@ void ClearRegisteredComponents() { registeredComponents().clear(); }
 
 std::size_t RegisteredComponentCount() { return registeredComponents().size(); }
 
+bool IsRegisteredComponent(const std::string& key) {
+    for (const auto& existing : registeredComponents()) {
+        if (existing.key == key) return true;
+    }
+    return false;
+}
+
 } // namespace ComponentCodec
 
 } // namespace Supersonic

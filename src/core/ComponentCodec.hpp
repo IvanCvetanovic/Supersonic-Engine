@@ -85,6 +85,11 @@ void ClearRegisteredComponents();
 
 std::size_t RegisteredComponentCount();
 
+// Whether a key is registered now. For a layer above the codec that keeps a list of
+// its own (ComponentFields' inspector entries) and must notice that
+// ClearRegisteredComponents emptied the codec underneath it.
+bool IsRegisteredComponent(const std::string& key);
+
 } // namespace ComponentCodec
 
 } // namespace Supersonic

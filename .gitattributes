@@ -34,6 +34,10 @@ CMakeLists.txt text
 # Shell scripts must keep LF even when checked out on Windows, or they will not
 # run under WSL or Git Bash.
 *.sh     text eol=lf
+# Git hooks have no extension, so the rule above misses them, and `* text=auto` would
+# give them CRLF on Windows - where `#!/usr/bin/env bash\r` fails and every push is
+# then blocked.
+tools/git-hooks/*  text eol=lf
 
 # Binaries: never normalise, never diff as text. Compiled SPIR-V in particular
 # would be corrupted by line-ending translation.

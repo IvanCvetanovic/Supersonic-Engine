@@ -105,7 +105,12 @@ render() {
 
 # The [Counts] block: what the frame drew, as a number of draws and binds. A change
 # that moves a count without moving a pixel is still a change worth seeing.
-counts() { grep -A12 '^\[Counts\]' "$1" || true; }
+#
+# Exactly the block: the header line and the indented rows under it, nothing after. A
+# fixed number of trailing lines (grep -A) took in whatever the engine logged next - for
+# a scene with fewer counters, a line carrying the pipeline cache's size, which differs
+# between a first run and a second - and failed a repeatable scene as unrepeatable.
+counts() { awk '/^\[Counts\]/ {inblock=1; print; next} inblock && /^  / {print; next} {inblock=0}' "$1"; }
 
 echo "1/2  Rendering $FRAMES frames of $SCENE twice ..."
 render "$FRAMES" "$WORK/a.png" "$WORK/a.log"

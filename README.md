@@ -539,7 +539,12 @@ needs one, and somewhere to open a (hidden) window. Without either it prints
 `SKIPPED: test_device needs a Vulkan device ...` and exits 77, which ctest lists as
 **Skipped** - not as a pass. A GPU is enough; so is Mesa's lavapipe in software
 (`xvfb-run -a ctest --test-dir build -R test_device`, with `mesa-vulkan-drivers` installed).
-`ctest -L device` picks it out and `ctest -LE device` leaves it.
+`ctest -L device` picks it out and `ctest -LE device` leaves it. Where a device is
+expected, `SUPERSONIC_REQUIRE_DEVICE=1` turns a missing one into a failure instead of a
+skip (`tools/check.sh device` and CI's lavapipe job set it). Only the machine's own
+absence is ever a skip - no display, no Vulkan loader or driver, no GPU the engine
+accepts. A device that is there and that the engine then fails to set up is a failure,
+so a change that breaks device creation cannot hide as "Skipped".
 
 ctest also lists one test that is not an executable and not in the table below:
 `test_reporttext`, the Android crash report's wording, which is Java. It compiles

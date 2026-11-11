@@ -339,21 +339,43 @@ class ImGuiFieldVisitor final : public FieldVisitor {
 public:
     void Bool(const char* name, bool& value) override { ImGui::Checkbox(name, &value); }
     void Int(const char* name, int& value) override { ImGui::DragInt(name, &value); }
+    // Bounded, so a typed 1e40 or "inf" cannot become a value the next snapshot writes
+    // as something else (FLT_MAX for an infinity, 0 for a NaN) and Stop or Undo then
+    // restores different from the one on screen. ImGui clamps TYPED input (a double-
+    // click or Ctrl+Click) only when asked to with AlwaysClamp; the limits alone bound
+    // the drag.
+    static constexpr float kLimit = 1.0e9f;
+    static constexpr ImGuiSliderFlags kClamp = ImGuiSliderFlags_AlwaysClamp;
+
     void Float(const char* name, float& value) override {
-        // Bounded, so a typed 1e40 cannot become an infinity a scene then cannot
-        // read back (the Vec3 control does the same).
-        constexpr float kLimit = 1.0e9f;
-        ImGui::DragFloat(name, &value, 0.05f, -kLimit, kLimit, "%.3f");
+        ImGui::DragFloat(name, &value, 0.05f, -kLimit, kLimit, "%.3f", kClamp);
     }
+    // The box grows with the text (ImGui's own CallbackResize pattern, as its
+    // imgui_stdlib does): a fixed buffer showed a long string cut at 511 bytes and the
+    // first keystroke then wrote the cut version back, for good. A NUL inside a value
+    // still ends the text for the box, which is a C string; the first edit of such a
+    // value cuts it there.
     void String(const char* name, std::string& value) override {
-        char buffer[512] = {};
-        const size_t length = std::min(value.size(), sizeof(buffer) - 1);
-        std::memcpy(buffer, value.data(), length);
-        if (ImGui::InputText(name, buffer, sizeof(buffer))) value = std::string(buffer);
+        ImGui::InputText(name, value.data(), value.capacity() + 1, ImGuiInputTextFlags_CallbackResize,
+                         &ImGuiFieldVisitor::resizeText, &value);
     }
-    void Vec2(const char* name, glm::vec2& value) override { ImGui::DragFloat2(name, &value.x, 0.05f); }
+    void Vec2(const char* name, glm::vec2& value) override {
+        ImGui::DragFloat2(name, &value.x, 0.05f, -kLimit, kLimit, "%.3f", kClamp);
+    }
     void Vec3(const char* name, glm::vec3& value) override { Theme::DrawVec3Control(name, value, 0.0f); }
-    void Vec4(const char* name, glm::vec4& value) override { ImGui::DragFloat4(name, &value.x, 0.05f); }
+    void Vec4(const char* name, glm::vec4& value) override {
+        ImGui::DragFloat4(name, &value.x, 0.05f, -kLimit, kLimit, "%.3f", kClamp);
+    }
+
+private:
+    static int resizeText(ImGuiInputTextCallbackData* data) {
+        if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
+            auto* text = static_cast<std::string*>(data->UserData);
+            text->resize(static_cast<size_t>(data->BufTextLen));
+            data->Buf = text->data();
+        }
+        return 0;
+    }
 };
 
 }  // namespace

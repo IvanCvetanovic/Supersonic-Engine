@@ -47,7 +47,16 @@
 
 set -euo pipefail
 
+# Where this file is, taken BEFORE the cd below: usage() reads its own header, and by
+# then a relative $0 (`../tools/check.sh --help` from a subdirectory) points nowhere.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+# Temporary directories to remove when the script exits, however it exits. A
+# `trap ... RETURN` in a function does not fire when `set -e` aborts the script, so a
+# failing glslc left its directory behind.
+TEMP_DIRS=()
 
 BUILD_ROOT="${CHECK_BUILD_ROOT:-build-check}"
 JOBS="${JOBS:-$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2) )}"
@@ -256,8 +265,7 @@ check_shaders() {
 
     local tmp
     tmp=$(mktemp -d)
-    # shellcheck disable=SC2064  # expand $tmp now: it is gone by the time the trap fires
-    trap "rm -rf '$tmp'" RETURN
+    TEMP_DIRS+=("$tmp")
 
     while IFS= read -r job; do
         src="${job%%=*}"
@@ -323,9 +331,19 @@ check_asan() {
         -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
     # Leaks and undefined behaviour both fail the run. The suites only: the engine
     # itself needs a device, and a driver's own allocations are somebody else's.
+    #
+    # Under xvfb-run when there is no display and one is available, so test_device RUNS
+    # (against Mesa's lavapipe) instead of skipping: it is the one suite that exercises
+    # the renderer's device code, which is where a use-after-free would be. Without a
+    # screen or xvfb-run it skips, and says so.
+    local runner=()
+    if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] \
+       && command -v xvfb-run >/dev/null 2>&1; then
+        runner=(xvfb-run -a)
+    fi
     ASAN_OPTIONS="abort_on_error=1:detect_leaks=1" \
     UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" \
-        ctest --test-dir "$BUILD_ROOT/asan" -C RelWithDebInfo --output-on-failure -j "$JOBS"
+        ${runner[@]+"${runner[@]}"} ctest --test-dir "$BUILD_ROOT/asan" -C RelWithDebInfo --output-on-failure -j "$JOBS"
 }
 
 check_tsan() {
@@ -403,7 +421,10 @@ check_device() {
     if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
         runner=(xvfb-run -a)
     fi
-    ${runner[@]+"${runner[@]}"} ctest --test-dir "$BUILD_ROOT/release" -L device --output-on-failure
+    # Asked for by name, so a missing device is a failure here, not a Skipped: see
+    # SUPERSONIC_REQUIRE_DEVICE in tests/test_device.cpp.
+    SUPERSONIC_REQUIRE_DEVICE=1 \
+        ${runner[@]+"${runner[@]}"} ctest --test-dir "$BUILD_ROOT/release" -L device --no-tests=error --output-on-failure
 }
 
 check_replay() {
@@ -431,7 +452,7 @@ check_replay() {
 
 usage() {
     # The header comment, from the title to the end of the usage list.
-    awk 'NR>1 && /^set -euo pipefail/ {exit} NR>1 {sub(/^# ?/, ""); print}' "$0"
+    awk 'NR>1 && /^set -euo pipefail/ {exit} NR>1 {sub(/^# ?/, ""); print}' "$SELF"
 }
 
 run() {
@@ -463,7 +484,7 @@ fi
 # only says which step it was. Later steps are slower than earlier ones, and a
 # failed docs check says nothing a long build would improve on.
 current=""
-trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo >&2; echo "check.sh: ${current:-startup} failed (exit $rc)." >&2; fi' EXIT
+trap 'rc=$?; for d in ${TEMP_DIRS[@]+"${TEMP_DIRS[@]}"}; do rm -rf "$d"; done; if [ "$rc" -ne 0 ]; then echo >&2; echo "check.sh: ${current:-startup} failed (exit $rc)." >&2; fi' EXIT
 
 for requested in "$@"; do
     current="$requested"

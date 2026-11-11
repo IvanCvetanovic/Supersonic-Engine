@@ -128,7 +128,8 @@ set_tests_properties(
 
 # The engine against a real Vulkan device (tests/DeviceFixture.hpp): uploads, the texture and mesh registries, the
 # pipeline cache, the deferred-destroy queue. A GPU, or Mesa's lavapipe in software under Xvfb, is enough; without one
-# the suite prints "SKIPPED: ..." and exits with 77, which ctest lists as Skipped - never green by default. Run it where
+# the suite prints "SKIPPED: ..." and exits with 77, which ctest lists as Skipped - never green by default (set
+# SUPERSONIC_REQUIRE_DEVICE=1 where a device is expected, and a missing one is a failure instead). Run it where
 # there is one: `xvfb-run -a ctest -R test_device` on a Linux machine with mesa-vulkan-drivers, plain ctest on a desktop.
 # The label lets `ctest -L device` pick it out, and `ctest -LE device` leave it.
 add_engine_test(test_device)

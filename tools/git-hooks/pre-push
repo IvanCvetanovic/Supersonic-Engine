@@ -8,9 +8,20 @@
 # for a person to press a button. A check that must be remembered is not a check. This
 # one runs without being remembered, costs no CI minutes, and takes seconds:
 #
-#   docs      documented counts, the README's suite table and the registrations agree
-#   shaders   every shader recompiles to its committed SPIR-V (skipped, with a note,
-#             where there is no glslc)
+#   docs      documented counts, the README's suite table, the registrations and the
+#             paths the docs name agree
+#   shaders   every shader recompiles to its committed SPIR-V - only when the push
+#             touches a shader (or CMakeLists.txt, which lists them). glslc's output
+#             is not bit-stable across versions, so on a machine whose glslc is not
+#             CI's pinned one the recompile can report a difference that is not real,
+#             and it should not stand in the way of a push that has no shader in it.
+#             Skipped, with a note, where there is no glslc.
+#
+# It checks the WORKING TREE, which is what `tools/check.sh` can see, not the commits
+# being pushed. When the tree has uncommitted changes it says so, because then a pass
+# does not prove the pushed commit is sound.
+#
+# It does nothing for a push that sends no commits: deleting a branch, or a tag.
 #
 # Not the build and the suites: those take minutes, and a hook people wait for is a
 # hook people bypass. Set SUPERSONIC_PREPUSH=full to add them
@@ -29,9 +40,49 @@ if [ ! -f tools/check.sh ]; then
     exit 0
 fi
 
-steps=(docs shaders)
+zero="0000000000000000000000000000000000000000"
+sends_commits=0
+touches_shaders=0
+
+# git hands the hook one line per ref: <local ref> <local sha> <remote ref> <remote sha>.
+# Not a terminal when git runs it; when a person runs the hook by hand there are no
+# lines, and it is treated as a push that sends commits and may touch shaders.
+if [ -t 0 ]; then
+    sends_commits=1
+    touches_shaders=1
+else
+    while read -r local_ref local_sha remote_ref remote_sha; do
+        case "$remote_ref" in refs/tags/*) continue ;; esac
+        [ "$local_sha" = "$zero" ] && continue              # deleting a branch
+        sends_commits=1
+        if [ "$remote_sha" = "$zero" ]; then
+            touches_shaders=1                               # a new branch: say nothing of what is on it
+        elif changed="$(git diff --name-only "$remote_sha" "$local_sha" 2>/dev/null)"; then
+            # A here-string, not `echo | grep -q`: see tools/check.sh.
+            if grep -qE '^(assets/shaders/|CMakeLists\.txt$)' <<< "$changed"; then
+                touches_shaders=1
+            fi
+        else
+            touches_shaders=1                               # the remote's commit is not here to compare with
+        fi
+    done
+fi
+
+if [ "$sends_commits" -eq 0 ]; then
+    exit 0
+fi
+
+steps=(docs)
+if [ "$touches_shaders" -eq 1 ]; then
+    steps+=(shaders)
+fi
 if [ "${SUPERSONIC_PREPUSH:-}" = "full" ]; then
     steps+=(build)
+fi
+
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    echo "pre-push: note: the working tree has uncommitted changes. These checks run against" >&2
+    echo "          the tree, so a pass does not prove the commits being pushed are sound." >&2
 fi
 
 echo "pre-push: tools/check.sh ${steps[*]}"

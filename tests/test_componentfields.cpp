@@ -80,7 +80,7 @@ static void testADescribedComponentSurvivesASceneRoundTrip() {
     boss.hitPoints = 640;
     boss.rage = 0.875f;
     boss.enraged = true;
-    boss.title = "Warden of the \"Deep\"";   // a quote and a backslash would break a hand-built string
+    boss.title = "Warden of the \"Deep\" \\ gate\n\t\x01";   // a quote, a backslash and control characters would break a hand-built string
     boss.patrol = glm::vec2(-3.5f, 8.25f);
     boss.lair = glm::vec3(10.0f, -2.5f, 0.125f);
     boss.tint = glm::vec4(0.5f, 0.25f, 0.75f, 1.0f);
@@ -148,6 +148,7 @@ static void testABadValueDegradesOneFieldAndNotTheComponent() {
     if (boss != nullptr) {
         CHECK_NEAR(boss->rage, 0.5f);
         CHECK_MSG(boss->hitPoints == 100, "a string where a number belongs leaves the default");
+        CHECK_MSG(!boss->enraged, "and so does a number where a bool belongs");
         CHECK_NEAR(boss->lair.x, 4.0f);
         CHECK_MSG(boss->lair.y == 1.0f && boss->lair.z == 0.0f, "a short array changes only the entries it has");
         CHECK_MSG(boss->patrol == glm::vec2(1.0f, 2.0f), "an array field given a string keeps its default");
@@ -169,6 +170,12 @@ static void testANonFiniteFloatIsWrittenAsANumber() {
     entt::registry loaded;
     const auto nanResult = SceneSerializer::DeserializeFromString(loaded, text);
     CHECK_MSG(nanResult.ok, "the scene still loads: " + nanResult.message);
+
+    // And the component is there, with the guard's substitute: not dropped, not NaN.
+    const Boss* boss = nullptr;
+    for (auto e : loaded.view<Boss>()) boss = &loaded.get<Boss>(e);
+    CHECK_MSG(boss != nullptr, "the component was written");
+    if (boss != nullptr) CHECK_MSG(boss->rage == 0.0f, "a NaN is written as 0, the scene writer's rule everywhere");
     unregister();
 }
 
@@ -240,7 +247,91 @@ static void testAKeyTakenIsRefusedAndNothingIsHalfRegistered() {
     unregister();
 }
 
+static void testASnapshotKeepsEveryBitOfADescribedFloat() {
+    // Undo and Play/Stop go through SerializeSnapshot's nine digits; a described
+    // component must come back from it exactly, not rounded to the file's six.
+    registerBoss();
+    const float awkward = 1234.56775f;
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity);
+    auto& boss = registry.emplace<Boss>(entity);
+    boss.rage = awkward;
+    boss.lair = glm::vec3(awkward, -awkward, 0.1f);
+
+    const std::string snapshot = SceneSerializer::SerializeSnapshot(registry);
+    entt::registry restored;
+    CHECK(SceneSerializer::DeserializeFromString(restored, snapshot).ok);
+    const Boss* back = nullptr;
+    for (auto e : restored.view<Boss>()) back = &restored.get<Boss>(e);
+    CHECK(back != nullptr);
+    if (back != nullptr) {
+        CHECK_MSG(back->rage == awkward, "a float returns bit for bit");
+        CHECK_MSG(back->lair == glm::vec3(awkward, -awkward, 0.1f), "and so does every component of a vector");
+    }
+    unregister();
+}
+
+static void testRegisteringAgainAfterTheCodecWasClearedWorks() {
+    // ClearRegisteredComponents is the documented call for a game tearing down. It
+    // used to leave this module's inspector list populated, so the next registration
+    // was refused as a duplicate and returned false before it reached the codec:
+    // nothing saved or loaded, and the inspector still offered the component.
+    registerBoss();
+    ComponentCodec::ClearRegisteredComponents();
+    CHECK_EQ(ComponentCodec::RegisteredComponentCount(), size_t{0});
+
+    const bool again = RegisterDescribedComponent<Boss>(
+        "Boss", ComponentFields::Field("hitPoints", &Boss::hitPoints));
+    CHECK_MSG(again, "registering again after the codec was cleared succeeds");
+    CHECK_MSG(ComponentCodec::IsRegisteredComponent("Boss"), "the codec holds it again");
+    CHECK_EQ(ComponentFields::All().size(), size_t{1});
+
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity);
+    registry.emplace<Boss>(entity).hitPoints = 77;
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("\"hitPoints\": 77") != std::string::npos, "and a scene carries it: " + text);
+    unregister();
+}
+
+static void testFieldNamesAreHeldToWhatTheyAre() {
+    // A field name is a key in the file.
+    ComponentFields::Clear();
+    ComponentCodec::ClearRegisteredComponents();
+
+    CHECK_MSG(!RegisterDescribedComponent<Boss>("Dup", ComponentFields::Field("x", &Boss::hitPoints),
+                                                 ComponentFields::Field("x", &Boss::rage)),
+              "two fields of one name are refused: the file would hold the key twice");
+    CHECK_MSG(!RegisterDescribedComponent<Boss>("Empty", ComponentFields::Field("", &Boss::hitPoints)),
+              "an empty name is refused");
+    CHECK_MSG(ComponentFields::All().empty() && ComponentCodec::RegisteredComponentCount() == 0,
+              "and a refusal registers nothing, in either place");
+
+    // A name with a quote and a backslash is escaped, so the scene stays parseable;
+    // and a name built at run time outlives the string it was built from.
+    {
+        const std::string temporary = std::string("odd\"na\\me");
+        CHECK(RegisterDescribedComponent<Boss>("Odd", ComponentFields::Field(temporary.c_str(), &Boss::hitPoints)));
+    }   // `temporary` is gone; the field must not still point into it
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity);
+    registry.emplace<Boss>(entity).hitPoints = 41;
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    entt::registry loaded;
+    CHECK_MSG(SceneSerializer::DeserializeFromString(loaded, text).ok, "a scene with an odd field name still parses");
+    const Boss* back = nullptr;
+    for (auto e : loaded.view<Boss>()) back = &loaded.get<Boss>(e);
+    CHECK_MSG(back != nullptr && back->hitPoints == 41, "and the field reads back under it");
+    unregister();
+}
+
 static void runTests() {
+    testASnapshotKeepsEveryBitOfADescribedFloat();
+    testRegisteringAgainAfterTheCodecWasClearedWorks();
+    testFieldNamesAreHeldToWhatTheyAre();
     testADescribedComponentSurvivesASceneRoundTrip();
     testAFieldTheFileDoesNotMentionKeepsItsDefault();
     testABadValueDegradesOneFieldAndNotTheComponent();

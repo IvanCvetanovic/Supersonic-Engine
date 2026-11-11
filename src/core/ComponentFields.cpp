@@ -23,6 +23,17 @@ bool Add(Described described) {
     return true;
 }
 
+bool Remove(const std::string& key) {
+    auto& all = registry();
+    for (auto it = all.begin(); it != all.end(); ++it) {
+        if (it->key == key) {
+            all.erase(it);
+            return true;
+        }
+    }
+    return false;
+}
+
 void Clear() { registry().clear(); }
 
 }  // namespace Supersonic::ComponentFields

@@ -3,7 +3,7 @@
 //
 // The checksum is the point of the file as much as the timing: a speed-up is only
 // an improvement here if it changes nothing, and "changes nothing" is a claim about
-// every bit of every body after six hundred steps. Run the same scene before and
+// every bit of every body after the run (60 warm-up and 600 timed steps). Run the same scene before and
 // after a change; the timings may move, the checksums must not (on one machine and
 // compiler - they are not a cross-platform golden, the StateHash suites are).
 //

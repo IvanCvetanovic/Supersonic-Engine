@@ -32,6 +32,12 @@ public:
     // long session can checkpoint without exiting.
     void Save() const;
 
+    // How many bytes of a saved cache were accepted at construction: zero for a
+    // cache that started empty, or whose file was missing, unreadable or from
+    // another device. Lets a test tell "loaded the file" from "made an empty cache",
+    // which Get() cannot: both give a valid handle.
+    size_t LoadedBytes() const { return m_loadedBytes; }
+
 private:
     // The 32-byte header every VkPipelineCache blob starts with.
     bool headerMatchesThisDevice(const std::vector<uint8_t>& blob) const;

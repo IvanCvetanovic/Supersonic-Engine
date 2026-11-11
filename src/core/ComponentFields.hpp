@@ -16,6 +16,8 @@
 //     struct Health { int current{100}; int maximum{100}; float regen{0.5f};
 //                     std::string label; glm::vec3 spawn{0.0f}; bool alive{true}; };
 //
+//     using ComponentFields::Field;     // it lives in the nested namespace, and ADL
+//                                       // does not find it from a game's own type
 //     RegisterDescribedComponent<Health>("Health",
 //         Field("current", &Health::current),
 //         Field("maximum", &Health::maximum),
@@ -32,7 +34,13 @@
 //
 // Supported field types: bool, int, float, std::string, glm::vec2, glm::vec3,
 // glm::vec4. Anything else is a compile error that names the type - a component
-// with a field this cannot describe should be written by hand, not half-saved.
+// with a field this cannot describe should be written by hand, not half-saved. So
+// is a component with no data at all (a tag): there is nothing to describe, and the
+// registry returns nothing for it. Register a tag with ComponentCodec directly.
+//
+// Field names are the keys in the file. They must be non-empty and distinct within
+// the component, or the registration is refused (false, nothing registered): two
+// fields of one name would write one key twice and read both back as the second.
 //
 // THE FILE FORMAT is a game component's own, inside the scene's "Game" member where
 // ComponentCodec puts every registered component, so it cannot collide with an
@@ -93,21 +101,30 @@ const std::vector<Described>& All();
 // Adds one. False (and nothing added) when the key is taken.
 bool Add(Described described);
 
+// Removes the entry for `key`. False when there is none.
+bool Remove(const std::string& key);
+
 // Forgets them all. For tests, and for a game tearing down. Does not touch what
-// ComponentCodec holds: ClearRegisteredComponents is its own call.
+// ComponentCodec holds: ClearRegisteredComponents is its own call. The other way
+// round is handled: after ClearRegisteredComponents, registering a described
+// component again works (see RegisterDescribedComponent), so a game that tears down
+// with only the codec's call and registers again is not left half-registered.
 void Clear();
 
 // --- one field ---------------------------------------------------------------
 
 template <typename C, typename T>
 struct FieldOf {
-    const char* name;
+    // Owned, not a pointer: a name built at run time (Field(n.c_str(), ...) with a
+    // local string) would otherwise dangle the moment its registration function
+    // returned, and be read on every save, load and inspector frame after.
+    std::string name;
     T C::*member;
 };
 
 template <typename C, typename T>
-FieldOf<C, T> Field(const char* name, T C::*member) {
-    return FieldOf<C, T>{name, member};
+FieldOf<C, T> Field(std::string name, T C::*member) {
+    return FieldOf<C, T>{std::move(name), member};
 }
 
 namespace detail {
@@ -210,11 +227,38 @@ void VisitValue(FieldVisitor& visitor, const char* name, T& value) {
 // a type does not change meaning between scenes. Call it once at start-up, before
 // the first scene is loaded.
 template <typename C, typename... Ts>
-bool RegisterDescribedComponent(std::string key, ComponentFields::FieldOf<C, Ts>... fields) {
+[[nodiscard]] bool RegisterDescribedComponent(std::string key, ComponentFields::FieldOf<C, Ts>... fields) {
+    static_assert(!std::is_empty_v<C>,
+                  "ComponentFields: a component with no data (a tag) has no fields to describe, and "
+                  "EnTT stores nothing for it. Register a tag with ComponentCodec::RegisterComponent.");
+
+    // Names are the keys in the file: empty or repeated ones are refused before
+    // anything is registered.
+    {
+        const std::vector<std::string> names{fields.name...};
+        for (size_t i = 0; i < names.size(); ++i) {
+            if (names[i].empty()) return false;
+            for (size_t j = i + 1; j < names.size(); ++j) {
+                if (names[i] == names[j]) return false;
+            }
+        }
+    }
+
     // The inspector's registry is checked first and the codec's second, and the
     // inspector entry is the one added last, so a clash leaves neither changed.
+    //
+    // An entry the inspector holds for a key the codec no longer does is STALE: the
+    // codec was emptied (ClearRegisteredComponents, the documented call for a game
+    // tearing down) and this list was not. Refusing it as a duplicate left the codec
+    // empty - nothing saved or loaded - while the inspector still offered the
+    // component. Only an entry both hold is a duplicate.
+    bool inInspector = false;
     for (const auto& existing : ComponentFields::All()) {
-        if (existing.key == key) return false;
+        if (existing.key == key) inInspector = true;
+    }
+    if (inInspector) {
+        if (ComponentCodec::IsRegisteredComponent(key)) return false;
+        ComponentFields::Remove(key);
     }
 
     const auto members = std::make_tuple(fields...);
@@ -229,7 +273,7 @@ bool RegisterDescribedComponent(std::string key, ComponentFields::FieldOf<C, Ts>
             bool first = true;
             std::apply(
                 [&](const auto&... field) {
-                    ((out << (first ? "" : ", ") << '"' << field.name << "\": ",
+                    ((out << (first ? "" : ", ") << '"' << Json::Escape(field.name) << "\": ",
                       ComponentFields::detail::WriteValue(out, component->*(field.member)),
                       first = false),
                      ...);
@@ -266,7 +310,7 @@ bool RegisterDescribedComponent(std::string key, ComponentFields::FieldOf<C, Ts>
         if (component == nullptr) return;
         std::apply(
             [&](const auto&... field) {
-                (ComponentFields::detail::VisitValue(visitor, field.name, component->*(field.member)), ...);
+                (ComponentFields::detail::VisitValue(visitor, field.name.c_str(), component->*(field.member)), ...);
             },
             members);
     };

@@ -59,7 +59,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.legs }}
   cancel-in-progress: true
 
 jobs:
@@ -69,7 +69,7 @@ jobs:
     # GitHub's default six hours, out of the allowance that is the reason
     # automatic runs are off. Set generously from what these builds are
     # known to cost, so a slow day is not a red one; tighten after real runs.
-    if: ${{ inputs.legs == 'all' }}
+    if: ${{ inputs.legs != 'quick' && inputs.legs != 'arm64' }}
     timeout-minutes: 90
     runs-on: ${{ matrix.os }}
     strategy:
@@ -155,9 +155,13 @@ jobs:
           # Location-agnostic: multi-config generators nest outputs under the
           # configuration directory, single-config ones do not, and the plugin
           # sets its own per-config output path.
-          find build -name 'SupersonicEngine' -o -name 'SupersonicEngine.exe' | grep -q . \
+          # -print -quit inside a substitution, not `find | grep -q .`: grep -q leaves at
+          # its first match, find can then take a SIGPIPE, and under pipefail that
+          # reports "not found" for something that is there (a plugin build leaves
+          # several files: .dll, .lib, .exp, .pdb).
+          [ -n "$(find build \( -name 'SupersonicEngine' -o -name 'SupersonicEngine.exe' \) -print -quit)" ] \
             || { echo "engine binary not found"; exit 1; }
-          find build -name 'GameScripts*' -type f | grep -q . \
+          [ -n "$(find build -name 'GameScripts*' -type f -print -quit)" ] \
             || { echo "script plugin not found"; exit 1; }
 
           # Read from CMakeLists rather than repeating the list here. The
@@ -179,6 +183,7 @@ jobs:
 
   shader-check:
     name: Shaders compile from source
+    if: ${{ inputs.legs != 'arm64' }}
     timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
@@ -227,7 +232,7 @@ jobs:
   # author cannot fix gets deleted, which is worse.
   validation:
     name: Validation layers (lavapipe)
-    if: ${{ inputs.legs == 'all' }}
+    if: ${{ inputs.legs != 'quick' && inputs.legs != 'arm64' }}
     timeout-minutes: 45
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -241,6 +246,17 @@ jobs:
             libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev \
             libxcursor-dev libxi-dev libxkbcommon-dev pkg-config \
             libasound2-dev mesa-vulkan-drivers vulkan-tools xvfb
+
+      # Found, not named: Ubuntu 24.04's release Mesa installs lvp_icd.x86_64.json and
+      # its updates install lvp_icd.json, and a loader pointed at a file that is not
+      # there reports "no drivers" - every step below then fails, or (before
+      # SUPERSONIC_REQUIRE_DEVICE) skipped. Failing here says what is wrong.
+      - name: Locate the software Vulkan driver
+        run: |
+          icd="$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)"
+          test -n "$icd" || { echo "no lavapipe ICD under /usr/share/vulkan/icd.d" >&2; exit 1; }
+          echo "Using $icd"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
 
       - name: Install Vulkan SDK
         uses: humbletim/install-vulkan-sdk@v1.2
@@ -265,8 +281,6 @@ jobs:
         run: cmake --build build --parallel 2
 
       - name: Report the driver actually in use
-        env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: xvfb-run -a vulkaninfo --summary || echo "vulkaninfo unavailable; continuing"
 
       # From the project root: asset paths resolve against the working
@@ -274,7 +288,6 @@ jobs:
       # and this job should fail on both.
       - name: Run 120 frames under validation
         env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
           VK_LAYER_VALIDATE_SYNC: "1"
         run: xvfb-run -a ./build/SupersonicEngine --frames 120
 
@@ -284,22 +297,20 @@ jobs:
       # checkpoint must be caught), so a green run means the check could have
       # failed. See the scripts for why none of it pins a picture.
       - name: Frames are repeatable, and a later frame differs
-        env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: bash tools/verify-frames.sh --exe build/SupersonicEngine
 
       - name: The replay reproduces, and a corrupted checkpoint is caught
-        env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: bash tools/verify-replay.sh --exe build/SupersonicEngine
 
       # The suites that need a device: uploads, the texture and mesh registries,
       # the pipeline cache, the deferred-destroy queue. They skip, loudly, where
-      # there is no device; here there is one.
+      # there is no device; here there is one, so a skip is a failure
+      # (SUPERSONIC_REQUIRE_DEVICE) - otherwise a regression in creating the device
+      # would turn this step green by skipping it.
       - name: Device-backed suites
         env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-        run: xvfb-run -a ctest --test-dir build -L device --output-on-failure
+          SUPERSONIC_REQUIRE_DEVICE: "1"
+        run: xvfb-run -a ctest --test-dir build -L device --no-tests=error --output-on-failure
 
   # ---------------------------------------------------------------------------
   # Sanitizers over the existing suites.
@@ -310,7 +321,7 @@ jobs:
   # through a hand-written JSON parser with no depth limit.
   sanitizers:
     name: ASan + UBSan (Linux)
-    if: ${{ inputs.legs == 'all' }}
+    if: ${{ inputs.legs != 'quick' && inputs.legs != 'arm64' }}
     timeout-minutes: 90
     runs-on: ubuntu-latest
     steps:
@@ -369,7 +380,7 @@ jobs:
   # it does not.
   options-off:
     name: Configure with tests and plugin OFF
-    if: ${{ inputs.legs == 'all' }}
+    if: ${{ inputs.legs != 'quick' && inputs.legs != 'arm64' }}
     timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
@@ -452,6 +463,7 @@ jobs:
   # rots; this makes the build the only place the number lives.
   doc-facts:
     name: Documented counts match the build
+    if: ${{ inputs.legs != 'arm64' }}
     timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:

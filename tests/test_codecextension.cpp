@@ -16,6 +16,7 @@
 
 #include <cstdio>
 #include <limits>
+#include <locale>
 #include <sstream>
 #include <string>
 
@@ -280,8 +281,8 @@ static void testAGameWriterIsHeldToTheSameFiniteNumbersAsTheEngine() {
     registry.emplace<Weight>(e, Weight{std::numeric_limits<float>::quiet_NaN()});
 
     const std::string text = SceneSerializer::SerializeToString(registry);
-    CHECK_MSG(text.find("nan") == std::string::npos && text.find("inf") == std::string::npos,
-              "no nan or inf reaches the file: " + text);
+    CHECK_MSG(text.find("\"Kilos\": 0 }") != std::string::npos,
+              "the writer's NaN reaches the file as 0, the scene writer's rule everywhere: " + text);
 
     entt::registry loaded;
     const auto result = SceneSerializer::DeserializeFromString(loaded, text);
@@ -317,7 +318,39 @@ static void testASnapshotKeepsEveryBitOfAGameFloat() {
     ComponentCodec::ClearRegisteredComponents();
 }
 
+namespace {
+// A German-style locale made in code, so the check needs nothing installed.
+struct CommaNumpunct : std::numpunct<char> {
+    char do_decimal_point() const override { return ','; }
+    char do_thousands_sep() const override { return '.'; }
+    std::string do_grouping() const override { return "\3"; }
+};
+} // namespace
+
+static void testAGameWriterIsNotAtTheMercyOfTheProgramsLocale() {
+    // A stream takes the GLOBAL locale when it is made, and a game's writer used to
+    // be handed a bare one: a program that had set a decimal-comma locale to format a
+    // number for a player saved "1,5" in its own components, which the reader takes
+    // for something else. The scratch stream now shares the destination's locale,
+    // which the scene writer built on the classic one.
+    registerWeight();
+    entt::registry registry;
+    const auto e = registry.create();
+    registry.emplace<TagComponent>(e, "Locale");
+    registry.emplace<TransformComponent>(e);
+    registry.emplace<Weight>(e, Weight{1234.5f});
+
+    const std::locale previous = std::locale::global(std::locale(std::locale::classic(), new CommaNumpunct));
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    std::locale::global(previous);
+
+    CHECK_MSG(text.find("\"Kilos\": 1234.5 }") != std::string::npos,
+              "the game's float is written the way a scene file reads it, whatever the locale: " + text);
+    ComponentCodec::ClearRegisteredComponents();
+}
+
 static void runTests() {
+    testAGameWriterIsNotAtTheMercyOfTheProgramsLocale();
     testAGameWriterIsHeldToTheSameFiniteNumbersAsTheEngine();
     testASnapshotKeepsEveryBitOfAGameFloat();
     testAGameComponentSurvivesARoundTrip();
