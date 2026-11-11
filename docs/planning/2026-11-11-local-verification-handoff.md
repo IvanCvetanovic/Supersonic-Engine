@@ -300,4 +300,157 @@ summarise a failure as "environment" without showing why.
 
 ## Outcome
 
-*(To be written by the local verification run.)*
+**Run of 11 November 2026 on the owner's PC, against `main` at `0bbefd7`, on branch
+`local-verification`. It stopped at L1, by the owner's rule that a failure of L1 or L2 ends the
+run: L2 to L11 were not run.** No engine file, test, tolerance or baseline was changed.
+
+The machine: Windows 11 Pro 10.0.26300; AMD Ryzen 7 250 (16 logical cores), 13.7 GB RAM; GPU an
+**integrated** AMD Radeon 780M, driver 32.0.31033.3; Visual Studio Build Tools **2026** 18.10.12217.157,
+MSVC toolset 14.51.36231 (`cl` 19.51.36260.0), Windows SDK 10.0.26100.0; Vulkan SDK 1.4.357.0 (the
+version CI pins); JDK 17.0.20; git 2.55.0, `core.autocrlf=true`.
+
+### Surprises first
+
+**1. L1 fails on MSVC under `/WX`, and the cause is not this branch.** Three `C4702 unreachable code`
+warnings, promoted to errors by `SUPERSONIC_WERROR=ON`, stop `test_gltf` and `test_serialize` from
+compiling in Debug:
+
+```
+tests\test_gltf.cpp(632,1): error C2220: the following warning is treated as an error [...\build\tests\test_gltf.vcxproj]
+tests\test_gltf.cpp(632,1): warning C4702: unreachable code
+tests\test_serialize.cpp(1376,1): error C2220: the following warning is treated as an error [...\build\tests\test_serialize.vcxproj]
+tests\test_serialize.cpp(1376,1): warning C4702: unreachable code
+tests\test_serialize.cpp(1388,1): error C2220: ...   /   warning C4702: unreachable code
+```
+
+| Site on `main` | Same site at the merge-base `4261485` | Written by | Shape |
+|---|---|---|---|
+| `tests/test_gltf.cpp:632` | `:632` | `7dd9814f`, 2026-08-27 | `for (const auto& submesh : scene.submeshes) { CHECK_MSG(...); break; }` |
+| `tests/test_serialize.cpp:1376` | `:1356` | `b96d4dc1`, 2026-10-01 | `for (const entt::entity e : registry.view<BoxColliderComponent>()) { return ...; }` |
+| `tests/test_serialize.cpp:1388` | `:1368` | `b96d4dc1` | the same, over `UITextFieldComponent` |
+
+- **Pre-existing, shown rather than inferred.** Both commits are ancestors of `4261485`. I built
+  `test_gltf` and `test_serialize` in Debug in a worktree at `4261485` with the same toolset and
+  options: `test_gltf.cpp(632,1)`, `test_serialize.cpp(1356,1)` and `(1368,1)` fail identically.
+  (The two targets given together stop at the first failure, so `test_serialize` was built on its own.)
+  No diagnostic is in code the branch wrote, and none is in `src/`.
+- **Why nobody saw it.** Where `SUPERSONIC_WERROR=ON` appears in the CI and the scripts, it is on
+  Linux or macOS: `tools/check.sh` (lines 310, 393, 436) and CI's `arm64` job (`ci.yml:448`). CI's
+  Windows leg configures with `-A x64` alone. I can find no MSVC `/WX` run before this one. In it the
+  engine library and the editor, which `CMakeLists.txt:461-471` holds to `/W4 /permissive- /WX`, and 64
+  of the 66 suites compiled clean; the plugin built, but is not held to `/WX` at all.
+- **Not tried:** the Release configuration (C4702 is an optimiser-adjacent warning, so Release may
+  differ), and any other MSVC version.
+- **What I did not do, on purpose.** I did not edit the three loops, add `/wd4702`, or configure with
+  `SUPERSONIC_WERROR=OFF` to get a green build: each is a weaker L1 or a change to the engine's
+  tests, which the owner's rules reserve. The handoff's own line, "fix it in that code", conflicts
+  with the owner's stop rule; I followed the rule. Decision for the owner, below.
+
+**2. Commands in this document that do not run on this PC as written** (reported, not worked around
+silently):
+
+- L1 `-G "Visual Studio 17 2022"`: this PC has only Build Tools **2026**, and the `cmake` on `PATH` is
+  Strawberry Perl's 3.29.2, which has no such generator. What I ran: Visual Studio's bundled CMake
+  4.3.1-msvc1 (`C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe`)
+  with `-G "Visual Studio 18 2026" -A x64 -DSUPERSONIC_WERROR=ON`. It configured first time (8.2 s) with
+  no warning and no CMake 4 policy workaround. `ci.yml:81-86` already says not to pin the generator.
+- `pwsh` is not installed (Windows PowerShell 5.1.26100.9818 only). L2 would have to run as
+  `powershell.exe -NoProfile -File tools/verify-replay.ps1 -Config Release`. Not run; from reading it
+  nothing in the script needs PowerShell 7.
+- `bash` on `PATH` is the WSL launcher (`C:\Windows\System32\bash.exe`). L11 needs Git Bash,
+  `C:\Program Files\Git\bin\bash.exe`.
+- L1 and "What was checked here" still say **65** entries. After the merge it is **67**: `ctest -N` on
+  the configured tree lists 67 (`#66 test_device`, `#67 test_reporttext`), and
+  `grep -cE '^add_engine_test\([a-z0-9_]+\)$' tests/CMakeLists.txt` gives 66.
+- The existing `build/` was a Ninja tree (Strawberry CMake, `cl` 14.51, Release, validation ON), and a
+  generator cannot be switched in place, so I moved it to `build-ninja-owner/`, built mine in `build/`
+  (which `tools/verify-replay.ps1` expects), and at the end deleted mine and moved the owner's back,
+  reading each `CMakeCache.txt`'s generator line before every step. It is as I found it.
+
+**3. Smart App Control is enforced on this PC** (`HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy`,
+`VerifiedAndReputablePolicyState` = 1). `AGENTS.md` does not mention it; `docs/planning/2026-09-10-migration-readiness.md:161`
+says it "blocks freshly built test binaries at random - up to 23", and the games' `CLAUDE.md` files say
+every refusal raises a notification. L1 launches 66 fresh executables per configuration, so a full L1
+here can show `Not Run` entries that are the machine and not the code. I ran **no test executable at
+all**, so I have no count of how many it would block.
+
+**4. `gh repo view` reports `IvanCvetanovic/Supersonic-Engine` as PUBLIC**, while `AGENTS.md` and
+`ci.yml:17-25` reason from it being private (the reason automatic runs are off). Check which is true;
+if public, the minutes argument behind "CI spend" may be moot.
+
+**5. L5's premise does not match the four repositories.** The handoff says the games compare
+`StateHash`, replay files, screenshots and scene bytes. I found, by `git ls-files` in each repository
+(not by trusting a summary): **0 tracked `.replay` files in all four**, and every mention of
+`StateHash` outside the engine is in a document (Penumbra 2 files, Magic Portals 3, HUSK 1, Wolf
+Brigade 0; `git grep -lI StateHash`). Tracked PNGs are Penumbra 237, Wolf Brigade 83, HUSK 112 and
+Magic Portals 0; the reconnaissance found none of them used as a baseline (I did not open them).
+What the games do guard with, from reading (not run):
+
+| Game (repo, engine pin) | Regression guard that an engine change could trip |
+|---|---|
+| Penumbra (`Penumbra-and-the-Castle-of-Shadows-Enhanced`, `4261485`, the merge-base) | 17 suites via `tests/test_pn_all.exe` (hand-worked numbers); one test compares the 0.7.12 writer to the shipped scenes byte for byte |
+| Magic Portals (`Magic-Portals-Enhanced`, `a2f4873`) | 94 ctest entries in one `test_mp.exe`; bit-hash goldens in `tests/golden/*.json`; 128 win routes that fail if physics moves; local, git-ignored `out/parity` sweeps |
+| Wolf Brigade (`The-Wolf-Brigade`, `4bfcf67`) | hand-checked constants from the Godot harness; `test_wb_hud` records and replays a tap in process |
+| HUSK (`Test-Game`, `4bfcf67`) | `test_husk_scenarios`: 68 golden `.hashes` files compared with the Rust sim's own per-tick hashes; `/fp:precise` is required on `HuskSim` |
+
+Which "two games" the handoff means is not stated: the README lists three ports (Wolf Brigade, HUSK,
+Magic Portals) and Penumbra is a fourth. Penumbra and Magic Portals are the ones that ship releases,
+so they come first; all four pin the engine as a submodule. All four repositories, and their
+submodules, are clean and untouched by this run (`git status` empty; pins unchanged). Practical notes
+for whoever runs L5: every game builds with **Ninja + `cl`**, not a Visual Studio generator (Strawberry's
+GCC wins on `PATH` unless `-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl` is given); `build-lv` is
+**not** git-ignored in Penumbra, Magic Portals or Wolf Brigade (it is, under `supersonic/`, in HUSK), so
+`git status` will list it; screenshot and replay paths must be absolute or they land inside the
+engine submodule and dirty it; and Smart App Control (3) applies to every new executable.
+
+**6. One check that passed, and is worth knowing.** The Debug build recompiled all **17 of 17**
+shaders with this PC's `glslc` (shaderc v2026.3, SDK 1.4.357.0), and afterwards `git status` was empty
+and `git diff --name-only -- assets/shaders` listed nothing: every blob came out byte-identical to the
+committed `.spv`. That is the local equivalent of the shader half of L10 `quick`, on this machine's
+`glslc`.
+
+### Step by step
+
+| Step | Result | What was and was not done |
+|---|---|---|
+| L1 | **Failed**, stopped | Configure: exit 0, no warning in the log. Debug build: 3.8 min, exit 1; 69 projects linked, including `SupersonicCore`, `SupersonicEngine`, `GameScripts` and 64 of the 66 suite executables; the two that failed are `test_gltf` and `test_serialize` (item 1). `ctest -N`: 67 entries. **Not run:** the Release build, and ctest in either configuration. |
+| L2 | Not run | Stopped at L1 by the owner's rule. |
+| L3 | Not run | Stopped at L1. |
+| L4 | Not run | Stopped at L1. |
+| L5 | Not run | Stopped at L1. Read-only reconnaissance only (item 5): nothing built, pinned or run in any game. |
+| L6 | Not run | Stopped at L1. Also needs someone to see the statistics panel's reload count. |
+| L7 | Not run, needs a person | No screen control in this session. |
+| L8 | Not run, needs a person | No screen control in this session. |
+| L9 | Not run | Stopped at L1. |
+| L10 | Not run | Stopped at L1. `gh` is logged in with the `workflow` scope and the account is ADMIN on the repository, so this is reachable. `ci.yml:61-63` puts the leg in the concurrency group, so different legs do not cancel each other. |
+| L11 | Not run | Stopped at L1. Read only: `git check-attr eol tools/git-hooks/pre-push` says `lf`, and `tools/git-hooks/pre-push`, `tools/install-hooks.sh` and `tools/check.sh` contain 0 CR bytes, with `core.autocrlf=true` on this PC. |
+
+### Commands run (PowerShell unless noted)
+
+```powershell
+git switch -c local-verification
+Move-Item build build-ninja-owner
+$cm = "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+& $cm -B build -G "Visual Studio 18 2026" -A x64 -DSUPERSONIC_WERROR=ON
+& $cm --build build --config Debug --parallel          # exit 1, the two targets above
+& $ctest --test-dir build -C Debug -N                  # listing only: 67 entries, nothing launched
+git worktree add ..\engine-base 4261485                # removed again afterwards
+& $cm -B build -G "Visual Studio 18 2026" -A x64 -DSUPERSONIC_WERROR=ON     # in engine-base
+& $cm --build build --config Debug --parallel --target test_gltf test_serialize   # exit 1 at test_gltf:632
+& $cm --build build --config Debug --parallel --target test_serialize             # exit 1 at :1356 and :1368
+```
+
+### For the owner
+
+- **Decide how `C4702` is to be handled, then rerun L1.** The three loops are tests only, and the
+  idiom is "look at the first element": a `break`/`return` inside a `for` leaves its increment
+  unreachable. The honest options are rewriting the three loops so no loop body ends unconditionally,
+  accepting that `SUPERSONIC_WERROR` is not yet an MSVC gate and saying so in `AGENTS.md`, or a
+  `/wd4702` for the suites, which is a suppression. I changed none of them.
+- If you want L2 to L11 now with `SUPERSONIC_WERROR=OFF`, that is a deliberate weakening of L1's
+  gate and your call; on this PC a Debug build is about 4 minutes. Say so and the run can continue
+  from L1's suites, and then L2.
+- Everything the handoff lists under "Not checked" is still not checked: MSVC at run time, a real
+  GPU, the device suite, Windows hot reload, the editor, the games and CI. This run adds one fact to
+  that list: **under MSVC `/W4 /WX` the engine library, the editor and 64 of the 66 suites compile
+  without a warning**; the other two fail on code older than the branch.
