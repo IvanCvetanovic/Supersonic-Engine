@@ -431,6 +431,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The point of this job is "the pinned determinism hash holds off x86", so the log
+      # says what it ran on, and the step fails if it was x86 - a runner label is a request,
+      # not a fact. (A first run passed every suite and never printed the architecture.)
+      - name: Report the machine, and require arm64
+        run: |
+          uname -m
+          uname -a
+          test "$(uname -m)" = "aarch64"
+
       - name: Install dependencies
         run: |
           sudo apt-get update
