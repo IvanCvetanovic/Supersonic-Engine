@@ -67,6 +67,8 @@ add_engine_test(test_determinism)
 add_engine_test(test_replay)
 add_engine_test(test_camera)
 add_engine_test(test_codecextension)
+# A game component described once - codec and inspector from one list of fields (core/ComponentFields.hpp).
+add_engine_test(test_componentfields)
 add_engine_test(test_pointshadow)
 add_engine_test(test_cascades)
 add_engine_test(test_jobs)
@@ -123,6 +125,17 @@ set_tests_properties(
                        # and bloom_composite.frag, to check its branches are
                        # numbered as RenderSettings::SceneEncoding is
     PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")
+
+# The engine against a real Vulkan device (tests/DeviceFixture.hpp): uploads, the texture and mesh registries, the
+# pipeline cache, the deferred-destroy queue. A GPU, or Mesa's lavapipe in software under Xvfb, is enough; without one
+# the suite prints "SKIPPED: ..." and exits with 77, which ctest lists as Skipped - never green by default. Run it where
+# there is one: `xvfb-run -a ctest -R test_device` on a Linux machine with mesa-vulkan-drivers, plain ctest on a desktop.
+# The label lets `ctest -L device` pick it out, and `ctest -LE device` leave it.
+add_engine_test(test_device)
+set_tests_properties(test_device PROPERTIES
+    SKIP_RETURN_CODE 77
+    SKIP_REGULAR_EXPRESSION "SKIPPED: test_device needs a Vulkan device"
+    LABELS device)
 
 # A host test of the Android report's wording, which is Java. Not an add_engine_test: it has no .cpp, links nothing and
 # compiles nothing in this build. ReportText.java has no android import, so tests/java/run_java_test.cmake compiles it

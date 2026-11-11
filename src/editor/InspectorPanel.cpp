@@ -19,6 +19,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 
+#include "core/ComponentFields.hpp"
 #include "core/ConvexHullCache.hpp"
 #include "core/Joints.hpp"
 #include "core/TerrainGenerator.hpp"
@@ -328,6 +329,34 @@ bool InspectorPanel::removableHeader(const char* label, entt::registry& registry
     }
     return open;
 }
+
+namespace {
+
+// The inspector's side of ComponentFields: one ImGui widget per field type. A
+// field that is changed is the component edited - the visitor is handed a reference
+// to the live value - so nothing is copied back.
+class ImGuiFieldVisitor final : public FieldVisitor {
+public:
+    void Bool(const char* name, bool& value) override { ImGui::Checkbox(name, &value); }
+    void Int(const char* name, int& value) override { ImGui::DragInt(name, &value); }
+    void Float(const char* name, float& value) override {
+        // Bounded, so a typed 1e40 cannot become an infinity a scene then cannot
+        // read back (the Vec3 control does the same).
+        constexpr float kLimit = 1.0e9f;
+        ImGui::DragFloat(name, &value, 0.05f, -kLimit, kLimit, "%.3f");
+    }
+    void String(const char* name, std::string& value) override {
+        char buffer[512] = {};
+        const size_t length = std::min(value.size(), sizeof(buffer) - 1);
+        std::memcpy(buffer, value.data(), length);
+        if (ImGui::InputText(name, buffer, sizeof(buffer))) value = std::string(buffer);
+    }
+    void Vec2(const char* name, glm::vec2& value) override { ImGui::DragFloat2(name, &value.x, 0.05f); }
+    void Vec3(const char* name, glm::vec3& value) override { Theme::DrawVec3Control(name, value, 0.0f); }
+    void Vec4(const char* name, glm::vec4& value) override { ImGui::DragFloat4(name, &value.x, 0.05f); }
+};
+
+}  // namespace
 
 void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entity) {
     // 1. TagComponent
@@ -1869,6 +1898,28 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // A game's own components, described with RegisterDescribedComponent: a header
+    // each, with the same Remove Component menu, drawn by field. The removal is
+    // queued like every other (see removableHeader).
+    {
+        ImGuiFieldVisitor visitor;
+        for (const auto& described : ComponentFields::All()) {
+            if (!described.has(registry, entity)) continue;
+            ImGui::PushID(described.key.c_str());
+            const bool open = ImGui::CollapsingHeader(described.key.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+            if (ImGui::BeginPopupContextItem()) {
+                if (ImGui::MenuItem("Remove Component")) {
+                    m_pendingRemoval = [&registry, entity, &described]() {
+                        if (registry.valid(entity)) described.remove(registry, entity);
+                    };
+                }
+                ImGui::EndPopup();
+            }
+            if (open) described.visit(registry, entity, visitor);
+            ImGui::PopID();
+        }
+    }
+
     // Dynamic "Add Component" Dropdown Button
     ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 160.0f) * 0.5f);
     if (ImGui::Button("+ Add Component", ImVec2(160.0f, 28.0f))) {
@@ -2022,6 +2073,20 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (!registry.all_of<UIOrderComponent>(entity) && ImGui::MenuItem("HUD Order")) {
             registry.emplace<UIOrderComponent>(entity);
             ImGui::CloseCurrentPopup();
+        }
+
+        // The game's own, after the engine's.
+        bool anyDescribed = false;
+        for (const auto& described : ComponentFields::All()) {
+            if (described.has(registry, entity)) continue;
+            if (!anyDescribed) {
+                ImGui::Separator();
+                anyDescribed = true;
+            }
+            if (ImGui::MenuItem(described.key.c_str())) {
+                described.add(registry, entity);
+                ImGui::CloseCurrentPopup();
+            }
         }
         ImGui::EndPopup();
     }

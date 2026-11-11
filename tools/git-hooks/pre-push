@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# Runs before `git push`, and is the cheap half of what CI would check.
+#
+# CI here is dispatch-only (the repository is private, so every automatic run is
+# charged), and in the ten days after automatic runs were switched off the documented
+# suite count drifted from 36 to 61 while the job built to catch exactly that waited
+# for a person to press a button. A check that must be remembered is not a check. This
+# one runs without being remembered, costs no CI minutes, and takes seconds:
+#
+#   docs      documented counts, the README's suite table and the registrations agree
+#   shaders   every shader recompiles to its committed SPIR-V (skipped, with a note,
+#             where there is no glslc)
+#
+# Not the build and the suites: those take minutes, and a hook people wait for is a
+# hook people bypass. Set SUPERSONIC_PREPUSH=full to add them
+# (`SUPERSONIC_PREPUSH=full git push`), or run tools/check.sh yourself. To skip the hook
+# once: `git push --no-verify`.
+#
+# Install: tools/install-hooks.sh
+
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+if [ ! -f tools/check.sh ]; then
+    # A branch from before the script existed. Nothing to run; do not block a push.
+    exit 0
+fi
+
+steps=(docs shaders)
+if [ "${SUPERSONIC_PREPUSH:-}" = "full" ]; then
+    steps+=(build)
+fi
+
+echo "pre-push: tools/check.sh ${steps[*]}"
+if ! bash tools/check.sh "${steps[@]}"; then
+    echo >&2
+    echo "pre-push: a check failed, so nothing was pushed." >&2
+    echo "          Fix it, or push anyway with: git push --no-verify" >&2
+    exit 1
+fi

@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-62%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-64%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT-0](https://img.shields.io/badge/license-MIT--0-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 [![Free to use](https://img.shields.io/badge/price-free-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#license)
@@ -531,8 +531,15 @@ units that exist only to compile VMA, tinygltf, stb_vorbis and stb_image.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Sixty-two suites, each a plain executable with no test framework behind it —
+Sixty-four suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
+
+One of them, `test_device`, runs the renderer's own code against a real Vulkan device: it
+needs one, and somewhere to open a (hidden) window. Without either it prints
+`SKIPPED: test_device needs a Vulkan device ...` and exits 77, which ctest lists as
+**Skipped** - not as a pass. A GPU is enough; so is Mesa's lavapipe in software
+(`xvfb-run -a ctest --test-dir build -R test_device`, with `mesa-vulkan-drivers` installed).
+`ctest -L device` picks it out and `ctest -LE device` leaves it.
 
 ctest also lists one test that is not an executable and not in the table below:
 `test_reporttext`, the Android crash report's wording, which is Java. It compiles
@@ -614,7 +621,8 @@ verified by a screenshot of geometry it never touched.
 | `test_renderplan` | What a pass costs before any of it is recorded: that a run of identical draws is one call, that a batch closes on every change that has to be bound and on nothing else, that the order is never re-sorted, and that a full instance buffer drops draws and says how many |
 | `test_nav` | That the oracle sees a wall move before anything else is worth having, that a diagonal never cuts the seam between two walls, that a goal on a wall is refused rather than flooded from, that cut off is a different answer from far away, and that an exact tie falls the same way every time |
 | `test_layerstack` | The seam a game lives in: attach, detach, fixed and per-frame callbacks |
-| `test_codecextension` | Serialising a game's own components alongside the engine's |
+| `test_codecextension` | Serialising a game's own components alongside the engine's, held to the same finite-number guard and snapshot precision as the engine's own |
+| `test_componentfields` | A game component described once - `RegisterDescribedComponent` - and saved, loaded and offered to the inspector from that one list of fields: the round trip, a field a file does not mention keeping its default, one bad value degrading one field, and Add/Remove Component |
 | `test_packaging` | That a packaged folder has a binary, a manifest, and the scene it was asked for |
 | `test_bitmapfont` | The BMFont reader and the glyph quads a string becomes, on fonts the suite writes itself so it runs on any machine, and the refusals a malformed descriptor gets |
 | `test_clustergrid` | The froxel grid that lifted the eight-light cap: that a light lands in every cluster it reaches, and where the depth slices fall |
@@ -627,6 +635,7 @@ verified by a screenshot of geometry it never touched.
 | `test_log` | The engine log: bounded with a count of what it dropped (oldest first), a file sink that is flushed per line, and four threads logging at once losing nothing that was kept |
 | `test_platform` | What a desktop window answers about a screen it does not have: zero safe-area insets, every frame |
 | `test_worldshapes` | The world-space shape buffer's tessellation and accumulation; the pixels need a device and are not covered here |
+| `test_device` | The renderer's device-facing code on a real Vulkan device (a GPU, or lavapipe under Xvfb; Skipped, exit 77, without one): texture uploads read back from the GPU, the mip chain, a replace that must keep its size and slot, a mesh replace that keeps its id, the pipeline cache saved and reloaded, and the deferred-destroy queue freeing in order |
 
 Every suite is a regression test for a bug that actually happened. The header
 comment on each one says which.

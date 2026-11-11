@@ -20,7 +20,15 @@
 #   tools/check.sh tsan           ThreadSanitizer build, the suites that use threads
 #   tools/check.sh tidy           clang-tidy over the engine's own sources
 #   tools/check.sh replay         record a run, replay it, corrupt a checkpoint
+#   tools/check.sh frames         render a scene twice: the same picture, and a later frame differs
+#   tools/check.sh device         the suites that need a Vulkan device (ctest -L device)
 #   tools/check.sh all            everything above
+#
+# frames and device need a Vulkan device and somewhere to open a window, which a Linux
+# box with no screen still has: Mesa's lavapipe (mesa-vulkan-drivers) and xvfb-run.
+# With neither, each says so and is skipped rather than failed, and neither is in the
+# default set (a software device is slow). tools/git-hooks/pre-push runs docs and
+# shaders before every push once tools/install-hooks.sh has been run.
 #
 # replay is tools/verify-replay.sh over the Release build: the record / replay /
 # corrupt-a-checkpoint round trip that used to exist only as PowerShell. It needs
@@ -327,6 +335,43 @@ check_tidy() {
 # replay
 # ---------------------------------------------------------------------------
 
+# The Release tree the replay, frames and device steps share, built once.
+build_release_tree() {
+    configure_and_build "$BUILD_ROOT/release" "" \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DSUPERSONIC_WERROR=ON
+}
+
+# Whether there is somewhere to open a window. Prints why not when there is not.
+have_a_display() {
+    if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] \
+       && ! command -v xvfb-run >/dev/null 2>&1; then
+        echo "No DISPLAY and no xvfb-run - skipping. Install xvfb (and mesa-vulkan-drivers for a"
+        echo "software Vulkan device) to run this headless."
+        return 1
+    fi
+    return 0
+}
+
+check_frames() {
+    step "frames: render a scene twice, then a later frame"
+    build_release_tree
+    have_a_display || return 0
+    bash tools/verify-frames.sh --exe "$BUILD_ROOT/release/SupersonicEngine"
+}
+
+check_device() {
+    step "device: the suites that need a Vulkan device"
+    build_release_tree
+    have_a_display || return 0
+    # Under xvfb-run when there is no display; a suite with no usable device prints
+    # SKIPPED and ctest lists it as Skipped, so a machine that cannot run it is told so.
+    local runner=()
+    if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        runner=(xvfb-run -a)
+    fi
+    ${runner[@]+"${runner[@]}"} ctest --test-dir "$BUILD_ROOT/release" -L device --output-on-failure
+}
+
 check_replay() {
     step "replay: record a run, replay it, corrupt one checkpoint"
 
@@ -366,9 +411,11 @@ run() {
         tsan)    check_tsan ;;
         tidy)    check_tidy ;;
         replay)  check_replay ;;
-        all)     local s; for s in docs shaders build options asan tsan tidy replay; do run "$s"; done ;;
+        frames)  check_frames ;;
+        device)  check_device ;;
+        all)     local s; for s in docs shaders build options asan tsan tidy replay frames device; do run "$s"; done ;;
         -h|--help|help) usage ;;
-        *)       echo "unknown step: $name (try: docs shaders build options asan tsan tidy replay all)" >&2; return 2 ;;
+        *)       echo "unknown step: $name (try: docs shaders build options asan tsan tidy replay frames device all)" >&2; return 2 ;;
     esac
 }
 

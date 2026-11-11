@@ -42,11 +42,17 @@ on:
           Which jobs to run. "quick" is the shader byte-compare and the
           documented-counts check, about a minute between them, for when the
           builds are not worth the minutes. "all" is everything, as before.
+          "arm64" is one job and nothing else: it builds the engine on a Linux
+          arm64 runner and runs every suite there, which is what finally says
+          whether the pinned determinism hash holds off x86 (it has never been
+          run there). Not part of "all": it needs a runner label the account may
+          not have, and a job that waits for one forever should not hold the rest.
         type: choice
         default: all
         options:
           - all
           - quick
+          - arm64
 
 # Nothing here writes to the repository or to anything it hosts.
 permissions:
@@ -63,7 +69,7 @@ jobs:
     # GitHub's default six hours, out of the allowance that is the reason
     # automatic runs are off. Set generously from what these builds are
     # known to cost, so a slow day is not a red one; tighten after real runs.
-    if: ${{ inputs.legs != 'quick' }}
+    if: ${{ inputs.legs == 'all' }}
     timeout-minutes: 90
     runs-on: ${{ matrix.os }}
     strategy:
@@ -221,7 +227,7 @@ jobs:
   # author cannot fix gets deleted, which is worse.
   validation:
     name: Validation layers (lavapipe)
-    if: ${{ inputs.legs != 'quick' }}
+    if: ${{ inputs.legs == 'all' }}
     timeout-minutes: 45
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -272,6 +278,29 @@ jobs:
           VK_LAYER_VALIDATE_SYNC: "1"
         run: xvfb-run -a ./build/SupersonicEngine --frames 120
 
+      # What a renderer or simulation change can break that no unit test sees, run
+      # under the same software device and the same validation layers. Each script
+      # carries a negative control (a later frame must differ; a corrupted
+      # checkpoint must be caught), so a green run means the check could have
+      # failed. See the scripts for why none of it pins a picture.
+      - name: Frames are repeatable, and a later frame differs
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: bash tools/verify-frames.sh --exe build/SupersonicEngine
+
+      - name: The replay reproduces, and a corrupted checkpoint is caught
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: bash tools/verify-replay.sh --exe build/SupersonicEngine
+
+      # The suites that need a device: uploads, the texture and mesh registries,
+      # the pipeline cache, the deferred-destroy queue. They skip, loudly, where
+      # there is no device; here there is one.
+      - name: Device-backed suites
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: xvfb-run -a ctest --test-dir build -L device --output-on-failure
+
   # ---------------------------------------------------------------------------
   # Sanitizers over the existing suites.
   #
@@ -281,7 +310,7 @@ jobs:
   # through a hand-written JSON parser with no depth limit.
   sanitizers:
     name: ASan + UBSan (Linux)
-    if: ${{ inputs.legs != 'quick' }}
+    if: ${{ inputs.legs == 'all' }}
     timeout-minutes: 90
     runs-on: ubuntu-latest
     steps:
@@ -340,7 +369,7 @@ jobs:
   # it does not.
   options-off:
     name: Configure with tests and plugin OFF
-    if: ${{ inputs.legs != 'quick' }}
+    if: ${{ inputs.legs == 'all' }}
     timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
@@ -367,6 +396,51 @@ jobs:
             -DSUPERSONIC_BUILD_TESTS=OFF \
             -DSUPERSONIC_BUILD_SCRIPT_PLUGIN=OFF
           cmake --build build --parallel 2
+
+  # ---------------------------------------------------------------------------
+  # Does the simulation reproduce off x86?
+  #
+  # test_determinism pins the hash of four seconds of its fixture scene as one
+  # number, and it holds across compilers and C runtimes (MSVC on the UCRT, GCC on
+  # glibc). Every measurement behind that was x64. ARM64 has different fused
+  # multiply-add behaviour in the hardware and different libm code paths, and the
+  # simulation avoids both by construction (-ffp-contract=off, DetMath) - which is a
+  # claim until something runs it. This runs every suite on a Linux arm64 runner:
+  # green means the pinned hash held, red means it did not and the first failing
+  # suite says where.
+  #
+  # Dispatch with legs = arm64. No Vulkan SDK (none is published for arm64 Linux):
+  # the build uses the vendored headers and the loader from libvulkan-dev, and the
+  # committed shader blobs. The editor is not built, only the library and the suites.
+  arm64:
+    name: Suites on Linux arm64
+    if: ${{ inputs.legs == 'arm64' }}
+    timeout-minutes: 90
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxkbcommon-dev pkg-config libasound2-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGLFW_BUILD_WAYLAND=OFF \
+            -DSUPERSONIC_BUILD_EDITOR=OFF \
+            -DSUPERSONIC_BUILD_SCRIPT_PLUGIN=OFF \
+            -DSUPERSONIC_WERROR=ON
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      - name: Run every suite
+        run: ctest --test-dir build --output-on-failure
 
   # ---------------------------------------------------------------------------
   # Documentation that counts things must count them rather than remember them.

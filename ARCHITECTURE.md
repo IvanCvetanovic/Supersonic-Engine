@@ -2798,6 +2798,35 @@ caller close the object.
 Registration is global rather than per-registry, because it maps a *type* to its
 format and a type does not mean two different things in two scenes.
 
+**A game's writer is held to the engine's guarantees.** It is handed a scratch
+stream so the codec can drop a component that wrote nothing, and that stream used
+to be a bare `std::ostringstream`: no finite-number guard, the process's global
+locale, the default six digits. One NaN in a game's component therefore made the
+whole scene unreadable — the failure `FiniteNumbersOnly` exists to prevent, one
+layer out — a program that had set a decimal-comma locale wrote `1,5`, and the
+editor's full-precision snapshot (the nine digits that make Stop exact) rounded
+exactly the floats a game keeps its state in. The scratch stream now takes the
+destination's locale and precision. A saved scene is byte-identical to before: the
+default precision, the classic locale, and no non-finite value to substitute.
+`test_codecextension` pins all three.
+
+**Describing a component instead of coding it.** Most components are a short list
+of plain fields, and for those the codec pair and the inspector section are the
+same list written three times. `RegisterDescribedComponent<C>("Key",
+Field("name", &C::member), ...)` (`core/ComponentFields.hpp`) takes the list once
+and registers both: the codec writer and reader, and an inspector section with Add
+and Remove Component. Fields may be `bool`, `int`, `float`, `std::string`,
+`glm::vec2`, `glm::vec3` or `glm::vec4`; anything else is a compile error naming the
+type, because a component half-saved is worse than one the author was told to write
+by hand. The reader starts from a default-constructed component, so a key a file
+does not mention is what the type says it defaults to — adding a field later does
+not break a scene saved before it — and one bad value degrades that field alone.
+It is deliberately not reflection and does not touch the engine's own components,
+which keep their hand-written code for the units, ranges and asset pickers a name
+and a pointer cannot say. What the inspector is offered goes through a
+`FieldVisitor`, so a test can see every field, its type and the order without a
+window; only the ImGui widgets behind it need one.
+
 Prefabs are parsed once and cached by path. Every spawn used to open the file,
 read it and run the whole parser to produce a document identical to the last
 one. Saving a prefab drops it from the cache, a prefab that failed to parse is

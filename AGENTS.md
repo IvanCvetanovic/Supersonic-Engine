@@ -112,7 +112,7 @@ subproject build would define twice.
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Sixty-two suites. Rather than repeat the list here - the copy that used to
+Sixty-four suites. Rather than repeat the list here - the copy that used to
 live in this file had fallen thirteen entries behind - see the table in
 [README.md](README.md#testing), or read it from the build, which is where CI
 gets it:
@@ -339,6 +339,9 @@ and floats are written as their bits.
 tools/check.sh                # docs, shaders, build + every suite
 tools/check.sh asan           # ASan + UBSan + LSan over every suite
 tools/check.sh --help         # all of them: tsan, tidy, options, all
+tools/check.sh frames         # a scene rendered twice: the same picture, and a later frame differs
+tools/check.sh device         # the suites that need a Vulkan device (ctest -L device)
+tools/install-hooks.sh        # run docs + shaders before every push (tools/git-hooks/pre-push)
 ```
 
 CI is dispatch-only (the repository is private, so every automatic run is

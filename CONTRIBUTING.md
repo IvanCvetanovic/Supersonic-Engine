@@ -7,8 +7,9 @@ why it is like that".
 ## Before you start
 
 - **Build and run the tests first.** `ctest --test-dir build -C Debug` should be
-  sixty-two green suites before you change anything (plus `test_reporttext`,
-  which is green, or Skipped when there is no JDK; see [AGENTS.md](AGENTS.md)). If
+  sixty-four green suites before you change anything (plus `test_reporttext`,
+  which is green, or Skipped when there is no JDK; see [AGENTS.md](AGENTS.md)). `test_device`
+  is Skipped, not green, where there is no Vulkan device or window. If
   it is not, that is the bug worth reporting.
 - **Install the Vulkan SDK.** Without the validation layers, invalid Vulkan
   usage does not produce an error — it produces an access violation, or nothing
