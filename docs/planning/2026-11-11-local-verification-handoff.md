@@ -496,3 +496,186 @@ git worktree add ..\engine-base 4261485                # removed again afterward
   GPU, the device suite, Windows hot reload, the editor, the games and CI. This run adds one fact to
   that list: **under MSVC `/W4 /WX` the engine library, the editor and 64 of the 66 suites compile
   without a warning**; the other two fail on code older than the branch.
+
+---
+
+## Outcome, second run (evening of 11 November 2026)
+
+**The second run stopped at L1 as well, by the same rule, for a different reason. L1's warning
+gate is now green in both configurations; one suite fails in Debug, and the cause is not the PC.
+L2 to L11 were not run.** Nothing in the engine, the tests, a golden or a baseline was changed
+by this run. It tested `313d3b7`, which is the first run's commit `349cae7` plus the owner's
+`9c983cc` (the three `C4702` loops, and the Corrections block above); the engine and test sources
+are those of `9c983cc`. The machine and toolchain are the first run's (see above).
+
+### Surprises first
+
+**1. `test_gltf` fails in Debug on MSVC with a modal CRT assertion, and the cause is in the
+vendored `tinygltf`, reached by a test this branch added.**
+
+```
+Debug Assertion Failed!
+Program: ...vet\Desktop\Supersonic-Engine\build\tests\Debug\test_gltf.exe
+File: C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Tools\MSVC\14.51.36231\include\vector
+Line: 1949
+Expression: vector subscript out of range
+```
+
+- **It blocks, it does not just fail.** The Debug CRT shows this as a dialog and the process waits
+  for a click. Under ctest it sat on it for 465 s, until I found it (ctest's default per-test
+  timeout is 1500 s). I posted the dialog's own `IDABORT` (what pressing Abort does); ctest then
+  recorded `test_gltf (Failed)`. Anything that runs the Debug suites unattended on a desktop
+  session can hang on this, once per occurrence; `ctest --timeout` bounds it.
+- **Deterministic.** By hand, from the repository root, under a guard that records the dialog and
+  aborts it: Debug exits **3** with the same text; Release exits **0** with `test_gltf: 350 checks,
+  0 failures` (and Release ctest `Passed` it).
+- **Which test.** The file `supersonic_wrapview.gltf` was left in `%TEMP%` by the aborted run, and
+  the suite removes its files when each case finishes, so the case that died is
+  `testAnImageViewThatWrapsPastItsBufferIsRefused` (`tests/test_gltf.cpp:802`). It was added on this
+  branch, by `0604c99` (2026-11-05, "Review fixes: the hull sort is taken back…"), and feeds an image
+  buffer view with `"byteOffset": 18446744073709551614` (2^64 − 2).
+- **Where.** `third_party/tinygltf/tiny_gltf.h:6415`, in the loader's image-from-buffer-view branch:
+
+  ```cpp
+  bool ret = LoadImageData(&image, idx, err, warn, image.width, image.height,
+                           &buffer.data[bufferView.byteOffset],
+                           static_cast<int>(bufferView.byteLength), load_image_user_data);
+  ```
+
+  `buffer.data` is a `std::vector<unsigned char>` and the offset is not checked first. This runs
+  before the engine's callback, so before the engine's own check
+  (`src/core/GltfLoader.cpp:107-108`, which compares each term against what is left and is
+  correct). The vendored file is untouched by the branch: `git log 4261485..HEAD --
+  third_party/tinygltf` is empty.
+- **Reproduced without the engine.** A short program (`tg_repro.cpp`: the vendored header, the
+  same four defines, the same no-op image loader; it is in the scratch directory, not the
+  repository) loading the test's exact file and a control that differs only in `byteOffset`:
+
+  | Build | `byteOffset` 2^64 − 2 | `byteOffset` 0 |
+  |---|---|---|
+  | `/MDd` (Debug STL) | **assertion**, `vector` line 1949, exit 3 | loads, 1 image |
+  | `/MD /O2` | loads, returns `true`, 1 image | loads, 1 image |
+
+  The program, compiled with `cl /EHsc /std:c++17 /bigobj /I third_party\tinygltf` (plus `/MDd /Od` or
+  `/MD /O2`), run on the test's own JSON (`tests/test_gltf.cpp:810-829`) and on the same JSON with
+  `"byteOffset": 0` in `bufferViews[2]`:
+
+  ```cpp
+  #define TINYGLTF_IMPLEMENTATION
+  #define TINYGLTF_NO_STB_IMAGE
+  #define TINYGLTF_NO_STB_IMAGE_WRITE
+  #define TINYGLTF_NO_EXTERNAL_IMAGE
+  #include "tiny_gltf.h"
+  #include <cstdio>
+  int main(int, char** argv) {
+      tinygltf::Model model; tinygltf::TinyGLTF loader;
+      loader.SetImageLoader([](tinygltf::Image*, const int, std::string*, std::string*, int, int,
+                               const unsigned char*, int, void*) { return true; }, nullptr);
+      std::string err, warn;
+      const bool ok = loader.LoadASCIIFromFile(&model, &err, &warn, argv[1]);
+      std::printf("%s images=%zu err=[%s]\n", ok ? "true" : "false", model.images.size(), err.c_str());
+  }
+  ```
+
+- **What this does and does not show.** It shows the Debug failure is the vendored library indexing
+  its own vector out of range on a hostile input, not the engine's code and not this PC. It does
+  **not** show the optimised case is harmless: there the expression forms a wild pointer that the
+  engine's no-op callback never reads, which is still out-of-range indexing (undefined behaviour) in
+  vendored code. The previous run could not reach this: `test_gltf` did not compile.
+- **Decision for the owner, nothing applied.** The options I can see: guard the index in the vendored
+  header (a change to vendored code); have the engine reject a bad buffer view before handing the
+  file to tinygltf; or record that Debug MSVC cannot run this one case until one of those is done.
+  Skipping the case, or changing the STL's checking level, would weaken the check and is not on the
+  list.
+
+**2. Smart App Control: 18 of the 134 ctest entries (3 in Debug, 15 in Release) did not start, and
+nothing that started failed because of it.** Per your protocol each was rerun by hand, up to three
+times (table below). Separately, several fresh Release suites took about 10 s under ctest where
+Debug took one or two: `test_replay` 10.10 s against 1.23 s, `test_device` 10.28 s against 1.49 s,
+and `test_gltf` 10.28 s in Release. I attribute that to the reputation check on a newly linked
+executable; I did not isolate it. Release ctest took 282 s, Debug 222 s once the 465 s wait on the
+dialog is taken out.
+
+**3. The warning gate is green.** `SUPERSONIC_WERROR=ON`, `/W4 /permissive- /WX`, MSVC 19.51:
+Debug and Release both exit 0 with no diagnostic of any kind in the log, the three rewritten loops
+included.
+
+### L1, numbers
+
+| | Debug | Release |
+|---|---|---|
+| Configure | exit 0 in 7 s, no warning (shared) | |
+| Build, `SUPERSONIC_WERROR=ON` | exit 0 in 2.9 min, 0 diagnostics | exit 0 in 5.8 min, 0 diagnostics |
+| ctest entries | 67 | 67 |
+| Passed under ctest | 63 | 52 |
+| `Not Run` (`BAD_COMMAND`, `[unknown error]`) | 3 | 15 |
+| of those, ran by hand and passed (attempt 1) | 3 | 9 |
+| of those, never ran in 3 attempts | 0 | 6 |
+| Failed | **1** (`test_gltf`, above) | 0 |
+| Skipped | 0 | 0 |
+| Ran and passed, in all | 66 of 67 | 61 of 67 |
+
+- **Debug, by hand and passed:** `test_environmentmap` 81 checks, `test_camera` 56,
+  `test_blending` 45, each `0 failures`. (Exit codes were not captured on this pass: the helper
+  I used lost them. The summary line is the suite's own.)
+- **Release, by hand, exit 0 each:** `test_launchoptions` 217 checks, `test_json` 92,
+  `test_scenemanager` 45, `test_contacts` 72, `test_joints` 228, `test_imagepixels` 43,
+  `test_gameruntime` 3283, `test_packaging` 32, `test_audio` 316; all `0 failures`.
+- **Release, never ran** (three attempts each; every attempt: `This command cannot be run due to
+  the error: An Application Control policy has blocked this file.`): `test_transform`, `test_sat`,
+  `test_heightfield`, `test_draworder`, `test_camera`, `test_audiostreamkeeper`. This is the
+  machine, and I did not relink, copy, unblock or otherwise route round it. Each of the six passed in
+  Debug (`test_camera` by hand), so no suite is without a pass in some configuration on this PC.
+- **`test_device` was `Passed`, not `Skipped`, in both configurations**, with
+  `SUPERSONIC_REQUIRE_DEVICE` unset, on the integrated AMD Radeon 780M. `test_reporttext` was
+  `Passed` in both (JDK 17 found: `SUPERSONIC_JAVAC` is in the cache).
+- **`test_determinism` and `test_replay` passed in both configurations** (#34 and #35: Debug 3.52 s
+  and 1.23 s, Release 0.56 s and 10.10 s). The pinned hash is `kCanonical = 6794834318059694172`
+  (`tests/test_determinism.cpp:476`). That is the unit-level half of L2; the replay round trip
+  itself was not run.
+- `git status` was empty at the end, after both builds, both ctest runs and every run by hand: each
+  build recompiled all 17 of 17 shaders with this PC's `glslc` (shaderc v2026.3, SDK 1.4.357.0), and
+  `git diff --name-only -- assets/shaders` lists nothing, so every blob is unchanged.
+
+### L10, CI (dispatched first, as asked, on `claude/beautiful-cray-qs85oy` at `9c983cc`)
+
+- **`legs=arm64`, run 43062314027: success.** One job, `Suites on Linux arm64`, 7 m 22 s, runner
+  label `ubuntu-24.04-arm`, GCC 13.3.0, `100% tests passed, 0 tests failed out of 67`; `test_determinism`
+  (#34) and `test_replay` (#35) `Passed`; `test_device` (#66) `Skipped` (no Vulkan device on that
+  runner). The job log never prints `uname -m`, so that the machine was arm64 rests on the label.
+- **`legs=all`, run 43062298112:**
+
+  | Job | Result | Time |
+  |---|---|---|
+  | Configure with tests and plugin OFF | success | 8 m 12 s |
+  | Shaders compile from source | success | 20 s |
+  | Documented counts match the build | success | 7 s |
+  | Linux (GCC) | success | 11 m 27 s |
+  | Validation layers (lavapipe) | success | 13 m 47 s |
+  | ASan + UBSan (Linux) | success | 30 m 37 s |
+  | Suites on Linux arm64 | skipped (not part of `all`, by design) | |
+  | **Windows (MSVC)** | **PENDING when this was written** | |
+
+  The Windows job runs the suites in Debug (`config: Debug` in the matrix). Its Build step finished
+  at 16:54:38 UTC and its Test step was still running at 17:36 UTC, about 41 minutes later, when
+  the Debug suites take a few minutes here. That is consistent with the same dialog sitting on the hosted desktop, but
+  it is not yet evidence: the log cannot be read until the run ends. Its result is added below.
+
+### Step by step
+
+| Step | Result |
+|---|---|
+| L1 | **Failed in Debug** (`test_gltf`, item 1); Release: no failure, 6 suites never ran (machine). |
+| L2 to L9, L11 | Not run: stopped at L1. L7 and L8 also need a person. |
+| L10 | Run first, as asked: `arm64` success; `all` six jobs success, Windows pending (above). |
+| L5 | Not run. |
+
+### For the owner
+
+- **To proceed to L2 to L11 with the Debug `test_gltf` failure recorded as an open finding and not
+  as a pass, say so.** Left alone, the stop rule applies: a genuine suite failure in L1 is neither
+  a `C4702` nor a warning, so it is outside what you authorised me to route round.
+- Decide how Debug MSVC should treat the vendored `tinygltf` index (item 1). Nothing else in this run
+  needs a decision.
+- A `ctest --timeout 180` (or similar) in `AGENTS.md`'s MSVC Debug instructions would keep a CRT
+  dialog from holding a run for 25 minutes.
