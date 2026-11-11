@@ -839,14 +839,17 @@ static void testAnImageViewThatWrapsPastItsBufferIsRefused() {
     std::filesystem::remove(path);
 
     CHECK_MSG(!threw, "the importer threw on a crafted bufferView instead of refusing it");
-    // The file may be refused whole (tinygltf validates views on some builds) or
-    // loaded without the texture; what it must not do is hand back a texture path
-    // for bytes that were never inside the buffer.
-    if (scene.ok && !scene.submeshes.empty()) {
+    // The model loads and loses only the texture. (The vendored tinygltf used to form a
+    // pointer from the crafted offset before any check ran - undefined behaviour, and a
+    // CRT assertion under MSVC's debug STL; see THIRD_PARTY_LICENSES.md.) What the file
+    // must never do is hand back a texture path for bytes that were never inside the
+    // buffer. The old form of this check also passed when the file was refused whole,
+    // which would have hidden the importer starting to reject models over one bad image.
+    CHECK_MSG(scene.ok, "a bad image view costs the texture, not the model: " + scene.error);
+    CHECK_MSG(!scene.submeshes.empty(), "and the geometry is still there");
+    if (!scene.submeshes.empty()) {
         CHECK_MSG(scene.submeshes[0].material.albedoTexturePath.empty(),
                   "an image view that wraps past its buffer yields no texture");
-    } else {
-        CHECK_MSG(true, "refused whole");
     }
 }
 

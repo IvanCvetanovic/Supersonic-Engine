@@ -359,7 +359,7 @@ jobs:
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DGLFW_BUILD_WAYLAND=OFF \
-            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
 
       - name: Build
@@ -430,6 +430,15 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+
+      # The point of this job is "the pinned determinism hash holds off x86", so the log
+      # says what it ran on, and the step fails if it was x86 - a runner label is a request,
+      # not a fact. (A first run passed every suite and never printed the architecture.)
+      - name: Report the machine, and require arm64
+        run: |
+          uname -m
+          uname -a
+          test "$(uname -m)" = "aarch64"
 
       - name: Install dependencies
         run: |

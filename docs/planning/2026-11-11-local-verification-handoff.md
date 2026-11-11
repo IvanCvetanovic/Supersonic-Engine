@@ -61,6 +61,30 @@ sections above [Outcome](#outcome) to match what you find. Append to Outcome.
 >   hand up to three times and record each as ran-and-passed, ran-and-failed (a finding), or
 >   never ran. Do not turn Smart App Control off. L10 runs the suites on a hosted Windows
 >   runner with none of this, which is why it can be run first, in parallel with the rest.
+> - **Second correction: `test_gltf` in MSVC Debug (the second run's finding).** A test added
+>   on this branch, `testAnImageViewThatWrapsPastItsBufferIsRefused` (byteOffset 2^64 - 2),
+>   exposed a real bug in the vendored tinygltf: `ParseImage` formed
+>   `&buffer.data[bufferView.byteOffset]` before the image callback - and before any check
+>   the engine makes - so a crafted offset indexed far outside the vector. Undefined
+>   behaviour everywhere, silent on GCC, a modal CRT assertion in MSVC Debug that waited for
+>   a click and held the hosted Windows job for 86 minutes. The branch now has: the header
+>   guarded (marked `SUPERSONIC PATCH`, listed in `THIRD_PARTY_LICENSES.md`; a view inside
+>   its buffer is passed exactly as before, one outside it as no bytes); the test asserting
+>   that the model still loads and loses only the texture; the test harness turning a CRT
+>   assertion into stderr plus exit code 3 instead of a dialog; a 300-second `TIMEOUT` on
+>   every engine suite; and `-D_GLIBCXX_ASSERTIONS` on the Linux sanitizer build, where the
+>   bug now reproduces as an abort (it was the only one of 67 suites to).
+>   **Merge the branch again**, rerun L1 in both configurations, and then do one thing that
+>   only a Windows run can: **a negative control for the harness change.** Save the patched
+>   header away, put the *unpatched* one back
+>   (`git show 9c983cc:third_party/tinygltf/tiny_gltf.h > third_party/tinygltf/tiny_gltf.h`),
+>   rebuild `test_gltf` in Debug and run it. Expect: the line `CRT assertion (the suite is
+>   ended, not left on a dialog)` on stderr, exit code 3, no dialog, within a second. Then
+>   restore the patched header (`git checkout -- third_party/tinygltf/tiny_gltf.h`) and
+>   confirm the suite passes with 352 checks. If a dialog still appears, press Abort, record
+>   that the harness change does not work, and stop: it was written without an MSVC to run it.
+>   Rerun L10 `all` on the branch too; the Windows job should now pass, or fail within five
+>   minutes of the hung test, not at the job's cap.
 > - **The repository is public** (GitHub says so; `AGENTS.md` and `ci.yml` still reason from
 >   it being private). Hosted Actions minutes are free for a public repository, so the
 >   "CI spend" concern does not apply to L10 while it stays public. Whether it should be
