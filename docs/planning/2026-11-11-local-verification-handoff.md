@@ -722,10 +722,13 @@ included.
 
 **The third run went through every step it could. L1 passes in both configurations, the negative
 control for the harness change behaves as specified, L2, L3, L4 and L9 pass, CI is green after a
-transient outage, and no game behaves differently with this engine than at its own pin. L7 and L8
-need a person and were not run; L6 was checked headlessly, which is partial.** Nothing in the
-engine, a test, a golden or a baseline was changed (the unpatched header of the negative control was
-put back byte for byte, below). It tested `3a77d3f`, which is the second run's `c4490ba` plus the
+transient outage, and no game's suite result differs with this engine from its result at its own
+pin (the L5 table says what each comparison rests on). L7 and L8 need a person and were not run; L6
+was checked headlessly, which is partial.** Nothing in the engine, a test, a golden or a baseline
+was changed, apart from two temporary edits to tracked files, each reverted and verified: the
+unpatched `tiny_gltf.h` of the negative control (afterwards its SHA-256 is identical to the saved
+patched copy and `git status` is empty) and the `OrbitScript` rename in
+`plugins/sample_scripts/SampleScripts.cpp` for the L6 check (`git checkout`, `git status` empty). It tested `3a77d3f`, which is the second run's `c4490ba` plus the
 owner's `3b6c6da` (the `tinygltf` guard, the harness change, the 300 s suite timeout, the arm64
 gate); the engine and test sources are those of `3b6c6da`. Machine and toolchain are the first run's.
 
@@ -767,8 +770,9 @@ guess, not a finding).
 blocked on all three attempts at the pin, so I first ran the 17 suites individually through ctest,
 where 6 of them never ran, `test_pn_formats` (the scene writer compared with the shipped scenes byte
 for byte) among them. With this engine `test_pn_all.exe` ran at once. To pair them I rebuilt
-Penumbra at its pin, which makes a new executable and not a fourth try at the blocked one, and
-`test_pn_all.exe` ran on its first attempt: **all 17 verdicts now exist at both engines, and
+Penumbra at its pin, which makes a new executable and not a fourth try at the blocked one (that
+goes beyond the three-attempt protocol; Smart App Control was not touched, and the ctest-based pin
+result above stands as the strict-protocol record), and `test_pn_all.exe` ran on its first attempt: **all 17 verdicts now exist at both engines, and
 `test_pn_formats` passed at both** (L5).
 
 **4. The harness change works on a real MSVC**, which is what it was written without (details
@@ -866,12 +870,12 @@ start, same submodule pin, `git status` empty, no `lv-*` branch, no build tree. 
 object stores still hold the fetched commit; no ref points at it.) After every build the engine
 submodule's own `git status` was empty, so no shader blob was rewritten in any game.
 
-| Game (pin) | Pin | With `3a77d3f` | Difference |
+| Game (pin) | Pin | With `3a77d3f` | Difference (and what it rests on) |
 |---|---|---|---|
-| Wolf Brigade (`4bfcf67`) | 18 of 18 suites passed | 18 of 18 | **none**: all 18 check counts identical |
-| HUSK (`4bfcf67`) | 3 of 3 passed | 3 of 3 | **none**: `test_husk_scenarios` 142 checks (68 golden `.hashes`), `foundation` 69, `layer` 30, identical |
-| Magic Portals (`a2f4873`) | `91 suites, 91 passed, 0 skipped, 0 failed` | the same | **none**: 91 of 91 suites identical, 212082 checks, 0 failures in both (`layer` 12991, `routes` 2420, `controls` 13856, `adjust` 24755, `movers` 9477, `timebase` 495) |
-| Penumbra (`4261485`) | `17 suites: 16 passed, 1 failed, 0 skipped, 0 not run` | the same | **none**: 17 verdicts identical (below) |
+| Wolf Brigade (`4bfcf67`) | 18 of 18 suites passed | 18 of 18 | **none**: all 18 suites' verdicts and check counts identical |
+| HUSK (`4bfcf67`) | 3 of 3 passed | 3 of 3 | **none**: verdicts and check counts identical (`test_husk_scenarios` 142 checks, whose goldens are the 68 `.hashes` files; `foundation` 69; `layer` 30) |
+| Magic Portals (`a2f4873`) | `91 suites, 91 passed, 0 skipped, 0 failed` | the same | **none**: 91 of 91 suites' verdicts and check counts identical, 212082 checks, 0 failures in both; the goldens and routes live inside those suites (`layer` 12991, `routes` 2420, `controls` 13856, `adjust` 24755, `movers` 9477, `timebase` 495) |
+| Penumbra (`4261485`) | `17 suites: 16 passed, 1 failed, 0 skipped, 0 not run` | the same | **none**: 17 verdicts identical, and a full-output diff (below) |
 
 Penumbra, with its own runner, `build-lv-pin/tests/test_pn_all.exe` (the pin rebuilt after a first
 build was blocked) against `build-lv-new/tests/test_pn_all.exe`: **both `17 suites: 16 passed, 1
