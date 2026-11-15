@@ -11,7 +11,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
 [![Tests](https://img.shields.io/badge/tests-66%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
-[![License: MIT-0](https://img.shields.io/badge/license-MIT--0-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 [![Free to use](https://img.shields.io/badge/price-free-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#license)
 [![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](https://claude.com/claude-code)
 
@@ -1439,11 +1439,11 @@ Built on the work of others, all vendored in `third_party/`:
 
 ## License
 
-**The engine is completely free to use.** It is under the
-[MIT No Attribution](LICENSE) licence (MIT-0). Use it, change it, ship it, sell
-it — commercially or otherwise, with or without credit. There are no conditions:
-not even the copyright notice has to travel with copies of the engine's own
-source.
+**The engine is free to use.** It is under the [MIT](LICENSE) licence, and
+Ivan Cvetanović holds its copyright. Use it, change it, ship it, sell it —
+commercially or otherwise. The one condition: the copyright notice and the
+licence text travel with every copy of the engine's source, or of a substantial
+part of it.
 
 It comes with **no warranty of any kind, and no liability**: Ivan Cvetanović
 takes no responsibility for anything that happens through its use, whether that
@@ -1461,7 +1461,7 @@ documentation.
 
 Every vendored dependency under `third_party/` is permissive too — MIT, zlib,
 Apache-2.0, public domain, or for the typefaces the SIL Open Font License — and
-none of them puts a condition on what you may build. Unlike
+none of them puts a condition on what you may build. Like
 the engine's own licence, theirs ask for their notices to travel with copies of
 them.
 Attributions and full licence texts are in
