@@ -5,7 +5,9 @@
 // DynamicResolution.hpp chooses the size by how fast the GPU draws; this is the player's say over that choice. A phone's
 // options screen can put a row on it: leave the controller to decide (Automatic), or hold the picture at a share of the size
 // the controller started at (Fixed) - sharper than the controller would keep on a slow GPU, or smaller than it would on a
-// fast one - and the choice survives the controller's own judgement, which only ever sees the length of a frame.
+// fast one - and the choice survives the controller's own judgement, which only ever sees the length of a frame. Or (E50)
+// keep the controller but never above a share of that size (Capped): a ceiling only takes the larger sizes away, so a pick
+// made to buy frames still falls where the GPU needs it to, which a held size never does.
 //
 // Published in the registry context as `RenderScaleControl*`, the way WindowControl* is and for the same reason: the one
 // place a layer can reach without the engine handing it another argument.
@@ -35,11 +37,12 @@ namespace Supersonic {
 enum class RenderScaleMode : int {
     Automatic = 0,   // the controller's own choice, from the game's configuration
     Fixed = 1,       // a share of the size the controller started at, held
+    Capped = 2,      // E50: the controller's own choice, never above a share of the size it started at
 };
 
 struct RenderScaleRequest {
     RenderScaleMode mode{RenderScaleMode::Automatic};
-    float fraction{1.0f};   // Fixed only: the share of the starting size, in (0, 1]
+    float fraction{1.0f};   // Fixed and Capped: the share of the starting size, in (0, 1]
 };
 
 class RenderScaleControl {
@@ -50,7 +53,7 @@ public:
     float CurrentScale() const { return m_currentScale; }
 
     // The mode the game last asked for (Automatic until it asks). It is the request, not the applied state: a menu that asks
-    // and reads back in the same tick reads what it asked.
+    // and reads back in the same tick reads what it asked. The fraction is a Fixed request's size or a Capped one's ceiling.
     RenderScaleMode Mode() const { return m_requested.mode; }
     float FixedFraction() const { return m_requested.fraction; }
 
@@ -63,9 +66,16 @@ public:
     // game's pixel budget): 1 is that size, 0.5 a half-width, half-height picture. Held at no less than the game's floor
     // (a pixel floor, if it set one), and at no more than the window.
     void RequestFixed(float fraction) {
-        if (!(fraction > 0.0f)) fraction = 0.1f;
-        if (fraction > 1.0f) fraction = 1.0f;
-        m_requested = RenderScaleRequest{RenderScaleMode::Fixed, fraction};
+        m_requested = RenderScaleRequest{RenderScaleMode::Fixed, ClampedFraction(fraction)};
+        m_pending = true;
+    }
+    // E50. The controller as the game configured it, but never above `fraction` of the size it started at (clamped as
+    // RequestFixed's is; a ceiling under the game's floor is the floor). It starts at the ceiling, falls where the frames
+    // ask, through the game's floors and its emergency floor, and may rise back as far as the ceiling, aiming at the game's
+    // target only: the configuration's lower tier (lowTierFps) is not kept, since a smaller picture asked for is asked for
+    // its frames, not for a steady 30. DynamicResolution::Capped is the configuration it runs on.
+    void RequestCapped(float fraction) {
+        m_requested = RenderScaleRequest{RenderScaleMode::Capped, ClampedFraction(fraction)};
         m_pending = true;
     }
 
@@ -106,6 +116,14 @@ public:
     }
 
 private:
+    // A share that is not one (zero, negative, NaN) is the smallest picture the controller allows, never zero; more than
+    // the whole is the whole.
+    static float ClampedFraction(float fraction) {
+        if (!(fraction > 0.0f)) fraction = 0.1f;
+        if (fraction > 1.0f) fraction = 1.0f;
+        return fraction;
+    }
+
     bool m_available{false};
     float m_currentScale{1.0f};
     bool m_pending{false};

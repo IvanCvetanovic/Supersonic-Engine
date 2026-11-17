@@ -173,6 +173,10 @@ private:
     std::uint32_t m_floorWindowHeight{0};
     bool m_scalePinned{false};
     float m_pinnedFraction{0.0f};   // the share of the start size a request pinned the picture at; 0 where the overlay pinned it
+    // E50: the share of the start size a Capped request put the ceiling at; 0 for none. m_resolutionConfig stays the game's
+    // own (uncapped), so the overlay's Auto preset still means the game's configuration; the ceiling is worked out from this
+    // whenever a controller is configured under it (DynamicResolution::ForRequest), a new window height included.
+    float m_cappedFraction{0.0f};
     // E50: the scene the game last noted (RenderScaleControl::NoteScene), kept so that a controller built anew (a pick of
     // Automatic) takes it up again. Empty until a game notes one.
     std::string m_sceneKey;

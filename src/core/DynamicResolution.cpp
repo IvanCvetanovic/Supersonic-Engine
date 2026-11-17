@@ -95,6 +95,59 @@ DynamicResolutionConfig DynamicResolution::Pinned(const DynamicResolutionConfig&
     return pinned;
 }
 
+DynamicResolutionConfig DynamicResolution::Capped(const DynamicResolutionConfig& forWindow, float ceiling, bool paced) {
+    DynamicResolutionConfig capped = forWindow;
+    // Only the larger sizes go: the floors (the pixel floor already in minScale, the emergency floor under it), the relaxed
+    // rise and the target stay, so the picture still falls where the frames ask and may come back up as far as the ceiling.
+    const float top = Clamp(ceiling, forWindow.minScale, forWindow.maxScale);
+    capped.startScale = capped.maxScale = top;
+    // A ceiling just above the pixel floor, with an emergency floor under it, is that floor: a fall goes to the pixel floor
+    // first, and a step that small can buy no refresh interval on a loop the display paces, be taken back, and leave the
+    // emergency floor out of reach (FloorFor reaches it only from the pixel floor). Made the floor, a window under
+    // emergencyBelowFps falls straight to the emergency floor. With no emergency floor the small step is the only way down,
+    // and it stays; on a loop the display does not pace, the step shows what it bought and the judgement keeps or takes it
+    // back on that, so it stays too (made the floor there, it cost frames the step had bought).
+    if (paced && Mended(forWindow).emergencyScale > 0.0f && top < kCeilingNearTheFloor * forWindow.minScale)
+        capped.minScale = top;
+    // A smaller picture asked for is asked for its frames: the lower tier would trade them for a steady lowTierFps.
+    capped.lowTierFps = 0.0f;
+    return capped;
+}
+
+DynamicResolutionConfig DynamicResolution::ForRequest(const DynamicResolutionConfig& declared, std::uint32_t windowHeight,
+                                                      float startScale, RenderScaleMode mode, float fraction, bool paced) {
+    const DynamicResolutionConfig forWindow = ForWindow(declared, windowHeight);
+    switch (mode) {
+    case RenderScaleMode::Fixed:
+        // E47's arithmetic, operand for operand: SupersonicApp held a pick at exactly this before it asked here.
+        return Pinned(forWindow, std::min(1.0f, std::max(forWindow.minScale, startScale * fraction)));
+    case RenderScaleMode::Capped: {
+        float ceiling = startScale * fraction;
+        if constexpr (kCeilingAtMostTheQualityFloor) {
+            if (Mended(forWindow).lowTierFps > 0.0f) ceiling = std::min(ceiling, QualityScaleFor(forWindow, 0));
+        }
+        return Capped(forWindow, ceiling, paced);
+    }
+    case RenderScaleMode::Automatic:
+        break;
+    }
+    return forWindow;
+}
+
+bool DynamicResolution::RequestIsApplied(RenderScaleMode mode, float fraction, bool pinned, float pinnedFraction,
+                                         float cappedFraction) {
+    switch (mode) {
+    case RenderScaleMode::Fixed:
+        return pinned && pinnedFraction == fraction;
+    case RenderScaleMode::Capped:
+        return !pinned && cappedFraction == fraction;
+    case RenderScaleMode::Automatic:
+        // A ceiling is not the game's own controller (it has no lower tier and a lower ceiling), so Automatic replaces it.
+        return !pinned && cappedFraction == 0.0f;
+    }
+    return false;
+}
+
 float DynamicResolution::FloorForTargetHeight(float minScale, float maxScale, std::uint32_t windowHeight,
                                               std::uint32_t minTargetHeight) {
     if (windowHeight == 0 || minTargetHeight == 0) return minScale;
@@ -365,7 +418,10 @@ bool DynamicResolution::Observe(float frameSeconds) {
 // ---- E50: the tiers and the scene memory ---------------------------------------------------------------------------------
 
 bool DynamicResolution::Tiered() const {
-    return m_declared.enabled && m_declared.lowTierFps > 0.0f && !Fixed();
+    // A floor at the ceiling leaves an upper tier no room, even with an emergency floor under it (a window so short that its
+    // pixel floor is the whole window): such a configuration is not Fixed() (it can still fall), but it stays untiered, E47's
+    // controller, as it always was.
+    return m_declared.enabled && m_declared.lowTierFps > 0.0f && m_declared.minScale < m_declared.maxScale;
 }
 
 float DynamicResolution::TierFps() const {

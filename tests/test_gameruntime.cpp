@@ -1565,6 +1565,7 @@ struct E50Run {
     int probeFailures{0};
     double firstSteadyWindowSeconds{-1.0};
     double secondsBelowStart{0.0};    // below 0.99 of the scale the stretch started at
+    float maxScale{0.0f};             // the largest scale the controller held at any frame, the start included
     std::vector<double> resizeTimes;
     std::vector<double> probeTimes;
     std::vector<double> failTimes;
@@ -1585,6 +1586,7 @@ struct E50Run {
 static E50Run e50Drive(DynamicResolution& controller, const E50Device& device, const E50Drive& drive, E50Lcg& rng) {
     E50Run run;
     const float start = controller.Scale();
+    run.maxScale = start;
     std::uint64_t windows = controller.WindowsEnded();
     double nextHitch = drive.hitchEverySeconds > 0.0 ? drive.hitchEverySeconds : 1e300;
     int hitchesLeft = 0;
@@ -1616,6 +1618,7 @@ static E50Run e50Drive(DynamicResolution& controller, const E50Device& device, c
             run.resizeTimes.push_back(t);
             if (resting) ++run.restResizes;
         }
+        run.maxScale = std::max(run.maxScale, controller.Scale());
         switch (controller.TakeTierChange()) {
         case DynamicResolution::TierChange::Down:
             ++run.tierChanges;
@@ -1655,9 +1658,9 @@ static void e50PrintRest(const std::string& name, const DynamicResolution& contr
                 static_cast<double>(kE50SteadyFps), run.firstSteadyWindowSeconds);
 }
 
-// The configuration a phone game asks for (E47's refinements, as Penumbra sets them), worked out for a window `windowHeight`
-// lines high, with the tiers (30 fps below 540 lines) or without.
-static DynamicResolutionConfig e50Config(float startScale, std::uint32_t windowHeight, bool tiers = true) {
+// The configuration a phone game declares (E47's refinements, as Penumbra sets them), with the tiers (30 fps below 540 lines)
+// or without; and the same worked out for a window `windowHeight` lines high.
+static DynamicResolutionConfig e50Declared(float startScale, bool tiers = true) {
     DynamicResolutionConfig declared;
     declared.enabled = true;
     declared.startScale = startScale;
@@ -1668,7 +1671,11 @@ static DynamicResolutionConfig e50Config(float startScale, std::uint32_t windowH
         declared.lowTierFps = 30.0f;
         declared.qualityTargetHeight = 540;
     }
-    return DynamicResolution::ForWindow(declared, windowHeight);
+    return declared;
+}
+
+static DynamicResolutionConfig e50Config(float startScale, std::uint32_t windowHeight, bool tiers = true) {
+    return DynamicResolution::ForWindow(e50Declared(startScale, tiers), windowHeight);
 }
 
 static bool e50InTier(const DynamicResolution& controller, float fps) {
@@ -1844,6 +1851,432 @@ static void testE50TheSceneNoteIsLatchedLikeARequest() {
     RenderScaleRequest request;
     CHECK_MSG(!control.TakeRequest(&request), "a note is not a request");
     CHECK(control.TakeScene(nullptr, nullptr));
+}
+
+// 11, the ceiling. RequestCapped is latched as RequestFixed is: the last request before the frame wins (a ceiling over a
+// pin, and a pin over a ceiling), the share is clamped the same way, and with no controller to take it it is dropped.
+static void testE50ARequestForACeilingIsLatchedAndClampedAsAFixedOneIs() {
+    RenderScaleControl control;
+    RenderScaleRequest request;
+    control.RequestCapped(0.5f);
+    control.Publish(false, 1.0f);
+    CHECK_MSG(!control.TakeRequest(&request), "no controller: the ceiling is dropped, not kept for later");
+
+    control.Publish(true, 1.0f);
+    control.RequestFixed(1.0f);
+    control.RequestCapped(0.7f);
+    CHECK_MSG(control.Mode() == RenderScaleMode::Capped, "the last request wins, and reads back as asked");
+    CHECK_NEAR(control.FixedFraction(), 0.7f);
+    CHECK(control.TakeRequest(&request));
+    CHECK(request.mode == RenderScaleMode::Capped);
+    CHECK_NEAR(request.fraction, 0.7f);
+    CHECK_MSG(!control.TakeRequest(&request), "taking it cleared it");
+
+    control.RequestCapped(0.5f);
+    control.RequestFixed(0.5f);
+    CHECK(control.TakeRequest(&request));
+    CHECK_MSG(request.mode == RenderScaleMode::Fixed, "a pin after a ceiling wins the same way");
+
+    control.RequestCapped(2.0f);   // above the start size: the start size
+    CHECK(control.TakeRequest(&request));
+    CHECK(request.mode == RenderScaleMode::Capped);
+    CHECK_NEAR(request.fraction, 1.0f);
+    control.RequestCapped(-3.0f);  // nonsense: the smallest picture the controller allows, never zero
+    CHECK(control.TakeRequest(&request));
+    CHECK_NEAR(request.fraction, 0.1f);
+    control.RequestCapped(std::nanf(""));
+    CHECK(control.TakeRequest(&request));
+    CHECK_NEAR(request.fraction, 0.1f);
+
+    // Asked, then the controller went away before the frame took it: dropped as well. And a ceiling is no scene note.
+    control.RequestCapped(0.5f);
+    control.Publish(false, 1.0f);
+    CHECK(!control.TakeRequest(&request));
+    control.Publish(true, 1.0f);
+    control.RequestCapped(0.5f);
+    CHECK(!control.TakeScene(nullptr, nullptr));
+}
+
+// ---- 12. Balanced and Fast as ceilings (RenderScaleMode::Capped) ----
+
+// The windows of the quality floor's table, each started at the scale the game's 2.2 MP budget allows (SupersonicApp's
+// arithmetic): 1.0, 1.0, 0.92 and 0.73.
+struct E50Window {
+    const char* name;
+    std::uint32_t width;
+    std::uint32_t height;
+};
+constexpr E50Window kE50Windows[] = {
+    {"1600x720", 1600u, 720u},
+    {"1340x800", 1340u, 800u},
+    {"2400x1080", 2400u, 1080u},
+    {"2560x1600", 2560u, 1600u},
+};
+
+// A controller's scales are two decimals, so one under a ceiling that is not (0.73 x 0.5 = 0.365) starts at the ceiling
+// rounded (0.37), as a pin of that size is held at it: half a hundredth, and a hair for float (0.365 + 0.005 is 0.37 only
+// to the last bit).
+constexpr float kE50CeilingSlack = 0.0051f;
+
+// The game's declaration for a window, with the start its pixel budget allows.
+static DynamicResolutionConfig e50DeclaredFor(const E50Window& window) {
+    constexpr std::uint32_t kStartMaxPixels = 2200000;
+    DynamicResolutionConfig declared = e50Declared(1.0f);
+    const double windowPixels = static_cast<double>(window.width) * static_cast<double>(window.height);
+    if (windowPixels > kStartMaxPixels) {
+        declared.startScale = std::min(declared.startScale, static_cast<float>(std::sqrt(kStartMaxPixels / windowPixels)));
+    }
+    return declared;
+}
+
+// A ceiling as the tests expect it: what was asked, no higher than the window's quality floor `q` where the switch
+// DynamicResolution::kCeilingAtMostTheQualityFloor is on (`underQ`), inside [the window's floor, 1].
+static float e50Ceiling(float asked, float windowFloor, float q, bool underQ) {
+    const float ceiling = underQ ? std::min(asked, q) : asked;
+    return std::min(std::max(ceiling, windowFloor), 1.0f);
+}
+
+// Every field of a configuration, the floats bit for bit (a field added to DynamicResolutionConfig belongs here too).
+static bool e50SameConfig(const DynamicResolutionConfig& a, const DynamicResolutionConfig& b) {
+    return a.enabled == b.enabled && e50SameBits(a.startScale, b.startScale) && a.startMaxPixels == b.startMaxPixels &&
+           e50SameBits(a.minScale, b.minScale) && e50SameBits(a.maxScale, b.maxScale) &&
+           e50SameBits(a.targetFps, b.targetFps) && e50SameBits(a.headroomFps, b.headroomFps) &&
+           e50SameBits(a.windowSeconds, b.windowSeconds) && e50SameBits(a.upAfterSeconds, b.upAfterSeconds) &&
+           a.relaxedRise == b.relaxedRise && e50SameBits(a.riseMargin, b.riseMargin) &&
+           a.minTargetHeight == b.minTargetHeight && e50SameBits(a.emergencyBelowFps, b.emergencyBelowFps) &&
+           e50SameBits(a.emergencyScale, b.emergencyScale) && e50SameBits(a.lowTierFps, b.lowTierFps) &&
+           a.qualityTargetHeight == b.qualityTargetHeight && e50SameBits(a.qualityMaxShare, b.qualityMaxShare) &&
+           a.windowHeight == b.windowHeight;
+}
+
+// Whether a pick asks for what the controller already is (DynamicResolution::RequestIsApplied, asked before anything is
+// changed: a new configuration forgets what the controller learned). Every request a picture row makes against every state
+// the engine can be in, and one it is never left in. The rules for a game that never asks for a ceiling are E47's: a pin is
+// applied when held at its share, Automatic whenever nothing is held (an overlay's measurement size included: Automatic then
+// acts).
+static void testE50WhetherAPickIsAlreadyAppliedInEveryState() {
+    struct Request {
+        const char* name;
+        RenderScaleMode mode;
+        float fraction;
+    };
+    const Request requests[] = {
+        {"Automatic", RenderScaleMode::Automatic, 1.0f},   // RequestAutomatic's fraction
+        {"Sharp (held at 1)", RenderScaleMode::Fixed, 1.0f},
+        {"held at 0.5", RenderScaleMode::Fixed, 0.5f},
+        {"Balanced (capped at 0.7)", RenderScaleMode::Capped, 0.7f},
+        {"Fast (capped at 0.5)", RenderScaleMode::Capped, 0.5f},
+    };
+    struct State {
+        const char* name;
+        bool pinned;
+        float pinnedFraction;
+        float cappedFraction;
+        bool applied[5];   // for each of `requests`, in order
+    };
+    const State states[] = {
+        {"the game's own controller (or the overlay's Auto)", false, 0.0f, 0.0f, {true, false, false, false, false}},
+        {"held at an overlay's measurement size", true, 0.0f, 0.0f, {false, false, false, false, false}},
+        {"held at Sharp", true, 1.0f, 0.0f, {false, true, false, false, false}},
+        {"held at 0.5", true, 0.5f, 0.0f, {false, false, true, false, false}},
+        {"capped at Balanced", false, 0.0f, 0.7f, {false, false, false, true, false}},
+        {"capped at Fast", false, 0.0f, 0.5f, {false, false, false, false, true}},
+        {"capped at the whole start size (no lower tier: not Automatic)", false, 0.0f, 1.0f, {false, false, false, false, false}},
+        {"held at Sharp with a ceiling left over (never so)", true, 1.0f, 0.5f, {false, true, false, false, false}},
+    };
+    for (const State& state : states) {
+        for (std::size_t i = 0; i < std::size(requests); ++i) {
+            const bool applied = DynamicResolution::RequestIsApplied(requests[i].mode, requests[i].fraction, state.pinned,
+                                                                     state.pinnedFraction, state.cappedFraction);
+            CHECK_MSG(applied == state.applied[i], std::string(requests[i].name) + " asked when " + state.name + ": " +
+                                                       (applied ? "applied" : "not applied"));
+        }
+    }
+}
+
+// The configuration each pick gives the controller, for the four windows: Automatic is the window's own, field for field;
+// Fixed is the pin E47 made inline, bit for bit; Capped is the window's own with its start and its ceiling at max(floor,
+// start x f), every floor, the emergency floor, the relaxed rise and the target kept, and no lower tier. A ceiling under the
+// floor is the floor, and still falls to the emergency floor where the frames ask; so is one under 1.25 x the floor where
+// there is an emergency floor (DynamicResolution::kCeilingNearTheFloor), and only there.
+static void testE50EachPickIsAConfigurationForItsWindow() {
+    struct Expected {
+        float start;
+        float floor;
+        float q;
+        float balanced;
+        float fast;
+        float fastFloor;   // the floor Fast's configuration runs on, on a loop the display paces (unpaced: the window's)
+    };
+    const Expected expected[] = {
+        {1.0f, 0.5f, 0.75f, 0.7f, 0.5f, 0.5f},          // 1600x720: Fast's ceiling is the 360-line floor itself
+        {1.0f, 0.45f, 0.68f, 0.7f, 0.5f, 0.5f},         // 1340x800: Balanced's above Q; Fast's under 0.5625, the floor
+        {0.92f, 0.34f, 0.5f, 0.644f, 0.46f, 0.34f},     // 2400x1080: Balanced's above Q; Fast's over 0.425
+        {0.73f, 0.3f, 0.34f, 0.511f, 0.365f, 0.3f},     // 2560x1600: both above Q; no emergency floor, so Fast's floor stays
+    };
+    const bool underQ = DynamicResolution::kCeilingAtMostTheQualityFloor;
+    for (std::size_t w = 0; w < std::size(kE50Windows); ++w) {
+        const E50Window& window = kE50Windows[w];
+        const Expected& want = expected[w];
+        const std::string name = window.name;
+        const DynamicResolutionConfig declared = e50DeclaredFor(window);
+        const DynamicResolutionConfig forWindow = DynamicResolution::ForWindow(declared, window.height);
+        const float start = DynamicResolution(forWindow).Scale();
+        CHECK_MSG(std::fabs(start - want.start) < 1e-4f, name + ": started at " + std::to_string(start));
+        CHECK_MSG(std::fabs(forWindow.minScale - want.floor) < 1e-4f, name + ": floor " + std::to_string(forWindow.minScale));
+
+        CHECK_MSG(e50SameConfig(DynamicResolution::ForRequest(declared, window.height, start, RenderScaleMode::Automatic, 1.0f),
+                                forWindow),
+                  name + ": Automatic is the window's own configuration");
+        for (const float fraction : {1.0f, 0.7f, 0.5f, 0.1f}) {
+            // SupersonicApp's pin before ForRequest, operand for operand (its m_resolutionConfig is ForWindow's).
+            const DynamicResolutionConfig e47 =
+                DynamicResolution::Pinned(forWindow, std::min(1.0f, std::max(forWindow.minScale, start * fraction)));
+            CHECK_MSG(e50SameConfig(DynamicResolution::ForRequest(declared, window.height, start, RenderScaleMode::Fixed, fraction),
+                                    e47),
+                      name + ": Fixed " + std::to_string(fraction) + " is E47's pin, bit for bit");
+        }
+        const float asked[] = {want.balanced, want.fast, 0.0f};   // 0: a tenth of the start, under every floor
+        const float floors[] = {want.floor, want.fastFloor, want.floor};
+        const float fractions[] = {0.7f, 0.5f, 0.1f};
+        for (std::size_t i = 0; i < std::size(fractions); ++i) {
+            const DynamicResolutionConfig capped =
+                DynamicResolution::ForRequest(declared, window.height, start, RenderScaleMode::Capped, fractions[i], true);
+            const float ceiling = e50Ceiling(asked[i], want.floor, want.q, underQ);
+            const std::string what = name + ": capped at " + std::to_string(fractions[i]);
+            CHECK_MSG(std::fabs(capped.maxScale - ceiling) < 1e-4f && std::fabs(capped.startScale - ceiling) < 1e-4f,
+                      what + " has its ceiling at " + std::to_string(capped.maxScale) + ", expected " + std::to_string(ceiling));
+            DynamicResolutionConfig kept = forWindow;
+            kept.startScale = kept.maxScale = capped.maxScale;
+            if (std::fabs(floors[i] - forWindow.minScale) > 1e-4f) kept.minScale = capped.maxScale;   // the ceiling is the floor
+            kept.lowTierFps = 0.0f;
+            CHECK_MSG(e50SameConfig(capped, kept) && std::fabs(capped.minScale - floors[i]) < 1e-4f,
+                      what + ": floor " + std::to_string(capped.minScale) + "; everything else is the window's own, but the lower tier");
+            const DynamicResolution controller(capped);
+            CHECK_MSG(!controller.Tiered() && controller.Scale() <= ceiling + kE50CeilingSlack,
+                      what + ": no tiers, and it starts at the ceiling (" + std::to_string(controller.Scale()) + ")");
+        }
+    }
+
+    // Capped itself: a ceiling above the window is the window; one under the floor is the floor, and the emergency floor is
+    // still under it: a slow GPU takes the picture there, where a pin of the same size would hold it.
+    const DynamicResolutionConfig forPhone = DynamicResolution::ForWindow(e50Declared(1.0f), 720);   // floor 0.5, emergency 0.3
+    CHECK_NEAR(DynamicResolution::Capped(forPhone, 2.0f).maxScale, 1.0f);
+    const DynamicResolutionConfig atTheFloor = DynamicResolution::Capped(forPhone, 0.1f);
+    CHECK_MSG(std::fabs(atTheFloor.maxScale - 0.5f) < 1e-4f && std::fabs(atTheFloor.emergencyScale - 0.3f) < 1e-4f,
+              "a ceiling under the floor is the floor, with the emergency floor kept");
+    DynamicResolution slow(atTheFloor);
+    driveAStandInGpu(slow, 0.4, 4000);
+    CHECK_NEAR(slow.Scale(), 0.3f);
+    // Near the floor: under 1.25 x the 360-line floor (0.45 on 800 lines: 0.5625) the ceiling is the floor, with the
+    // emergency floor and its trigger kept; at or over it the floor is the window's. With no emergency floor (1600 lines,
+    // whose 360-line floor is under the declared 0.3) the floor stays, the one way down.
+    const DynamicResolutionConfig forTablet = DynamicResolution::ForWindow(e50Declared(1.0f), 800);
+    const DynamicResolutionConfig nearTheFloor = DynamicResolution::Capped(forTablet, 0.56f, true);
+    CHECK_MSG(std::fabs(nearTheFloor.minScale - 0.56f) < 1e-4f && std::fabs(nearTheFloor.maxScale - 0.56f) < 1e-4f &&
+                  std::fabs(nearTheFloor.emergencyScale - 0.3f) < 1e-4f &&
+                  std::fabs(nearTheFloor.emergencyBelowFps - 30.0f) < 1e-4f,
+              "a ceiling of 0.56 over a 0.45 floor is the floor, the emergency floor under it: floor " +
+                  std::to_string(nearTheFloor.minScale));
+    CHECK_MSG(std::fabs(DynamicResolution::Capped(forTablet, 0.57f, true).minScale - 0.45f) < 1e-4f,
+              "a ceiling of 0.57 over a 0.45 floor keeps the floor");
+    CHECK_MSG(std::fabs(DynamicResolution::Capped(forTablet, 0.56f, false).minScale - 0.45f) < 1e-4f,
+              "unpaced, a ceiling near the floor keeps the floor: the step to it is judged on what it bought");
+    const DynamicResolutionConfig forPad = DynamicResolution::ForWindow(e50Declared(0.73f), 1600);
+    CHECK_MSG(forPad.emergencyScale == 0.0f &&
+                  std::fabs(DynamicResolution::Capped(forPad, 0.365f, true).minScale - 0.3f) < 1e-4f,
+              "with no emergency floor a ceiling near the floor keeps the floor");
+}
+
+// A ceiling at its floor (1340x800's Fast: 0.5 over the 0.45 floor, made the floor) still falls to the emergency floor, so
+// it is not a size held: a scene left remembers its size and holds, a scene entered settles, a first visit starts where the
+// last scene was and rises, and a scene seen before is restored. A heavy menu at 288 ms/MP falls to the emergency floor; a
+// light level after it rises back to the ceiling; the menu again is where it was left, settling.
+static void testE50ACeilingAtItsFloorRemembersEachScene() {
+    const E50Window& tablet = kE50Windows[1];   // 1340x800
+    const DynamicResolutionConfig declared = e50DeclaredFor(tablet);
+    const float start = DynamicResolution(DynamicResolution::ForWindow(declared, tablet.height)).Scale();
+    const DynamicResolutionConfig config =
+        DynamicResolution::ForRequest(declared, tablet.height, start, RenderScaleMode::Capped, 0.5f, true);
+    CHECK_MSG(std::fabs(config.minScale - 0.5f) < 1e-4f && std::fabs(config.maxScale - 0.5f) < 1e-4f &&
+                  std::fabs(config.emergencyScale - 0.3f) < 1e-4f,
+              "Fast on 1340x800 is a ceiling at its floor with the emergency floor under it");
+    DynamicResolution controller(config);
+    E50Lcg rng{1301u};
+    controller.EnterScene("menu", 768);
+    e50Drive(controller, e50Device(1.072, 2.0, 288.0, 10.0), e50Stretch(60.0, 0.0), rng);
+    const float menuScale = controller.Scale();
+    CHECK_MSG(menuScale < 0.45f - 0.001f, "the heavy menu falls under the pixel floor: " + std::to_string(menuScale));
+
+    controller.EnterScene("level", 614);
+    CHECK_MSG(controller.SceneSettling() && !controller.LastSceneRemembered(),
+              "a first visit settles and is not a scene seen before");
+    CHECK_MSG(std::fabs(controller.Scale() - menuScale) < 1e-4f,
+              "a first visit starts where the menu was: " + std::to_string(controller.Scale()));
+    e50Drive(controller, e50Device(1.072, 2.0, 10.0, 5.0), e50Stretch(60.0, 0.0), rng);
+    CHECK_MSG(std::fabs(controller.Scale() - 0.5f) < 1e-4f, "the light level rose to the ceiling: " + std::to_string(controller.Scale()));
+
+    const bool moved = controller.EnterScene("menu", 768);
+    CHECK_MSG(moved && controller.LastSceneRemembered() && controller.SceneSettling(),
+              "the menu again is remembered, settles, and moves the picture");
+    CHECK_MSG(std::fabs(controller.Scale() - menuScale) < 1e-4f,
+              "the menu's own size restored: " + std::to_string(controller.Scale()) + " against " + std::to_string(menuScale));
+}
+
+// The point of a ceiling: on the slow tablet's heaviest menu a pin at Fast's size is held there at 12-13 fps, where the
+// ceiling falls through the 360-line floor to the emergency floor (as the game's own controller does) and keeps 30 or more;
+// and on a fast GPU afterwards it rises back to its ceiling and no further.
+static void testE50ACeilingFallsWhereAPinIsHeldAndRisesNoHigherThanItself() {
+    const E50Window& tablet = kE50Windows[1];   // 1340x800
+    const DynamicResolutionConfig declared = e50DeclaredFor(tablet);
+    const float start = DynamicResolution(DynamicResolution::ForWindow(declared, tablet.height)).Scale();
+    DynamicResolution pin(DynamicResolution::ForRequest(declared, tablet.height, start, RenderScaleMode::Fixed, 0.5f));
+    DynamicResolution ceiling(DynamicResolution::ForRequest(declared, tablet.height, start, RenderScaleMode::Capped, 0.5f));
+    pin.EnterScene("menu", 768);
+    ceiling.EnterScene("menu", 768);
+    const E50Device heavy = e50Device(1.072, 2.0, 288.0, 10.0);
+    E50Lcg pinRng{1201u};
+    E50Lcg ceilingRng{1201u};
+    const E50Run pinRun = e50Drive(pin, heavy, E50Drive{}, pinRng);
+    const E50Run ceilingRun = e50Drive(ceiling, heavy, E50Drive{}, ceilingRng);
+    e50PrintRest("case 12, GE8320 menu 288 ms/MP held at Fast's size", pin, pinRun);
+    e50PrintRest("case 12, GE8320 menu 288 ms/MP capped at Fast's size", ceiling, ceilingRun);
+    CHECK_EQ(pinRun.resizes, 0);
+    CHECK_NEAR(pin.Scale(), 0.5f);
+    CHECK_MSG(ceiling.Scale() < 0.45f - 0.001f, "under the 360-line floor: the emergency floor is the ceiling's too");
+    CHECK_MSG(ceilingRun.RestFps() > 1.5f * pinRun.RestFps() && ceilingRun.RestFps() >= kE50SteadyFps,
+              "far faster than the pin: " + std::to_string(ceilingRun.RestFps()) + " fps against " +
+                  std::to_string(pinRun.RestFps()));
+    CHECK(ceilingRun.maxScale <= 0.5f + kE50CeilingSlack);
+
+    const E50Run fastRun = e50Drive(ceiling, e50Device(1.072, 2.0, 10.0, 5.0), E50Drive{}, ceilingRng);
+    CHECK_MSG(std::fabs(ceiling.Scale() - 0.5f) < 1e-4f, "back at its ceiling: " + std::to_string(ceiling.Scale()));
+    CHECK(fastRun.maxScale <= 0.5f + kE50CeilingSlack);
+}
+
+// Never slower. The four picks against the same stand-in devices for 180 simulated seconds each (the last two minutes the
+// rest): a GPU with a part that ignores the picture's size of {0, 9, 20} ms and a part that follows the pixel count of {10,
+// 40, 120, 480} ms per megapixel (of the window's pixels), a CPU of kGridCpuMs, on the four windows, unpaced and paced
+// (FIFO). The picks: the game's own two-tier policy (Automatic), Balanced and Fast (ceilings of 0.7 and 0.5 of the start
+// size) and Sharp (the start size, held). No ceiling is ever exceeded (to the two decimals of kE50CeilingSlack), Balanced's
+// and Fast's median frame rates at rest are each at least kNeverSlowerShare of Automatic's, and the pin never resizes.
+// Nothing makes the second hold by construction where the policy's quality floor Q is under a ceiling (Balanced on
+// 1340x800, 2400x1080 and 2560x1600; Fast on 2560x1600, 0.365 over 0.34): both aim at the target under Q, and a ceiling's
+// small step down can be taken back where the policy's larger one is kept (DynamicResolution::kCeilingAtMostTheQualityFloor
+// is the switch for that). A ceiling just above the 360-line floor is that floor (DynamicResolution::kCeilingNearTheFloor),
+// so its fall to the emergency floor does not wait on a step to the pixel floor that a paced loop can take back. A failing
+// cell prints one "E50 grid:" line; the summary names the tightest cell of each pick.
+constexpr double kGridCpuMs = 5.0;
+constexpr double kGridSeconds = 180.0;
+constexpr double kGridRestFrom = 60.0;
+constexpr float kNeverSlowerShare = 0.94f;
+
+static void testE50ACeilingIsNeverSlowerThanAutomaticAndNeverExceeded() {
+    const double fixedCosts[] = {0.0, 9.0, 20.0};
+    const double pixelCosts[] = {10.0, 40.0, 120.0, 480.0};
+    const char* const picks[] = {"Automatic", "Balanced", "Fast", "Sharp"};
+    const bool underQ = DynamicResolution::kCeilingAtMostTheQualityFloor;
+    int cells = 0;
+    int overACeiling = 0;
+    int balancedSlower = 0;
+    int fastSlower = 0;
+    int pinResized = 0;
+    float tightestBalanced = 1e9f;
+    float tightestFast = 1e9f;
+    std::string tightestBalancedCell;
+    std::string tightestFastCell;
+    std::uint32_t seed = 12000u;
+    for (const E50Window& window : kE50Windows) {
+        const DynamicResolutionConfig declared = e50DeclaredFor(window);
+        const DynamicResolutionConfig forWindow = DynamicResolution::ForWindow(declared, window.height);
+        const float start = DynamicResolution(forWindow).Scale();
+        const float q = DynamicResolution::QualityScaleFor(forWindow, 0);
+        const float ceilings[4] = {1.0f, e50Ceiling(start * 0.7f, forWindow.minScale, q, underQ),
+                                   e50Ceiling(start * 0.5f, forWindow.minScale, q, underQ), start};
+        const double megapixels = static_cast<double>(window.width) * static_cast<double>(window.height) / 1e6;
+        for (const bool paced : {false, true}) {
+            // A ceiling near its floor is made the floor on a paced loop only (DynamicResolution::Capped).
+            const DynamicResolutionConfig configs[4] = {
+                DynamicResolution::ForRequest(declared, window.height, start, RenderScaleMode::Automatic, 1.0f),
+                DynamicResolution::ForRequest(declared, window.height, start, RenderScaleMode::Capped, 0.7f, paced),
+                DynamicResolution::ForRequest(declared, window.height, start, RenderScaleMode::Capped, 0.5f, paced),
+                DynamicResolution::ForRequest(declared, window.height, start, RenderScaleMode::Fixed, 1.0f),
+            };
+            for (const double fixedMs : fixedCosts) {
+                for (const double pixelMs : pixelCosts) {
+                    ++cells;
+                    ++seed;
+                    E50Device device = e50Device(megapixels, fixedMs, pixelMs, kGridCpuMs);
+                    device.fifo = paced;
+                    E50Run runs[4];
+                    float scales[4] = {};
+                    float autoTier = 0.0f;
+                    for (int i = 0; i < 4; ++i) {
+                        DynamicResolution controller(configs[i]);
+                        controller.SetLoopPaced(paced);
+                        controller.EnterScene("grid", 768);   // a game that notes scenes notes one for every new controller
+                        E50Lcg rng{seed};                     // the same jitter for the four
+                        runs[i] = e50Drive(controller, device, e50Stretch(kGridSeconds, kGridRestFrom), rng);
+                        scales[i] = controller.Scale();
+                        if (i == 0) autoTier = controller.TierFps();
+                    }
+                    const bool over = runs[1].maxScale > ceilings[1] + kE50CeilingSlack ||
+                                      runs[2].maxScale > ceilings[2] + kE50CeilingSlack;
+                    const float autoFps = runs[0].RestFps();
+                    const float balancedRatio = autoFps > 0.0f ? runs[1].RestFps() / autoFps : 0.0f;
+                    const float fastRatio = autoFps > 0.0f ? runs[2].RestFps() / autoFps : 0.0f;
+                    const bool balancedSlow = !(balancedRatio >= kNeverSlowerShare);
+                    const bool fastSlow = !(fastRatio >= kNeverSlowerShare);
+                    const bool resized = runs[3].resizes != 0;
+                    char cell[96];
+                    std::snprintf(cell, sizeof(cell), "%s %s, GPU %.0f ms + %.0f ms/MP", window.name,
+                                  paced ? "paced" : "unpaced", fixedMs, pixelMs);
+                    if (balancedRatio < tightestBalanced) {
+                        tightestBalanced = balancedRatio;
+                        tightestBalancedCell = cell;
+                    }
+                    if (fastRatio < tightestFast) {
+                        tightestFast = fastRatio;
+                        tightestFastCell = cell;
+                    }
+                    overACeiling += over ? 1 : 0;
+                    balancedSlower += balancedSlow ? 1 : 0;
+                    fastSlower += fastSlow ? 1 : 0;
+                    pinResized += resized ? 1 : 0;
+                    if (over || balancedSlow || fastSlow || resized) {
+                        std::string line = std::string("E50 grid: ") + cell + ":";
+                        for (int i = 0; i < 4; ++i) {
+                            char part[160];
+                            std::snprintf(part, sizeof(part), " %s%s at %.2f (most %.3f, ceiling %.3f), %.1f fps, %d resizes;",
+                                          picks[i], i == 0 ? (autoTier > 40.0f ? " in the upper tier" : " in the lower tier") : "",
+                                          static_cast<double>(scales[i]), static_cast<double>(runs[i].maxScale),
+                                          static_cast<double>(ceilings[i]), static_cast<double>(runs[i].RestFps()),
+                                          runs[i].resizes);
+                            line += part;
+                        }
+                        char verdict[200];
+                        std::snprintf(verdict, sizeof(verdict),
+                                      " Balanced at %.3f and Fast at %.3f of Automatic's frame rate%s%s%s%s",
+                                      static_cast<double>(balancedRatio), static_cast<double>(fastRatio),
+                                      over ? ", a ceiling exceeded" : "", balancedSlow ? ", Balanced slower" : "",
+                                      fastSlow ? ", Fast slower" : "", resized ? ", the pin resized" : "");
+                        line += verdict;
+                        std::printf("%s\n", line.c_str());
+                    }
+                }
+            }
+        }
+    }
+    std::printf("E50 grid: %d cells; %d with a ceiling exceeded, %d with Balanced and %d with Fast under %.2f of Automatic's "
+                "frame rate, %d with the pin resized; the tightest: Balanced at %.3f of Automatic's (%s), Fast at %.3f (%s)\n",
+                cells, overACeiling, balancedSlower, fastSlower, static_cast<double>(kNeverSlowerShare), pinResized,
+                static_cast<double>(tightestBalanced), tightestBalancedCell.c_str(), static_cast<double>(tightestFast),
+                tightestFastCell.c_str());
+    CHECK_EQ(cells, 96);
+    CHECK_EQ(overACeiling, 0);
+    CHECK_EQ(balancedSlower, 0);
+    CHECK_EQ(fastSlower, 0);
+    CHECK_EQ(pinResized, 0);
 }
 
 // 2. The Galaxy Tab A7 Lite (PowerVR GE8320, 1340x800, 1.072 MP): its menu cannot keep 58 fps at the quality floor (0.68), so
@@ -2976,6 +3409,12 @@ static void runTests() {
     testE50WithNoTiersAndNoSceneIsE47FrameForFrame();
     testE50TheQualityFloorForEachWindowAndScene();
     testE50TheSceneNoteIsLatchedLikeARequest();
+    testE50ARequestForACeilingIsLatchedAndClampedAsAFixedOneIs();
+    testE50WhetherAPickIsAlreadyAppliedInEveryState();
+    testE50EachPickIsAConfigurationForItsWindow();
+    testE50ACeilingFallsWhereAPinIsHeldAndRisesNoHigherThanItself();
+    testE50ACeilingAtItsFloorRemembersEachScene();
+    testE50ACeilingIsNeverSlowerThanAutomaticAndNeverExceeded();
     testE50ASlowTabletKeepsThirtyAtTheLargestSizeThatHoldsIt();
     testE50APhoneKeepsThirtyInItsMenuAndSixtyInItsLevels();
     testE50AFastTabletStaysInTheUpperTierThroughItsSlowStarts();
@@ -3010,4 +3449,4 @@ static void runTests() {
     testTheEnginesOwnBuildNamesNoRoot();
 }
 
-TEST_MAIN("test_gameruntime", 256)
+TEST_MAIN("test_gameruntime", 404)

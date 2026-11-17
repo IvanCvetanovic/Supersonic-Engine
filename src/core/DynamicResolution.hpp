@@ -41,6 +41,13 @@
 // A scene (EnterScene, a key the game chooses) keeps its own tier and size, and its own holds, for the session: a heavy
 // menu no longer decides a light level's size, and a reload does not re-arm a probe that already failed. Every decision
 // is still the window's median, so a hitch moves nothing. A game that sets neither has E47's controller, frame for frame.
+//
+// A PLAYER'S PICK (RenderScaleControl.hpp) is a configuration made from the game's (ForRequest): Automatic is the game's
+// own, Fixed a size held (Pinned), and Capped (E50) the game's own with its larger sizes taken away (Capped). A ceiling
+// keeps every floor and the fall, so a pick made for frames still falls where the GPU needs it to, where a pin of the same
+// size was held at a frame rate the game's own controller left behind.
+
+#include "core/RenderScaleControl.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -64,7 +71,8 @@ struct DynamicResolutionConfig {
     // game's picture needs; the controller then only has to refine.
     std::uint32_t startMaxPixels{0};
     // The scale never leaves this range. The floor is a picture still worth looking at (a third of the window's size); the
-    // ceiling is the window's own size. A floor equal to the ceiling is a FIXED scale: no controller, only a size.
+    // ceiling is the window's own size. A floor equal to the ceiling is a FIXED scale: no controller, only a size (unless an
+    // emergency floor lies under it, below: the scale may then still fall there).
     float minScale{0.3f};
     float maxScale{1.0f};
 
@@ -153,8 +161,11 @@ public:
     // controller (no tiers, no scene).
     void NoteResume();
 
-    // Whether the two tiers are in force (lowTierFps, mended, on an enabled controller that is not held at one size).
+    // Whether the two tiers are in force (lowTierFps, mended, on an enabled controller whose floor is under its ceiling).
     bool Tiered() const;
+    // Whether the game noted a scene to this controller (EnterScene): with the tiers, what takes ObserveFrame past E47's
+    // controller, and what a resume (NoteResume) and a window without focus are for.
+    bool HasScene() const { return m_hasScene; }
     // The frame rate the current tier keeps (targetFps or lowTierFps); 0 with no tiers.
     float TierFps() const;
     // The quality floor of the current scene, as a scale; minScale with no tiers.
@@ -280,6 +291,40 @@ public:
     // The same configuration held at one size: no controller, only a scale (min = max = start), with no emergency floor to let
     // it fall, no rise, no pixel floor. What a player's pick of a size, or a measurement's fixed size, is.
     static DynamicResolutionConfig Pinned(const DynamicResolutionConfig& config, float scale);
+    // E50. A configuration worked out for its window (ForWindow) with a ceiling: it starts at `ceiling` and never goes above
+    // it (inside [minScale, maxScale]: a ceiling under the floor is the floor), with every floor, the emergency floor, the
+    // relaxed rise and the target kept, and no lower tier (a ceiling is asked for frames, not for a steady lowTierFps). Unlike
+    // a pin, it still falls where the GPU needs it to, to the emergency floor if need be. On a loop the display paces
+    // (`paced`), where there is an emergency floor and the ceiling is under kCeilingNearTheFloor x minScale, the ceiling is
+    // the floor as well (minScale = maxScale, the emergency floor kept): a window under emergencyBelowFps falls straight to
+    // the emergency floor. Unpaced, the small step to the pixel floor shows what it bought and is judged as any step is.
+    static DynamicResolutionConfig Capped(const DynamicResolutionConfig& forWindow, float ceiling, bool paced = false);
+    // The step from a ceiling under 1.25 x the pixel floor down to that floor cuts fewer than about a third of the pixels
+    // (1 - 1/1.25^2 = 0.36): on a loop the display paces it can land in the same refresh interval, be taken back as a step
+    // that bought nothing, and hold the picture above the floor from which alone the emergency floor is reached (a 1340x800
+    // tablet's Fast, 0.5 over 0.45, rested at 20 fps where the game's own controller kept 30 at the emergency floor).
+    static constexpr float kCeilingNearTheFloor = 1.25f;
+    // E50. The configuration a player's pick gives the controller: `declared` is the game's own (the start size its budget
+    // chose included), `windowHeight` the window it is worked out for, `startScale` the scale the controller started at (a
+    // pick's fraction is a share of it). Automatic is ForWindow; Fixed is the size held at fraction x startScale, no lower
+    // than the window's floor and no higher than the window (Pinned); Capped is the window's configuration under a ceiling of
+    // fraction x startScale (Capped; `paced` as there). Pure, so a test can say what a pick, or a new window height under
+    // one, asks for.
+    static DynamicResolutionConfig ForRequest(const DynamicResolutionConfig& declared, std::uint32_t windowHeight,
+                                              float startScale, RenderScaleMode mode, float fraction, bool paced = false);
+    // E50. Whether a pick asks for what the controller already is, so that the engine changes nothing (a new configuration
+    // forgets what the controller learned): `pinned` and `pinnedFraction` say whether the picture is held and at which
+    // share of the start size (0 where a measurement's preset held it, which no pick asks for), `cappedFraction` the ceiling
+    // in force (0 for none). Fixed is applied when held at that share; Automatic when neither held nor capped; Capped when not
+    // held and capped at that share.
+    static bool RequestIsApplied(RenderScaleMode mode, float fraction, bool pinned, float pinnedFraction, float cappedFraction);
+    // E50, a switch for the case where a ceiling can settle larger than the game's own controller: with tiers, the upper
+    // tier never goes below its quality floor Q, so on a window where Q is under a ceiling (a 2560x1600 tablet started at
+    // 0.73 has Q 0.34 and Fast's ceiling 0.365) both aim at the target below Q, and a ceiling's small step down can be taken
+    // back where the controller's large one is kept. On, a Capped pick's ceiling is no higher than the window's Q for
+    // qualityTargetHeight lines (on a tiered configuration only: with no tiers there is no Q). Off by default: it would lower
+    // Balanced on most windows (0.7 to 0.68 on a 1340x800 tablet, to 0.5 on a 2400x1080 phone) for the sake of that one case.
+    static constexpr bool kCeilingAtMostTheQualityFloor = false;
 
 private:
     // What a scene learned, kept while another is current: its tier and size, and every hold with the length of the next.
@@ -312,7 +357,9 @@ private:
     void SwitchTier(bool lowTier, float scale);
     SceneMemory Remember() const;
     void StartSettle();
-    bool Fixed() const { return m_declared.minScale >= m_declared.maxScale; }
+    // Held at one size: a floor at the ceiling with no emergency floor under it (m_declared is mended, so an emergency floor
+    // that is there is under minScale). One with an emergency floor still falls, and remembers its scenes like any other.
+    bool Fixed() const { return m_declared.minScale >= m_declared.maxScale && m_declared.emergencyScale <= 0.0f; }
     // The lowest scale there is: the emergency floor when the config has one, else minScale.
     float AbsoluteFloor() const { return m_config.emergencyScale > 0.0f ? m_config.emergencyScale : m_config.minScale; }
     // The floor a shortfall at `fps` may fall to from the current scale: minScale from above (a fall is measured at the

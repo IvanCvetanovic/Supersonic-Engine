@@ -1701,7 +1701,14 @@ void SupersonicApp::Run() {
                     qualityMoved) {
                     m_resolutionConfig = forWindow;
                     if (!m_scalePinned) {
-                        m_dynamicResolution->Reconfigure(m_resolutionConfig);
+                        // E50: a ceiling the game asked for is worked out again for the new window (its floor may have
+                        // moved under it), so a rotation does not drop it.
+                        m_dynamicResolution->Reconfigure(
+                            m_cappedFraction > 0.0f
+                                ? DynamicResolution::ForRequest(m_declaredResolution, windowHeight, m_controllerStartScale,
+                                                                RenderScaleMode::Capped, m_cappedFraction,
+                                                                m_dynamicResolution->LoopPaced())
+                                : m_resolutionConfig);
                         m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
                     }
                 } else if (!m_scalePinned) {
@@ -1714,31 +1721,48 @@ void SupersonicApp::Run() {
             // picture already is changes nothing (a Reconfigure forgets what was learned).
             RenderScaleRequest request;
             if (m_renderScaleControl.TakeRequest(&request)) {
-                const bool already = request.mode == RenderScaleMode::Fixed
-                                         ? (m_scalePinned && m_pinnedFraction == request.fraction)
-                                         : !m_scalePinned;
-                if (!already) {
+                if (!DynamicResolution::RequestIsApplied(request.mode, request.fraction, m_scalePinned, m_pinnedFraction,
+                                                         m_cappedFraction)) {
+                    // The configuration each pick asks for is DynamicResolution::ForRequest's. A pin is worked out for the
+                    // window m_resolutionConfig was (it is ForWindow of the declaration for that height, so this is the pin
+                    // E47 made, field for field).
+                    float ceiling = 0.0f;
                     if (request.mode == RenderScaleMode::Fixed) {
-                        const float fixed = std::min(1.0f, std::max(m_resolutionConfig.minScale, m_controllerStartScale * request.fraction));
-                        m_dynamicResolution->Reconfigure(DynamicResolution::Pinned(m_resolutionConfig, fixed));
+                        m_dynamicResolution->Reconfigure(DynamicResolution::ForRequest(m_declaredResolution,
+                                                                                       m_resolutionConfig.windowHeight,
+                                                                                       m_controllerStartScale,
+                                                                                       RenderScaleMode::Fixed, request.fraction));
                         m_scalePinned = true;
                         m_pinnedFraction = request.fraction;
+                        m_cappedFraction = 0.0f;
                     } else {
-                        // Back to the controller's own choice, from where a launch starts and not from the size that was held: a
-                        // small held picture on a loop the display paces would never be lifted (a rise needs 110 fps there).
-                        m_resolutionConfig = DynamicResolution::ForWindow(m_declaredResolution, m_swapchain->GetExtent().height);
+                        // Back to the controller's own choice (or, E50, the controller under a ceiling), from where a launch
+                        // starts and not from the size that was held: a small held picture on a loop the display paces would
+                        // never be lifted (a rise needs 110 fps there). A ceiling starts at the ceiling. (windowHeight is the
+                        // swapchain's height, read above in this frame.)
+                        m_resolutionConfig = DynamicResolution::ForWindow(m_declaredResolution, windowHeight);
                         const bool paced = m_dynamicResolution->LoopPaced();
-                        m_dynamicResolution = std::make_unique<DynamicResolution>(m_resolutionConfig);
+                        const DynamicResolutionConfig config =
+                            DynamicResolution::ForRequest(m_declaredResolution, windowHeight, m_controllerStartScale,
+                                                          request.mode, request.fraction, paced);
+                        m_dynamicResolution = std::make_unique<DynamicResolution>(config);
                         m_dynamicResolution->SetLoopPaced(paced);
                         // E50: the new controller takes up the scene the game is in (adopted where it is, with no settle).
                         if (!m_sceneKey.empty()) m_dynamicResolution->EnterScene(m_sceneKey, m_sceneLines);
                         m_scalePinned = false;
                         m_pinnedFraction = 0.0f;
+                        const bool capped = request.mode == RenderScaleMode::Capped;
+                        m_cappedFraction = capped ? request.fraction : 0.0f;
+                        if (capped) ceiling = config.maxScale;
                     }
                     m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
-                    SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: "
-                                                         << (request.mode == RenderScaleMode::Fixed ? "held at " : "automatic from ")
-                                                         << m_dynamicResolution->Scale() << " (asked by the game).";
+                    if (request.mode == RenderScaleMode::Capped) {
+                        SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: capped at " << ceiling << " (asked by the game).";
+                    } else {
+                        SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: "
+                                                             << (request.mode == RenderScaleMode::Fixed ? "held at " : "automatic from ")
+                                                             << m_dynamicResolution->Scale() << " (asked by the game).";
+                    }
                 }
             }
             // E50: the scene the game noted (opt-in: a game that notes none never gets here). Taken after the request, so a
@@ -1776,6 +1800,8 @@ void SupersonicApp::Run() {
                 const float fixed = PerfOverlay::PresetScale(preset);
                 m_scalePinned = fixed > 0.0f;
                 m_pinnedFraction = 0.0f;
+                // E50: a measurement's size, or Auto (the game's own configuration, m_resolutionConfig), lifts a ceiling.
+                m_cappedFraction = 0.0f;
                 DynamicResolutionConfig config = fixed > 0.0f ? DynamicResolution::Pinned(m_resolutionConfig, fixed) : m_resolutionConfig;
                 m_dynamicResolution->Reconfigure(config);
                 m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
@@ -1784,14 +1810,16 @@ void SupersonicApp::Run() {
                                                      << m_dynamicResolution->Scale() << ".";
             }
         }
-        // E50, where the tiers are in force (for any other controller both lines below change nothing): a resume settles the
-        // controller as a scene's entry does, and the frames of a window without focus (a phone's quarter-second of frames
-        // after it starts leaving, the editor behind another window) are not fed to it at all. The focus is the window's as
-        // this iteration's events left it (ApplyCursorMode, above), at the end of the frame rawDelta measured.
-        const bool tieredController = m_dynamicResolution && m_dynamicResolution->Tiered();
-        if (tieredController && m_resumeForController) m_dynamicResolution->NoteResume();
+        // E50, where the tiers are in force or the game noted a scene (a ceiling, which has no tiers, included; NoteResume's own
+        // guard): a resume settles the controller as a scene's entry does, and the frames of a window without focus (a
+        // phone's quarter-second of frames after it starts leaving, the editor behind another window) are not fed to it at
+        // all. For a controller with neither, E47's, both lines below change nothing. The focus is the window's as this
+        // iteration's events left it (ApplyCursorMode, above), at the end of the frame rawDelta measured.
+        const bool sceneController =
+            m_dynamicResolution && (m_dynamicResolution->Tiered() || m_dynamicResolution->HasScene());
+        if (sceneController && m_resumeForController) m_dynamicResolution->NoteResume();
         m_resumeForController = false;
-        const bool observeFrame = m_dynamicResolution && !(tieredController && !Input::WindowFocused());
+        const bool observeFrame = m_dynamicResolution && !(sceneController && !Input::WindowFocused());
         const bool resized = observeFrame && m_dynamicResolution->ObserveFrame(rawDelta, frameWaitSeconds);
         // A change of tier names its own scale, so a resize it made is logged once, by its own line below.
         const DynamicResolution::TierChange tierChange =

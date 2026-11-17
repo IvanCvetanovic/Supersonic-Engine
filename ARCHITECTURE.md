@@ -845,6 +845,20 @@ the session (`DynamicResolution::EnterScene`), and the frames after a scene's en
 or a resume (30 frames and a second at least) are not measured. A game that sets
 neither gets the controller frame for frame as it was.
 
+A player's pick (`RenderScaleControl`) reaches the controller as a configuration,
+`DynamicResolution::ForRequest`: Automatic is the game's own, Fixed a size held
+(`Pinned`: no floor to fall to, no rise), and Capped (E50) the game's own under a
+ceiling (`Capped`: it starts at the ceiling and never goes above it, with every
+floor and the fall kept and no lower tier; a ceiling under 1.25 x the pixel floor,
+with an emergency floor under it, is that floor too, since a step that small down
+to the pixel floor can be taken back on a paced loop and leave the emergency floor
+out of reach). A pin chosen to buy frames was held at
+its size on a GPU too slow for it, slower than the controller it replaced; a
+ceiling only takes the larger sizes away. The engine builds a new controller for
+a ceiling, as for Automatic, and works the ceiling out again when the window's
+height changes. `RequestIsApplied` decides whether a pick changes anything at all,
+since a new configuration forgets what the controller learned.
+
 **What the scene's numbers mean: `RenderSettings::encoding`.** Everything above
 is `LinearHdr`, the default. A scene can say otherwise, and it is a scene
 setting (serialised as a word, omitted at the default) because it decides how
