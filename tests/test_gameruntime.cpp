@@ -22,7 +22,12 @@
 #include "core/WindowControl.hpp"
 #include "platform/ExecutablePath.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -1476,6 +1481,897 @@ static void testTheRenderScaleControlLatchesTheLastRequestAndDropsOneWithNothing
     CHECK(control.Mode() == RenderScaleMode::Automatic);
 }
 
+// ---- E50: a lower tier under a quality floor, and a memory per scene (opt-in) ----------------------------------------------
+//
+// The stand-in devices below are hand estimates of real ones (no tablet was measured at these costs). Every bound that is an
+// estimate is a named constant beside its test, and each such test prints one "E50 rest:" line (the case, its tier, the
+// scale, the frame rate and the resizes it came to rest at), so that the bounds can be set from a run with a margin of at
+// least 0.03. A tier assertion is never loosened.
+
+constexpr float kE50SteadyFps = 28.2f;   // "a steady 30": a window median at 94% of it
+
+// A sequence that is the same on every compiler (std::uniform_real_distribution is not): uniform in [-1, 1].
+struct E50Lcg {
+    std::uint32_t state;
+    double Next() {
+        state = state * 1664525u + 1013904223u;
+        return static_cast<double>(state >> 8) / 8388607.5 - 1.0;
+    }
+};
+
+// A GPU and a CPU: the frame is the longer of the CPU's work and the GPU's (a fixed part plus a part that follows the pixel
+// count), the CPU waits for the rest, both with +-5% jitter; a display-paced loop (FIFO) rounds the frame up to whole
+// sixtieths. Milliseconds. `thermal` swings the GPU's cost by that share over `thermalPeriodSeconds`.
+struct E50Device {
+    double megapixels{1.0};
+    double gpuFixedMs{2.0};
+    double msPerMegapixel{100.0};
+    double cpuMs{10.0};
+    bool fifo{false};
+    double thermal{0.0};
+    double thermalPeriodSeconds{60.0};
+};
+
+struct E50Frame {
+    float frameSeconds;
+    float waitSeconds;
+};
+
+static E50Frame e50Frame(const E50Device& device, float scale, double t, E50Lcg& rng) {
+    const double heat = 1.0 + device.thermal * std::sin(6.283185307179586 * t / device.thermalPeriodSeconds);
+    const double pixels = static_cast<double>(scale) * static_cast<double>(scale);
+    const double gpu = (device.gpuFixedMs + device.msPerMegapixel * device.megapixels * pixels) * heat * (1.0 + 0.05 * rng.Next());
+    const double cpu = device.cpuMs * (1.0 + 0.05 * rng.Next());
+    double frame = std::max(cpu, gpu);
+    if (device.fifo) frame = std::ceil(frame * 0.06 - 1e-9) / 0.06;
+    return {static_cast<float>(frame / 1000.0), static_cast<float>(std::max(0.0, frame - cpu) / 1000.0)};
+}
+
+// One stretch of a scene: 5 simulated minutes by default, the last 4 of them the rest.
+struct E50Drive {
+    double seconds{300.0};
+    double restFrom{60.0};
+    double slowSeconds{0.0};          // first, frames at 8-15 fps whatever the size (a launch's compiles, a load's first draws)
+    float loadFrameSeconds{0.0f};     // first of all, one frame this long
+    double hitchEverySeconds{0.0};    // a 150 ms frame this often (it takes no draw from the sequence)
+    int hitchFrames{1};               // ... or a burst of this many in a row
+    float hitchWaitSeconds{0.0f};     // each with this wait for the GPU
+};
+
+// (Built field by field: a brace list that names only some fields is a warning on some compilers.)
+static E50Device e50Device(double megapixels, double gpuFixedMs, double msPerMegapixel, double cpuMs) {
+    E50Device device;
+    device.megapixels = megapixels;
+    device.gpuFixedMs = gpuFixedMs;
+    device.msPerMegapixel = msPerMegapixel;
+    device.cpuMs = cpuMs;
+    return device;
+}
+
+static E50Drive e50Stretch(double seconds, double restFrom) {
+    E50Drive drive;
+    drive.seconds = seconds;
+    drive.restFrom = restFrom;
+    return drive;
+}
+
+struct E50Run {
+    double seconds{0.0};
+    int resizes{0};
+    int restResizes{0};
+    int tierChanges{0};
+    int downs{0};
+    int probes{0};
+    int probeFailures{0};
+    double firstSteadyWindowSeconds{-1.0};
+    double secondsBelowStart{0.0};    // below 0.99 of the scale the stretch started at
+    std::vector<double> resizeTimes;
+    std::vector<double> probeTimes;
+    std::vector<double> failTimes;
+    std::vector<double> holdsAtFailure;
+    std::vector<float> restFrames;
+
+    float RestFps() const {
+        if (restFrames.empty()) return 0.0f;
+        std::vector<float> sorted = restFrames;
+        std::sort(sorted.begin(), sorted.end());
+        return 1.0f / sorted[sorted.size() / 2];
+    }
+    int ResizesWithin(double limit) const {
+        return static_cast<int>(std::count_if(resizeTimes.begin(), resizeTimes.end(), [limit](double t) { return t <= limit; }));
+    }
+};
+
+static E50Run e50Drive(DynamicResolution& controller, const E50Device& device, const E50Drive& drive, E50Lcg& rng) {
+    E50Run run;
+    const float start = controller.Scale();
+    std::uint64_t windows = controller.WindowsEnded();
+    double nextHitch = drive.hitchEverySeconds > 0.0 ? drive.hitchEverySeconds : 1e300;
+    int hitchesLeft = 0;
+    bool first = true;
+    double t = 0.0;
+    while (t < drive.seconds) {
+        E50Frame frame{};
+        if (t >= nextHitch) {
+            hitchesLeft = drive.hitchFrames;
+            nextHitch += drive.hitchEverySeconds;
+        }
+        if (first && drive.loadFrameSeconds > 0.0f) {
+            frame = {drive.loadFrameSeconds, -1.0f};
+        } else if (hitchesLeft > 0) {
+            frame = {0.150f, drive.hitchWaitSeconds};
+            --hitchesLeft;
+        } else if (t < drive.slowSeconds) {
+            frame = {static_cast<float>(1.0 / (11.5 + 3.5 * rng.Next())), 0.0f};
+        } else {
+            frame = e50Frame(device, controller.Scale(), t, rng);
+        }
+        first = false;
+        if (controller.Scale() < 0.99f * start) run.secondsBelowStart += frame.frameSeconds;
+        t += frame.frameSeconds;
+        const bool resting = t >= drive.restFrom;
+        if (resting) run.restFrames.push_back(frame.frameSeconds);
+        if (controller.ObserveFrame(frame.frameSeconds, frame.waitSeconds)) {
+            ++run.resizes;
+            run.resizeTimes.push_back(t);
+            if (resting) ++run.restResizes;
+        }
+        switch (controller.TakeTierChange()) {
+        case DynamicResolution::TierChange::Down:
+            ++run.tierChanges;
+            ++run.downs;
+            break;
+        case DynamicResolution::TierChange::Probe:
+            ++run.tierChanges;
+            ++run.probes;
+            run.probeTimes.push_back(t);
+            break;
+        case DynamicResolution::TierChange::ProbeFailed:
+            ++run.tierChanges;
+            ++run.probeFailures;
+            run.failTimes.push_back(t);
+            run.holdsAtFailure.push_back(controller.TierHoldSeconds());
+            break;
+        case DynamicResolution::TierChange::None:
+            break;
+        }
+        if (controller.WindowsEnded() != windows) {
+            windows = controller.WindowsEnded();
+            if (run.firstSteadyWindowSeconds < 0.0 && controller.WindowMedianMilliseconds() > 0.0f &&
+                1000.0f / controller.WindowMedianMilliseconds() >= kE50SteadyFps) {
+                run.firstSteadyWindowSeconds = t;
+            }
+        }
+    }
+    run.seconds = t;
+    return run;
+}
+
+static void e50PrintRest(const std::string& name, const DynamicResolution& controller, const E50Run& run) {
+    std::printf("E50 rest: %s: tier %.0f, scale %.2f, %.1f fps, %d resizes (%d at rest), %d tier changes (%d probes), "
+                "first window at %.1f fps or more after %.1f s\n",
+                name.c_str(), static_cast<double>(controller.TierFps()), static_cast<double>(controller.Scale()),
+                static_cast<double>(run.RestFps()), run.resizes, run.restResizes, run.tierChanges, run.probes,
+                static_cast<double>(kE50SteadyFps), run.firstSteadyWindowSeconds);
+}
+
+// The configuration a phone game asks for (E47's refinements, as Penumbra sets them), worked out for a window `windowHeight`
+// lines high, with the tiers (30 fps below 540 lines) or without.
+static DynamicResolutionConfig e50Config(float startScale, std::uint32_t windowHeight, bool tiers = true) {
+    DynamicResolutionConfig declared;
+    declared.enabled = true;
+    declared.startScale = startScale;
+    declared.relaxedRise = true;
+    declared.minTargetHeight = 360;
+    declared.emergencyBelowFps = 30.0f;
+    if (tiers) {
+        declared.lowTierFps = 30.0f;
+        declared.qualityTargetHeight = 540;
+    }
+    return DynamicResolution::ForWindow(declared, windowHeight);
+}
+
+static bool e50InTier(const DynamicResolution& controller, float fps) {
+    return std::fabs(controller.TierFps() - fps) < 0.5f;
+}
+
+static bool e50SameBits(float a, float b) {
+    return std::memcmp(&a, &b, sizeof(float)) == 0;
+}
+
+static bool e50SameState(const DynamicResolution& a, const DynamicResolution& b) {
+    return e50SameBits(a.Scale(), b.Scale()) && e50SameBits(a.LastMedianMilliseconds(), b.LastMedianMilliseconds()) &&
+           e50SameBits(a.WindowMedianMilliseconds(), b.WindowMedianMilliseconds()) &&
+           a.LastChangeWasARise() == b.LastChangeWasARise() && a.WindowMissedTheTarget() == b.WindowMissedTheTarget() &&
+           a.AtTheFloor() == b.AtTheFloor() && a.LastChangeWasARevert() == b.LastChangeWasARevert() &&
+           a.LoopPaced() == b.LoopPaced();
+}
+
+// 1. Off is E47: with no tiers in force (none asked, or one Mended drops) and no scene noted, ObserveFrame is Observe, return
+// for return and getter for getter, through pauses, nonsense frames, unknown waits, paced loops, the emergency floor, a live
+// Reconfigure and a pin. And none of E50's fields is ever in the manifest's text.
+static void testE50WithNoTiersAndNoSceneIsE47FrameForFrame() {
+    E50Lcg rng{20501u};
+    int tracesThatDiffered = 0;
+    int tierSignals = 0;
+    for (int trace = 0; trace < 1000; ++trace) {
+        DynamicResolutionConfig declared;
+        declared.enabled = rng.Next() > -0.9;
+        declared.startScale = static_cast<float>(0.65 + 0.35 * rng.Next());
+        declared.relaxedRise = rng.Next() > 0.0;
+        declared.minTargetHeight = rng.Next() > 0.0 ? 360u : 0u;
+        declared.emergencyBelowFps = rng.Next() > 0.0 ? 30.0f : 0.0f;
+        declared.lowTierFps = rng.Next() > 0.0 ? 50.0f : 0.0f;   // over 58 / 1.5: mended to no tiers
+        declared.qualityTargetHeight = rng.Next() > 0.0 ? 540u : 0u;
+        declared.qualityMaxShare = static_cast<float>(0.5 + 0.5 * rng.Next());
+        const DynamicResolutionConfig config = DynamicResolution::ForWindow(declared, rng.Next() > 0.0 ? 720u : 1600u);
+        DynamicResolution e47(config);
+        DynamicResolution e50(config);
+        const bool paced = rng.Next() > 0.6;
+        e47.SetLoopPaced(paced);
+        e50.SetLoopPaced(paced);
+        const double pixelSeconds = 0.002 + 0.1 * (rng.Next() + 1.0);
+        const double fixedSeconds = 0.01 * (rng.Next() + 1.0);
+        bool same = e50SameState(e47, e50);
+        for (int i = 0; i < 400 && same; ++i) {
+            if (i == 200 && trace % 5 == 0) {
+                const DynamicResolutionConfig again = trace % 10 == 0 ? DynamicResolution::Pinned(config, 0.6f) : config;
+                e47.Reconfigure(again);
+                e50.Reconfigure(again);
+            }
+            const double kind = rng.Next();
+            float frame = 0.0f;
+            if (kind > 0.97) {
+                frame = 2.0f;
+            } else if (kind > 0.95) {
+                frame = 0.0f;
+            } else if (kind > 0.93) {
+                frame = -0.01f;
+            } else if (kind > 0.90) {
+                frame = 0.3f;
+            } else {
+                const double scale = static_cast<double>(e47.Scale());
+                frame = static_cast<float>((fixedSeconds + pixelSeconds * scale * scale) * (1.0 + 0.05 * rng.Next()));
+            }
+            const float wait = rng.Next() > 0.0 ? -1.0f : 0.5f * frame;
+            const bool a = e47.Observe(frame);
+            const bool b = e50.ObserveFrame(frame, wait);
+            same = a == b && e50SameState(e47, e50);
+            if (e50.TakeTierChange() != DynamicResolution::TierChange::None || e50.Tiered() || e50.TierFps() > 0.0f) ++tierSignals;
+        }
+        if (!same) ++tracesThatDiffered;
+    }
+    CHECK_EQ(tracesThatDiffered, 0);
+    CHECK_EQ(tierSignals, 0);
+
+    const DynamicResolutionConfig defaults;
+    CHECK_MSG(defaults.lowTierFps <= 0.0f && defaults.qualityTargetHeight == 0u && defaults.windowHeight == 0u,
+              "no tiers unless a game asks");
+    CHECK(!DynamicResolution(defaults).Tiered());
+    GameManifest asking;
+    asking.isGame = true;
+    asking.dynamicResolution.enabled = true;
+    asking.dynamicResolution.lowTierFps = 30.0f;
+    asking.dynamicResolution.qualityTargetHeight = 540;
+    asking.dynamicResolution.qualityMaxShare = 0.6f;
+    asking.dynamicResolution.windowHeight = 800;
+    GameManifest quiet;
+    quiet.isGame = true;
+    CHECK_MSG(GameRuntime::Serialize(asking) == GameRuntime::Serialize(quiet), "the manifest's text carries none of E50's fields");
+}
+
+// 10. The quality floor for each window and scene (lines of art 0 = unknown, 439 a phone level at 175%, 614 a tablet level at
+// 125%, 768 a menu), from the formula: 540 lines or the scene's own if fewer, at most 75% of the window, never under the
+// 360-line floor. And the mending of the new fields.
+static void testE50TheQualityFloorForEachWindowAndScene() {
+    DynamicResolutionConfig declared;
+    declared.enabled = true;
+    declared.minTargetHeight = 360;
+    declared.emergencyBelowFps = 30.0f;
+    declared.lowTierFps = 30.0f;
+    declared.qualityTargetHeight = 540;
+    struct Row {
+        std::uint32_t height;
+        float q[4];
+    };
+    const std::uint32_t lines[4] = {0u, 439u, 614u, 768u};
+    const Row rows[] = {
+        {720u, {0.75f, 0.62f, 0.75f, 0.75f}},    // 1600x720: 540 lines is exactly 75%; 446 lines for 439
+        {800u, {0.68f, 0.55f, 0.68f, 0.68f}},    // 1340x800 (the tablet): 544 lines
+        {1080u, {0.50f, 0.41f, 0.50f, 0.50f}},
+        {1344u, {0.41f, 0.33f, 0.41f, 0.41f}},   // 2992x1344
+        {1600u, {0.34f, 0.30f, 0.34f, 0.34f}},   // 2560x1600 (the Pad 5): 439 lines is under the 0.30 floor
+    };
+    for (const Row& row : rows) {
+        const DynamicResolutionConfig forWindow = DynamicResolution::ForWindow(declared, row.height);
+        CHECK_EQ(forWindow.windowHeight, row.height);
+        for (int i = 0; i < 4; ++i) {
+            CHECK_MSG(std::fabs(DynamicResolution::QualityScaleFor(forWindow, lines[i]) - row.q[i]) < 1e-4f,
+                      "Q for " + std::to_string(row.height) + " lines and a scene of " + std::to_string(lines[i]) + " was " +
+                          std::to_string(DynamicResolution::QualityScaleFor(forWindow, lines[i])));
+        }
+    }
+    // No tiers, or no height: the floor as it is.
+    DynamicResolutionConfig untiered = declared;
+    untiered.lowTierFps = 0.0f;
+    CHECK_NEAR(DynamicResolution::QualityScaleFor(DynamicResolution::ForWindow(untiered, 800), 768), 0.45f);
+    CHECK_NEAR(DynamicResolution::QualityScaleFor(declared, 768), declared.minScale);
+    // A share under the lines' own asks for less.
+    DynamicResolutionConfig shared = declared;
+    shared.qualityMaxShare = 0.6f;
+    CHECK_NEAR(DynamicResolution::QualityScaleFor(DynamicResolution::ForWindow(shared, 720), 768), 0.6f);
+
+    // Mended: a lower tier in [10, target / 1.5], a share in [0.05, 1].
+    const auto lowTier = [&](float target, float low) {
+        DynamicResolutionConfig config = declared;
+        config.targetFps = target;
+        config.lowTierFps = low;
+        return DynamicResolution::Mended(config).lowTierFps;
+    };
+    CHECK_NEAR(lowTier(58.0f, 30.0f), 30.0f);
+    CHECK_NEAR(lowTier(58.0f, 10.0f), 10.0f);
+    CHECK_NEAR(lowTier(58.0f, 38.6f), 38.6f);
+    CHECK_NEAR(lowTier(58.0f, 39.0f), 0.0f);
+    CHECK_NEAR(lowTier(58.0f, 9.9f), 0.0f);
+    CHECK_NEAR(lowTier(30.0f, 30.0f), 0.0f);
+    CHECK_NEAR(lowTier(58.0f, -5.0f), 0.0f);
+    DynamicResolutionConfig share = declared;
+    share.qualityMaxShare = 2.0f;
+    CHECK_NEAR(DynamicResolution::Mended(share).qualityMaxShare, 1.0f);
+    share.qualityMaxShare = 0.0f;
+    CHECK_NEAR(DynamicResolution::Mended(share).qualityMaxShare, 0.05f);
+}
+
+// 11. The scene note is latched as a request is: the last before the frame wins, taking it clears it, and with no controller
+// to take it it is dropped.
+static void testE50TheSceneNoteIsLatchedLikeARequest() {
+    RenderScaleControl control;
+    std::string key;
+    std::uint32_t lines = 7;
+    CHECK(!control.TakeScene(&key, &lines));
+    control.Publish(true, 1.0f);
+    control.NoteScene("menu", 768);
+    control.NoteScene("level1", 439);
+    CHECK(control.TakeScene(&key, &lines));
+    CHECK(key == "level1");
+    CHECK_EQ(lines, 439u);
+    CHECK_MSG(!control.TakeScene(&key, &lines), "taking it cleared it");
+    control.NoteScene("level2", 0);
+    control.Publish(false, 1.0f);
+    CHECK_MSG(!control.TakeScene(&key, &lines), "no controller: the note is dropped, not kept for later");
+    control.Publish(true, 1.0f);
+    control.NoteScene("level3", 614);
+    RenderScaleRequest request;
+    CHECK_MSG(!control.TakeRequest(&request), "a note is not a request");
+    CHECK(control.TakeScene(nullptr, nullptr));
+}
+
+// 2. The Galaxy Tab A7 Lite (PowerVR GE8320, 1340x800, 1.072 MP): its menu cannot keep 58 fps at the quality floor (0.68), so
+// it goes to the lower tier and keeps 30 there, at a size above the emergency floor where it can; its levels (a third of the
+// menu's cost) keep 30 at a far sharper size than the menu's.
+constexpr float kGe8320MenuScaleLow = 0.30f;
+constexpr float kGe8320MenuScaleHigh = 0.45f;          // exclusive: under the 360-line floor, as the menu needs
+constexpr int kGe8320MenuRestResizes = 1;
+constexpr double kGe8320FirstSteadyWindowSeconds = 12.0;   // E47 took about 6-7 s, by the same hand walk
+constexpr float kGe8320LevelScaleLight = 0.58f;        // levels at 54 ms/MP
+constexpr float kGe8320LevelScaleHeavy = 0.45f;        // levels at 96 ms/MP
+
+static void testE50ASlowTabletKeepsThirtyAtTheLargestSizeThatHoldsIt() {
+    E50Lcg rng{2u};
+    for (const double cpuMs : {10.0, 26.0}) {
+        for (const double menuCost : {162.0, 288.0}) {
+            DynamicResolution controller(e50Config(1.0f, 800));
+            controller.EnterScene("menu", 768);
+            const E50Device menu = e50Device(1.072, 2.0, menuCost, cpuMs);
+            const E50Run menuRun = e50Drive(controller, menu, E50Drive{}, rng);
+            const std::string name = "case 2, GE8320 menu " + std::to_string(static_cast<int>(menuCost)) + " ms/MP, CPU " +
+                                     std::to_string(static_cast<int>(cpuMs)) + " ms";
+            e50PrintRest(name, controller, menuRun);
+            CHECK_MSG(e50InTier(controller, 30.0f), name + ": the lower tier");
+            CHECK_MSG(controller.Scale() >= kGe8320MenuScaleLow - 0.001f && controller.Scale() < kGe8320MenuScaleHigh, name + ": its size");
+            CHECK_MSG(menuRun.RestFps() >= kE50SteadyFps, name + ": a steady 30");
+            CHECK_MSG(menuRun.restResizes <= kGe8320MenuRestResizes, name + ": at rest");
+            CHECK_MSG(menuRun.firstSteadyWindowSeconds > 0.0 && menuRun.firstSteadyWindowSeconds <= kGe8320FirstSteadyWindowSeconds,
+                      name + ": the first steady window");
+
+            E50Device level = menu;
+            level.msPerMegapixel = menuCost / 3.0;
+            controller.EnterScene("level", 614);
+            const E50Run levelRun = e50Drive(controller, level, E50Drive{}, rng);
+            const std::string levelName = "case 2, GE8320 level " + std::to_string(static_cast<int>(level.msPerMegapixel)) +
+                                          " ms/MP, CPU " + std::to_string(static_cast<int>(cpuMs)) + " ms";
+            e50PrintRest(levelName, controller, levelRun);
+            CHECK_MSG(e50InTier(controller, 30.0f), levelName + ": the lower tier");
+            CHECK_MSG(levelRun.RestFps() >= kE50SteadyFps, levelName + ": a steady 30");
+            // With 26 ms of CPU the frame is the CPU's under about 0.65 (0.48 for the heavy level), so a rise sized as if the
+            // frame were the GPU's is a step of about 0.01 from the menu's 0.31 and never taken: the lower tier's least rise
+            // (kLowTierMinRiseStep) is what brings these up.
+            const float sharp = menuCost < 200.0 ? kGe8320LevelScaleLight : kGe8320LevelScaleHeavy;
+            CHECK_MSG(controller.Scale() >= sharp, levelName + ": sharper than the menu");
+        }
+    }
+}
+
+// 3. A Galaxy A05-like phone (1600x720, 1.152 MP): the menu (82 ms/MP) cannot hold 58 at its quality floor (0.75) and keeps 30
+// above the 360-line floor; a level (24 ms/MP, 439 lines of art) holds 58 at its own floor (0.62) and goes back up to it.
+constexpr float kA05MenuScaleLow = 0.50f;
+constexpr float kA05LevelScaleLow = 0.62f;
+constexpr float kA05LevelFpsLow = 54.5f;
+
+static void testE50APhoneKeepsThirtyInItsMenuAndSixtyInItsLevels() {
+    E50Lcg rng{3u};
+    DynamicResolution controller(e50Config(1.0f, 720));
+    controller.EnterScene("menu", 768);
+    const E50Run menuRun = e50Drive(controller, e50Device(1.152, 2.0, 82.0, 10.0), E50Drive{}, rng);
+    e50PrintRest("case 3, A05 menu", controller, menuRun);
+    CHECK_MSG(e50InTier(controller, 30.0f), "the menu keeps 30");
+    CHECK(controller.Scale() >= kA05MenuScaleLow - 0.001f);
+    CHECK(menuRun.RestFps() >= kE50SteadyFps);
+
+    controller.EnterScene("level", 439);
+    const E50Run levelRun = e50Drive(controller, e50Device(1.152, 2.0, 24.0, 10.0), E50Drive{}, rng);
+    e50PrintRest("case 3, A05 level", controller, levelRun);
+    CHECK_MSG(e50InTier(controller, 58.0f), "the level is back in the upper tier");
+    CHECK(controller.Scale() >= kA05LevelScaleLow - 0.001f);
+    CHECK(levelRun.RestFps() >= kA05LevelFpsLow);
+}
+
+// 4. A Xiaomi Pad 5-like tablet (2560x1600, 4.1 MP, starting at 0.73): it holds 58 above its quality floor (0.34), so it never
+// leaves the upper tier, not even for the three windows at 8-15 fps it shows at launch and at each scene.
+constexpr float kPad5RestLow = 0.35f;
+constexpr float kPad5RestHigh = 0.43f;
+
+static void testE50AFastTabletStaysInTheUpperTierThroughItsSlowStarts() {
+    E50Lcg rng{4u};
+    DynamicResolution controller(e50Config(0.73f, 1600));
+    controller.EnterScene("menu", 768);
+    const E50Device menu = e50Device(4.1, 5.8, 17.0, 5.0);
+    E50Drive slowStart;
+    slowStart.slowSeconds = 3.6;
+    const E50Run menuRun = e50Drive(controller, menu, slowStart, rng);
+    e50PrintRest("case 4, Pad 5 menu", controller, menuRun);
+    CHECK_EQ(menuRun.tierChanges, 0);
+    CHECK(e50InTier(controller, 58.0f));
+    CHECK_MSG(controller.Scale() >= kPad5RestLow && controller.Scale() <= kPad5RestHigh, "where E41 left it: 0.39 measured");
+
+    E50Device level = menu;
+    level.msPerMegapixel = 6.0;
+    controller.EnterScene("level", 614);
+    const E50Run levelRun = e50Drive(controller, level, slowStart, rng);
+    e50PrintRest("case 4, Pad 5 level", controller, levelRun);
+    CHECK_EQ(levelRun.tierChanges, 0);
+    CHECK(e50InTier(controller, 58.0f));
+
+    controller.EnterScene("menu", 768);
+    CHECK(controller.LastSceneRemembered());
+    const E50Run backRun = e50Drive(controller, menu, slowStart, rng);
+    CHECK_EQ(backRun.tierChanges, 0);
+}
+
+// 5. A CPU-bound phone: a smaller picture buys nothing. At 22 ms it holds 30 at full size in the lower tier and never probes (the
+// frame's work is the CPU's, so no prediction says 58 would hold); at 40 ms (under 30 everywhere) it keeps its picture.
+constexpr double kCpuBound40ShareAtStart = 0.90;
+// (By the hand walk exactly 12: two steps to Q taken back in the upper tier, the second with the tier down, then a step and
+// its revert in the lower tier at its start and after holds of 30, 60 and 120 s; the 240 s hold outlasts the run.)
+constexpr int kCpuBound40MaxResizes = 12;
+
+static void testE50ACpuBoundPhoneKeepsItsPictureAndNeverProbes() {
+    E50Lcg rng{5u};
+    DynamicResolution c22(e50Config(1.0f, 800));
+    c22.EnterScene("menu", 768);
+    const E50Run run22 = e50Drive(c22, e50Device(1.072, 2.0, 10.0, 22.0), E50Drive{}, rng);
+    e50PrintRest("case 5, CPU 22 ms", c22, run22);
+    CHECK(e50InTier(c22, 30.0f));
+    CHECK(c22.Scale() >= 0.99f);
+    CHECK_EQ(run22.probes, 0);
+
+    DynamicResolution c40(e50Config(1.0f, 800));
+    c40.EnterScene("menu", 768);
+    const E50Run run40 = e50Drive(c40, e50Device(1.072, 2.0, 10.0, 40.0), E50Drive{}, rng);
+    e50PrintRest("case 5, CPU 40 ms", c40, run40);
+    CHECK(run40.secondsBelowStart <= (1.0 - kCpuBound40ShareAtStart) * run40.seconds);
+    CHECK(run40.resizes <= kCpuBound40MaxResizes);
+    CHECK_EQ(run40.probes, 0);
+}
+
+// 6. A loop the display paces (FIFO): a GPU at 20 ms at the quality floor runs at 30 there, goes to the lower tier and stays (a
+// paced window cannot show room, and no wait is trusted for a prediction); a fast one never changes tier; and a heavy menu's
+// size under its quality floor does not become a light level's for the session.
+static void testE50APacedLoopChangesTierOnlyWhenItMust() {
+    E50Lcg rng{6u};
+    DynamicResolution slow(e50Config(1.0f, 800));
+    slow.SetLoopPaced(true);
+    slow.EnterScene("menu", 768);
+    E50Device slowGpu = e50Device(1.072, 2.0, 36.3, 8.0);
+    slowGpu.fifo = true;
+    const E50Run slowRun = e50Drive(slow, slowGpu, E50Drive{}, rng);
+    e50PrintRest("case 6, FIFO 20 ms at Q", slow, slowRun);
+    CHECK(e50InTier(slow, 30.0f));
+    CHECK_EQ(slowRun.downs, 1);
+    CHECK_EQ(slowRun.tierChanges, 1);
+
+    DynamicResolution fast(e50Config(1.0f, 800));
+    fast.SetLoopPaced(true);
+    fast.EnterScene("menu", 768);
+    E50Device fastGpu = e50Device(1.072, 2.0, 5.0, 5.0);
+    fastGpu.fifo = true;
+    const E50Run fastRun = e50Drive(fast, fastGpu, E50Drive{}, rng);
+    CHECK_EQ(fastRun.tierChanges, 0);
+    CHECK_EQ(fastRun.resizes, 0);
+    CHECK(e50InTier(fast, 58.0f));
+
+    // A heavy menu (the GE8320's, at rest in the lower tier at about 0.36, under its quality floor) and then a light level:
+    // the level's first visit does not inherit a size it could never leave on a paced loop. It starts at its quality floor,
+    // sees 60 there and probes back to the upper tier.
+    DynamicResolution heavyFirst(e50Config(1.0f, 800));
+    heavyFirst.SetLoopPaced(true);
+    heavyFirst.EnterScene("menu", 768);
+    E50Device heavyMenu = e50Device(1.072, 2.0, 162.0, 10.0);
+    heavyMenu.fifo = true;
+    const E50Run heavyRun = e50Drive(heavyFirst, heavyMenu, E50Drive{}, rng);
+    e50PrintRest("case 6, FIFO heavy menu", heavyFirst, heavyRun);
+    CHECK_MSG(e50InTier(heavyFirst, 30.0f) && heavyFirst.Scale() < heavyFirst.QualityScale() - 0.001f,
+              "the menu rests in the lower tier under its quality floor");
+    E50Device lightLevel = e50Device(1.072, 2.0, 10.0, 5.0);
+    lightLevel.fifo = true;
+    heavyFirst.EnterScene("level", 768);
+    const E50Run lightRun = e50Drive(heavyFirst, lightLevel, E50Drive{}, rng);
+    e50PrintRest("case 6, FIFO light level after it", heavyFirst, lightRun);
+    CHECK_MSG(e50InTier(heavyFirst, 58.0f), "the light level holds 58 at its quality floor, and is there");
+    CHECK(heavyFirst.Scale() >= heavyFirst.QualityScale() - 0.001f);
+}
+
+// 7. A GPU whose prediction misleads (a large fixed part: the lower tier at full size predicts 58 at the quality floor, which
+// then runs at 46-53) with its cost swinging 8% over a minute: each probe fails, the next waits 60 s, and after the second
+// failure that scene is not probed again. (The plan's "60, 120 and 240 s" assumed no cap on failures: two is the cap.)
+constexpr double kTierHoldSlackSeconds = 10.0;
+
+static void testE50AFailedProbeIsHeldOffAndTheSecondEndsTheProbing() {
+    E50Lcg rng{7u};
+    DynamicResolution controller(e50Config(1.0f, 800));
+    controller.EnterScene("level", 768);
+    E50Device misleading = e50Device(1.072, 15.0, 11.19, 5.0);
+    misleading.thermal = 0.08;
+    E50Drive quarterHour;
+    quarterHour.seconds = 900.0;
+    quarterHour.restFrom = 900.0;
+    const E50Run run = e50Drive(controller, misleading, quarterHour, rng);
+    e50PrintRest("case 7, thermal, failed probes", controller, run);
+    CHECK_MSG(run.tierChanges <= 1 + 2 * DynamicResolution::kMaxProbeFailures, "a down and two probes that failed, at most");
+    CHECK_EQ(run.probes, 2);
+    CHECK_EQ(run.probeFailures, 2);
+    CHECK_EQ(controller.ProbeFailures(), 2);
+    CHECK(e50InTier(controller, 30.0f));
+    if (run.failTimes.size() == 2 && run.probeTimes.size() == 2 && run.holdsAtFailure.size() == 2) {
+        CHECK_NEAR(static_cast<float>(run.holdsAtFailure[0]), 60.0f);
+        CHECK_NEAR(static_cast<float>(run.holdsAtFailure[1]), 120.0f);
+        const double gap = run.probeTimes[1] - run.failTimes[0];
+        CHECK_MSG(gap >= DynamicResolution::kFirstTierHoldSeconds - 1.0 &&
+                      gap <= DynamicResolution::kFirstTierHoldSeconds + DynamicResolution::kTierUpAfterSeconds + kTierHoldSlackSeconds,
+                  "the second probe came " + std::to_string(gap) + " s after the first failed");
+    }
+}
+
+// 8. Each scene keeps its own tier and size: a level after a heavy menu is not held at the menu's size, the menu comes back at
+// its own at once with nothing to fall through, a scene's other count of lines moves only its quality floor, a window of
+// another height forgets every scene, and a pinned picture never moves.
+static void testE50EachSceneKeepsItsOwnTierAndSize() {
+    E50Lcg rng{8u};
+    const E50Device menu = e50Device(1.152, 2.0, 82.0, 10.0);
+    const E50Device level = e50Device(1.152, 2.0, 24.0, 10.0);
+    DynamicResolution controller(e50Config(1.0f, 720));
+    controller.EnterScene("menu", 768);
+    E50Drive twoMinutes;
+    twoMinutes.seconds = 120.0;
+    e50Drive(controller, menu, twoMinutes, rng);
+    const float menuScale = controller.Scale();
+    const float menuTier = controller.TierFps();
+    controller.EnterScene("level", 439);
+    CHECK_MSG(!controller.LastSceneRemembered(), "a first visit");
+    e50Drive(controller, level, twoMinutes, rng);
+    const float levelScale = controller.Scale();
+    CHECK_MSG(levelScale > menuScale + 0.03f, "the level is not held at the heavy menu's size");
+
+    const bool moved = controller.EnterScene("menu", 768);
+    CHECK(controller.LastSceneRemembered());
+    CHECK_NEAR(controller.Scale(), menuScale);
+    CHECK_NEAR(controller.TierFps(), menuTier);
+    CHECK(moved);
+    E50Drive minute;
+    minute.seconds = 60.0;
+    minute.restFrom = 0.0;
+    const E50Run back = e50Drive(controller, menu, minute, rng);
+    CHECK_MSG(back.resizes == 0 && back.tierChanges == 0, "back at the menu's own size and tier: nothing to fall through");
+
+    // Another count of lines in the same scene: the quality floor moves, and nothing else (a level zoomed out to 768 lines asks
+    // for 540 of them, 0.75 of this window; the upper tier lifts its picture to it).
+    controller.EnterScene("level", 439);
+    CHECK(controller.LastSceneRemembered());
+    CHECK(e50InTier(controller, 58.0f));
+    CHECK_NEAR(controller.QualityScale(), 0.62f);
+    // (The re-entry's settle first: frames that it counts and does not measure.)
+    for (int i = 0; i < 1000 && controller.SceneSettling(); ++i) controller.ObserveFrame(0.016f, 0.0f);
+    const double holdBeforeLines = controller.TierHoldSeconds();
+    const int failuresBeforeLines = controller.ProbeFailures();
+    const std::uint64_t windowsBeforeLines = controller.WindowsEnded();
+    controller.EnterScene("level", 768);
+    CHECK_NEAR(controller.QualityScale(), 0.75f);
+    CHECK(e50InTier(controller, 58.0f));
+    CHECK_MSG(controller.TierHoldSeconds() == holdBeforeLines && controller.ProbeFailures() == failuresBeforeLines &&
+                  controller.WindowsEnded() == windowsBeforeLines && !controller.SceneSettling(),
+              "the same scene's other lines are no visit: no hold, failure or window touched, no settle");
+    CHECK(controller.Scale() >= 0.75f - 0.001f);
+
+    // A window of another height: every scene is forgotten, and the floor is the new window's.
+    controller.Reconfigure(e50Config(1.0f, 1080));
+    CHECK_NEAR(controller.QualityScale(), 0.5f);
+    controller.EnterScene("menu", 768);
+    CHECK_MSG(!controller.LastSceneRemembered(), "forgotten with the old window");
+
+    // A pinned picture: no tiers, no memory, no move.
+    DynamicResolution pinned(DynamicResolution::Pinned(e50Config(1.0f, 720), 0.6f));
+    CHECK(!pinned.Tiered());
+    pinned.EnterScene("menu", 768);
+    CHECK(!pinned.EnterScene("level", 439));
+    const E50Run held = e50Drive(pinned, menu, minute, rng);
+    CHECK(!pinned.EnterScene("menu", 768));
+    CHECK_EQ(held.resizes, 0);
+    CHECK_NEAR(pinned.Scale(), 0.6f);
+}
+
+// 9. The floors: the upper tier's is the quality floor (AtTheFloor there means "at Q"); the lower tier's first fall stops at the
+// 360-line floor before the emergency one (as E47's does); a pin has no tiers; and after a switch down the controller is still
+// tiered and a probe can fire.
+static void testE50TheUpperTiersFloorIsTheQualityFloor() {
+    E50Lcg rng{9u};
+    DynamicResolution controller(e50Config(1.0f, 800));
+    controller.EnterScene("menu", 768);
+    const E50Device heavy = e50Device(1.072, 2.0, 288.0, 10.0);
+    E50Drive threeSeconds;
+    threeSeconds.seconds = 3.0;
+    e50Drive(controller, heavy, threeSeconds, rng);
+    CHECK(e50InTier(controller, 58.0f));
+    CHECK_NEAR(controller.Scale(), controller.QualityScale());
+    CHECK_MSG(controller.AtTheFloor(), "at Q is at the floor of the upper tier");
+
+    bool down = false;
+    float firstFall = 0.0f;
+    double t = 0.0;
+    for (int i = 0; i < 20000 && firstFall <= 0.0f; ++i) {
+        const E50Frame frame = e50Frame(heavy, controller.Scale(), t, rng);
+        t += frame.frameSeconds;
+        const bool changed = controller.ObserveFrame(frame.frameSeconds, frame.waitSeconds);
+        const DynamicResolution::TierChange change = controller.TakeTierChange();
+        if (changed && down && change == DynamicResolution::TierChange::None) firstFall = controller.Scale();
+        if (change == DynamicResolution::TierChange::Down) down = true;
+    }
+    CHECK(down);
+    CHECK_NEAR(firstFall, 0.45f);
+    CHECK_MSG(!controller.AtTheFloor(), "the 360-line floor is not the floor the picture cannot go below");
+    CHECK_NEAR(DynamicResolution::Pinned(e50Config(1.0f, 800), 0.7f).lowTierFps, 0.0f);
+
+    CHECK_MSG(controller.Tiered(), "still tiered after a switch down");
+    controller.EnterScene("light", 768);
+    E50Drive minute;
+    minute.seconds = 60.0;
+    const E50Run light = e50Drive(controller, e50Device(1.072, 2.0, 10.0, 5.0), minute, rng);
+    CHECK_MSG(light.probes >= 1 && e50InTier(controller, 58.0f), "and a light scene probes back up");
+}
+
+// 13. Prefer 60: the A05's level, entered from its menu in the lower tier, is back in the upper tier at its quality floor or
+// above within seconds, in at most two resizes, and reaches its rest soon after. A CPU-bound copy of the same run never
+// probes (its frame's work is the CPU's).
+constexpr double kPrefer60WithinSeconds = 10.5;     // the prediction's probe at about 9.5 s (the direct one's about 12)
+constexpr int kPrefer60MaxResizes = 2;
+constexpr double kFirstVisitRestSeconds = 15.0;
+
+static void testE50ALevelThatCanHoldSixtyGoesBackUpSoon() {
+    for (const double cpuMs : {10.0, 22.0}) {
+        E50Lcg rng{13u};
+        DynamicResolution controller(e50Config(1.0f, 720));
+        controller.EnterScene("menu", 768);
+        E50Drive twoMinutes;
+        twoMinutes.seconds = 120.0;
+        e50Drive(controller, e50Device(1.152, 2.0, 82.0, cpuMs), twoMinutes, rng);
+        CHECK(e50InTier(controller, 30.0f));
+        controller.EnterScene("level", 439);
+        const E50Run run = e50Drive(controller, e50Device(1.152, 2.0, 24.0, cpuMs), E50Drive{}, rng);
+        e50PrintRest("case 13, A05 level after its menu, CPU " + std::to_string(static_cast<int>(cpuMs)) + " ms", controller, run);
+        if (cpuMs < 20.0) {
+            CHECK_MSG(!run.probeTimes.empty() && run.probeTimes.front() <= kPrefer60WithinSeconds, "a probe within seconds");
+            // The prediction's probe, not the direct one's fallback: with the prediction holding, every window keeps the
+            // lower tier from rising, so the first resize in the level is the probe; without it, a quicker first-visit rise
+            // to the quality floor would come first (at about 3.5 s) and the direct probe at about 12 s.
+            CHECK_MSG(!run.resizeTimes.empty() && !run.probeTimes.empty() && run.resizeTimes.front() == run.probeTimes.front(),
+                      "the first resize in the level is the probe");
+            CHECK_EQ(run.probes, 1);
+            CHECK(e50InTier(controller, 58.0f));
+            CHECK(controller.Scale() >= controller.QualityScale() - 0.001f);
+            CHECK(run.ResizesWithin(kPrefer60WithinSeconds) <= kPrefer60MaxResizes);
+            CHECK_MSG(!run.resizeTimes.empty() && run.resizeTimes.back() <= kFirstVisitRestSeconds, "case 8: at rest within 15 s");
+        } else {
+            CHECK_EQ(run.probes, 0);
+            CHECK(e50InTier(controller, 30.0f));
+        }
+    }
+}
+
+// A burst of hitches (five 150 ms frames every 20 s in the middle of a scene) moves neither the size nor the tier: every
+// decision is a window's median, not its mean. The same run without the hitches is the control.
+static void testE50AHitchMovesNeitherTheSizeNorTheTier() {
+    struct Case {
+        const char* name;
+        std::uint32_t height;
+        E50Device first;
+        std::uint32_t firstLines;
+        E50Device second;
+        std::uint32_t secondLines;
+    };
+    const Case cases[] = {
+        {"GE8320 menu (lower tier)", 800u, e50Device(1.072, 2.0, 162.0, 10.0), 768u, e50Device(1.072, 2.0, 162.0, 10.0), 768u},
+        {"A05 level (upper tier)", 720u, e50Device(1.152, 2.0, 82.0, 10.0), 768u, e50Device(1.152, 2.0, 24.0, 10.0), 439u},
+    };
+    for (const Case& c : cases) {
+        DynamicResolution withHitches(e50Config(1.0f, c.height));
+        DynamicResolution without(e50Config(1.0f, c.height));
+        E50Lcg rngA{14u};
+        E50Lcg rngB{14u};
+        E50Drive minute;
+        minute.seconds = 60.0;
+        for (DynamicResolution* controller : {&withHitches, &without}) {
+            E50Lcg& rng = controller == &withHitches ? rngA : rngB;
+            controller->EnterScene("first", c.firstLines);
+            e50Drive(*controller, c.first, minute, rng);
+            controller->EnterScene("second", c.secondLines);
+            e50Drive(*controller, c.second, minute, rng);
+        }
+        // Five frames of 150 ms in a row, each almost all of it a wait for the GPU: however a burst falls across two windows,
+        // one of them holds three or more, which would put a window's mean (and a mean of its waits) across a line in both
+        // cases (the GE8320's 32 fps to about 23, under 28.2; the A05's 69 to about 46, under 54.5). The median does not move.
+        E50Drive hitches;
+        hitches.seconds = 120.0;
+        hitches.restFrom = 0.0;
+        hitches.hitchEverySeconds = 20.0;
+        hitches.hitchFrames = 5;
+        hitches.hitchWaitSeconds = 0.14f;
+        E50Drive plain = hitches;
+        plain.hitchEverySeconds = 0.0;
+        const E50Run hit = e50Drive(withHitches, c.second, hitches, rngA);
+        const E50Run calm = e50Drive(without, c.second, plain, rngB);
+        e50PrintRest(std::string("hitches, ") + c.name, withHitches, hit);
+        CHECK_MSG(calm.resizes == 0 && calm.tierChanges == 0, std::string(c.name) + ": at rest without the hitches");
+        CHECK_MSG(hit.resizes == 0 && hit.tierChanges == 0, std::string(c.name) + ": and with them");
+    }
+}
+
+// A failed probe's hold belongs to its scene for the session: re-entering the scene five times (another between each) neither
+// re-arms the probe nor runs the hold down while the other scene is current; and after the second failure the scene is never
+// probed again, reloads included.
+static void testE50AFailedProbesHoldSurvivesTheScenesReloads() {
+    E50Lcg rng{15u};
+    DynamicResolution controller(e50Config(1.0f, 800));
+    controller.EnterScene("level", 768);
+    const E50Device level = e50Device(1.072, 15.0, 11.19, 5.0);   // case 7's GPU without the heat: every probe fails
+    const E50Device menu = e50Device(1.072, 2.0, 162.0, 10.0);    // the GE8320 menu: the lower tier, nothing to probe
+    const E50Drive second = e50Stretch(1.0, 1.0);
+    for (int i = 0; i < 400 && controller.ProbeFailures() == 0; ++i) e50Drive(controller, level, second, rng);
+    CHECK_EQ(controller.ProbeFailures(), 1);
+    CHECK(controller.TierHoldSeconds() > 55.0);
+
+    // The menu's first visit is long enough for windows to end there (its 30-frame settle alone takes about 5 s at the
+    // level's size), so its own tier rules run while the level's hold waits; later visits start at the menu's own smaller
+    // size, where windows end within seconds.
+    int probesDuringVisits = 0;
+    int heldThroughTheMenu = 0;
+    int menuStartedEmpty = 0;
+    int menuVisitsWithWindows = 0;
+    const E50Drive firstMenuVisit = e50Stretch(20.0, 20.0);
+    const E50Drive menuVisit = e50Stretch(5.0, 5.0);
+    const E50Drive levelVisit = e50Stretch(12.0, 12.0);   // without the hold, a probe would come at about 9.5 s of each
+    for (int visit = 0; visit < 5; ++visit) {
+        const double holdBefore = controller.TierHoldSeconds();
+        controller.EnterScene("menu", 768);
+        // The menu's own holds, not the level's: a hold kept for the controller, not per scene, would show 60 s and a failure.
+        if (controller.TierHoldSeconds() == 0.0 && controller.ProbeFailures() == 0) ++menuStartedEmpty;
+        const std::uint64_t windowsBefore = controller.WindowsEnded();
+        e50Drive(controller, menu, visit == 0 ? firstMenuVisit : menuVisit, rng);
+        if (controller.WindowsEnded() > windowsBefore) ++menuVisitsWithWindows;
+        controller.EnterScene("level", 768);
+        if (controller.LastSceneRemembered() && controller.ProbeFailures() == 1 && e50InTier(controller, 30.0f) &&
+            std::fabs(controller.TierHoldSeconds() - holdBefore) < 1e-9) {
+            ++heldThroughTheMenu;
+        }
+        probesDuringVisits += e50Drive(controller, level, levelVisit, rng).probes;
+    }
+    CHECK_EQ(menuStartedEmpty, 5);
+    CHECK_MSG(menuVisitsWithWindows >= 1, "the menu's own windows ran while the level's hold waited");
+    CHECK_EQ(heldThroughTheMenu, 5);
+    CHECK_EQ(probesDuringVisits, 0);
+
+    for (int i = 0; i < 400 && controller.ProbeFailures() < 2; ++i) e50Drive(controller, level, second, rng);
+    CHECK_EQ(controller.ProbeFailures(), 2);
+    E50Drive fiveMinutes;
+    CHECK_EQ(e50Drive(controller, level, fiveMinutes, rng).probes, 0);
+    controller.EnterScene("menu", 768);
+    CHECK_MSG(controller.TierHoldSeconds() == 0.0 && controller.ProbeFailures() == 0, "the menu's own holds again");
+    e50Drive(controller, menu, menuVisit, rng);
+    controller.EnterScene("level", 768);
+    CHECK_EQ(controller.ProbeFailures(), 2);
+    E50Drive twoMinutes;
+    twoMinutes.seconds = 120.0;
+    CHECK_EQ(e50Drive(controller, level, twoMinutes, rng).probes, 0);
+}
+
+// The load frame (taken with the scene's note, the frame after the tick that loaded it) is not the scene's speed: it counts as
+// one frame and a tenth of a second towards a settle of 30 frames AND a second, and the first window after the settle is a
+// whole window of the scene's own frames.
+static void testE50ALoadFrameIsNotTheScenesSpeedAndTheSettleOutlastsIt() {
+    DynamicResolution controller(e50Config(1.0f, 720));
+    controller.EnterScene("menu", 768);
+    CHECK_MSG(!controller.SceneSettling(), "the first scene is adopted with no settle");
+    controller.EnterScene("level", 439);
+    CHECK(controller.SceneSettling());
+    const std::uint64_t windows = controller.WindowsEnded();
+    CHECK(!controller.ObserveFrame(0.6f, -1.0f));
+    int quick = 0;
+    while (controller.SceneSettling() && quick < 1000) {
+        controller.ObserveFrame(0.016f, 0.0f);
+        ++quick;
+    }
+    CHECK_EQ(quick, 57);   // (1.0 - 0.1) / 0.016 = 56.25
+    CHECK(controller.WindowsEnded() == windows);
+    int frames = 0;
+    while (controller.WindowsEnded() == windows && frames < 1000) {
+        controller.ObserveFrame(0.016f, 0.0f);
+        ++frames;
+    }
+    CHECK_MSG(frames >= 75, "a whole window: " + std::to_string(frames) + " frames");
+    CHECK_NEAR(controller.WindowMedianMilliseconds(), 16.0f);
+
+    // Slow frames: 30 of them, whatever a second says.
+    controller.EnterScene("menu", 768);
+    CHECK(!controller.ObserveFrame(0.6f, -1.0f));
+    int slow = 0;
+    while (controller.SceneSettling() && slow < 1000) {
+        controller.ObserveFrame(0.1f, 0.0f);
+        ++slow;
+    }
+    CHECK_EQ(slow, 29);
+}
+
+// A resume settles the controller as a scene's entry does and grants the same grace, with no tier change and nothing forgotten.
+// (That the engine feeds a tiered controller no frame while the window has no focus is SupersonicApp's, not testable here.)
+static void testE50AResumeSettlesAndForgetsNothing() {
+    E50Lcg rng{16u};
+    DynamicResolution controller(e50Config(1.0f, 720));
+    controller.EnterScene("menu", 768);
+    E50Drive minute;
+    minute.seconds = 60.0;
+    e50Drive(controller, e50Device(1.152, 2.0, 82.0, 10.0), minute, rng);
+    controller.EnterScene("level", 439);
+    e50Drive(controller, e50Device(1.152, 2.0, 24.0, 10.0), minute, rng);
+    const float scale = controller.Scale();
+    const float tier = controller.TierFps();
+    controller.NoteResume();
+    CHECK(controller.SceneSettling());
+    CHECK_NEAR(static_cast<float>(controller.TierGraceSeconds()), static_cast<float>(DynamicResolution::kTierGraceSeconds));
+    CHECK_NEAR(controller.Scale(), scale);
+    CHECK_NEAR(controller.TierFps(), tier);
+    CHECK(controller.TakeTierChange() == DynamicResolution::TierChange::None);
+    int quick = 0;
+    while (controller.SceneSettling() && quick < 1000) {
+        controller.ObserveFrame(0.016f, 0.0f);
+        ++quick;
+    }
+    CHECK_EQ(quick, 63);   // 1.0 / 0.016 = 62.5
+    controller.EnterScene("menu", 768);
+    CHECK_MSG(controller.LastSceneRemembered() && e50InTier(controller, 30.0f), "nothing forgotten");
+
+    DynamicResolution e47(e50Config(1.0f, 720, false));
+    e47.NoteResume();
+    CHECK_MSG(!e47.SceneSettling(), "E47's controller has no such settle");
+}
+
 // Frames at a steady `milliseconds`, each with the given wait and game parts, until `seconds` have passed.
 static void feedFrames(FramePerfWindow& window, double seconds, float milliseconds, float waitMs, float gameMs) {
     FramePerfSample sample;
@@ -2077,6 +2973,22 @@ static void runTests() {
     testAPinnedSizeHoldsWhateverTheGpuDoes();
     testTheDeclaredConfigIsWorkedOutForEachWindowHeight();
     testTheRenderScaleControlLatchesTheLastRequestAndDropsOneWithNothingToAsk();
+    testE50WithNoTiersAndNoSceneIsE47FrameForFrame();
+    testE50TheQualityFloorForEachWindowAndScene();
+    testE50TheSceneNoteIsLatchedLikeARequest();
+    testE50ASlowTabletKeepsThirtyAtTheLargestSizeThatHoldsIt();
+    testE50APhoneKeepsThirtyInItsMenuAndSixtyInItsLevels();
+    testE50AFastTabletStaysInTheUpperTierThroughItsSlowStarts();
+    testE50ACpuBoundPhoneKeepsItsPictureAndNeverProbes();
+    testE50APacedLoopChangesTierOnlyWhenItMust();
+    testE50AFailedProbeIsHeldOffAndTheSecondEndsTheProbing();
+    testE50EachSceneKeepsItsOwnTierAndSize();
+    testE50TheUpperTiersFloorIsTheQualityFloor();
+    testE50ALevelThatCanHoldSixtyGoesBackUpSoon();
+    testE50AHitchMovesNeitherTheSizeNorTheTier();
+    testE50AFailedProbesHoldSurvivesTheScenesReloads();
+    testE50ALoadFrameIsNotTheScenesSpeedAndTheSettleOutlastsIt();
+    testE50AResumeSettlesAndForgetsNothing();
     testFramePerfSummarisesAWindowOfFrames();
     testPerfVerdictSaysWhereTheFrameWaited();
     testThePerfOverlayKeepsAReportOfEachSizeMeasured();
@@ -2098,4 +3010,4 @@ static void runTests() {
     testTheEnginesOwnBuildNamesNoRoot();
 }
 
-TEST_MAIN("test_gameruntime", 68)
+TEST_MAIN("test_gameruntime", 256)

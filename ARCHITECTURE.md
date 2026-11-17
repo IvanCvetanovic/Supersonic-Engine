@@ -829,6 +829,22 @@ holds no overlay, and `--screenshot-ui`, which reads the window, holds it.
 A game emits the overlay from `OnUpdate`, once a frame: a list emitted on the
 tick would be empty on a frame with no tick and doubled on one with two.
 
+The picture's own size can follow the GPU's speed (`core/DynamicResolution`, opt-in
+in the manifest's `dynamicResolution`): the median frame of each 1.2 s window
+against a target, the scene target resized when the scale changes. Two further
+opt-ins (E50) are off unless a game sets them. `lowTierFps` gives the controller
+two tiers: the upper one is the controller as before with its floor raised to a
+quality floor (`qualityTargetHeight` lines of picture), and where the target
+cannot be held there, the lower one keeps `lowTierFps` (30) at the largest size
+that holds it, probing back up when the frames say the upper tier would hold (seen
+directly, or predicted from the time the CPU waited for the GPU, which the
+profiler's `FrameWait` zone gives). A failed probe holds the next off for a minute,
+doubling, and two end the probing of that scene. `RenderScaleControl::NoteScene`
+names the game's scene by a key: each scene keeps its own tier, size and holds for
+the session (`DynamicResolution::EnterScene`), and the frames after a scene's entry
+or a resume (30 frames and a second at least) are not measured. A game that sets
+neither gets the controller frame for frame as it was.
+
 **What the scene's numbers mean: `RenderSettings::encoding`.** Everything above
 is `LinearHdr`, the default. A scene can say otherwise, and it is a scene
 setting (serialised as a word, omitted at the default) because it decides how

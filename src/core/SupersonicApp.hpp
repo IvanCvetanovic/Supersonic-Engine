@@ -173,6 +173,12 @@ private:
     std::uint32_t m_floorWindowHeight{0};
     bool m_scalePinned{false};
     float m_pinnedFraction{0.0f};   // the share of the start size a request pinned the picture at; 0 where the overlay pinned it
+    // E50: the scene the game last noted (RenderScaleControl::NoteScene), kept so that a controller built anew (a pick of
+    // Automatic) takes it up again. Empty until a game notes one.
+    std::string m_sceneKey;
+    std::uint32_t m_sceneLines{0};
+    // The app came back from the background since the controller last observed a frame (a borrowed window only).
+    bool m_resumeForController{false};
 
     // The readout and log of how the frames run (PerfOverlay.hpp); null unless the manifest asks. The ticks the last
     // iteration ran, because the loop reads the previous iteration's profiler zones at the top of the next.

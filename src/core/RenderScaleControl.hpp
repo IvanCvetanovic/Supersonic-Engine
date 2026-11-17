@@ -21,6 +21,14 @@
 // AVAILABLE only when there is a controller to ask: the game turned DynamicResolution on, and this run is not a capture or a
 // fixed-step run (whose pictures must reproduce) unless the game holds the picture at a fixed size for it (a developer flag).
 // Otherwise a request is dropped, and a game that wants a row for it hides the row.
+//
+// THE SCENE (E50, opt-in): a game may say which scene it shows, by a key it chooses, and how many lines of art that scene
+// puts on screen (NoteScene). The controller then keeps a tier and a size per scene (DynamicResolution::EnterScene). Latched
+// like a request: the last note before the frame wins, and a note with no controller to take it is dropped.
+
+#include <cstdint>
+#include <string>
+#include <utility>
 
 namespace Supersonic {
 
@@ -61,13 +69,33 @@ public:
         m_pending = true;
     }
 
+    // The scene the game shows now (a key it chooses: a scene file's name, say) and the lines of art it puts on screen (0:
+    // unknown). Noted when either changes; the controller remembers a tier and a size per key for the session.
+    void NoteScene(std::string key, std::uint32_t qualityLines) {
+        m_sceneKey = std::move(key);
+        m_sceneLines = qualityLines;
+        m_scenePending = true;
+    }
+
     // ---- The engine's side.
 
     // What the engine publishes after a frame's controller step.
     void Publish(bool available, float currentScale) {
         m_available = available;
         m_currentScale = currentScale;
-        if (!available) m_pending = false;   // nothing to ask: a request that arrived is dropped, not kept for later
+        if (!available) {
+            // nothing to ask: a request or a note that arrived is dropped, not kept for later
+            m_pending = false;
+            m_scenePending = false;
+        }
+    }
+    // The scene noted since the last call, if any; taking it clears it.
+    bool TakeScene(std::string* key, std::uint32_t* qualityLines) {
+        if (!m_scenePending) return false;
+        m_scenePending = false;
+        if (key != nullptr) *key = m_sceneKey;
+        if (qualityLines != nullptr) *qualityLines = m_sceneLines;
+        return true;
     }
     // The request latched since the last call, if any; taking it clears it.
     bool TakeRequest(RenderScaleRequest* out) {
@@ -82,6 +110,9 @@ private:
     float m_currentScale{1.0f};
     bool m_pending{false};
     RenderScaleRequest m_requested;
+    bool m_scenePending{false};
+    std::string m_sceneKey;
+    std::uint32_t m_sceneLines{0};
 };
 
 } // namespace Supersonic

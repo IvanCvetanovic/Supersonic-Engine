@@ -371,12 +371,19 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
         m_resolutionConfig = resolution;
         startScale = m_dynamicResolution->Scale();
         m_controllerStartScale = startScale;
+        // E50 (opt-in): the tiers are named only where they are in force, so a game that asked for none logs what it always did.
+        const std::string tierNote =
+            m_dynamicResolution->Tiered()
+                ? ", " + std::to_string(std::lround(resolution.lowTierFps)) + " fps tier below " +
+                      std::to_string(resolution.qualityTargetHeight) + " lines (" +
+                      std::to_string(std::lround(m_dynamicResolution->QualityScale() * 100.0f)) + "% of the window)"
+                : std::string();
         SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: starts at " << startScale
                                              << " of the window (target " << m_manifest.dynamicResolution.targetFps
                                              << " fps, floor " << m_resolutionConfig.minScale << ", " << presentMode
                                              << (m_dynamicResolution->LoopPaced() ? ", paced by the display" : "")
                                              << (resolution.relaxedRise && !m_dynamicResolution->LoopPaced() ? ", relaxed rise" : "")
-                                             << ").";
+                                             << tierNote << ").";
     }
     m_renderScaleControl.Publish(m_dynamicResolution != nullptr, startScale);
     if (m_manifest.perfOverlay || m_manifest.perfLogSeconds > 0.0f) {
@@ -1197,7 +1204,10 @@ void SupersonicApp::RefreshPerfEnvironment() {
     // Strings are assigned only when they changed: this runs every frame, and on a phone an allocation a frame is a cost
     // the readout should not add to what it measures.
     if (env.presentMode != m_swapchain->PresentModeName()) env.presentMode = m_swapchain->PresentModeName();
-    if (env.scene != m_sceneManager.CurrentPath()) env.scene = m_sceneManager.CurrentPath();
+    // A game that runs its own scenes (and noted one: E50) is named by its key where the engine has no scene file.
+    const std::string& scene = m_sceneManager.CurrentPath().empty() ? m_sceneKey : m_sceneManager.CurrentPath();
+    if (env.scene != scene) env.scene = scene;
+    env.tierFps = m_dynamicResolution ? m_dynamicResolution->TierFps() : 0.0f;
     env.hasController = m_dynamicResolution != nullptr;
     env.atFloorMissed = m_dynamicResolution && m_dynamicResolution->AtTheFloor() && m_dynamicResolution->WindowMissedTheTarget();
     // True only where a game placed the overlay on the window (never under the default, Picture).
@@ -1446,6 +1456,10 @@ void SupersonicApp::Run() {
             perfSample.ticks = m_perfTicks;
         }
         m_perfTicks = 0;
+        // E50: the time the iteration that just ended waited for the GPU (the fences and the acquire), for the controller's
+        // tiers; the same iteration rawDelta measures below. Unknown (-1) before the first.
+        const float frameWaitSeconds =
+            frame > 0 ? static_cast<float>(Profiler::Milliseconds(ProfileZone::FrameWait) / 1000.0) : -1.0f;
         ++frame;
         Profiler::BeginFrame();
 
@@ -1547,7 +1561,10 @@ void SupersonicApp::Run() {
         // a clamped hitch and counting the rest as dropped. And the window it
         // came back with needs a surface before anything can be drawn - the old
         // one went with the old window (the callback set in the constructor).
-        if (m_window->TakeResumedFromSuspend()) lastTime = m_window->GetTime();
+        if (m_window->TakeResumedFromSuspend()) {
+            lastTime = m_window->GetTime();
+            m_resumeForController = true;   // E50: for the controller's tiers, at the observe below
+        }
         if (m_window->ShouldClose()) continue;
         if (!m_renderer->HasSurface()) {
             m_renderer->RestoreSurface();
@@ -1676,12 +1693,21 @@ void SupersonicApp::Run() {
             if (windowHeight != m_floorWindowHeight && windowHeight != 0) {
                 m_floorWindowHeight = windowHeight;
                 const DynamicResolutionConfig forWindow = DynamicResolution::ForWindow(m_declaredResolution, windowHeight);
-                if (forWindow.minScale != m_resolutionConfig.minScale || forWindow.emergencyScale != m_resolutionConfig.emergencyScale) {
+                // E50: where the tiers are asked for, the quality floor is a share of the window's height as well, so any new
+                // height reconfigures (which also forgets what the scenes learned: another height is another picture).
+                const bool qualityMoved = DynamicResolution::Mended(forWindow).lowTierFps > 0.0f &&
+                                          forWindow.windowHeight != m_resolutionConfig.windowHeight;
+                if (forWindow.minScale != m_resolutionConfig.minScale || forWindow.emergencyScale != m_resolutionConfig.emergencyScale ||
+                    qualityMoved) {
                     m_resolutionConfig = forWindow;
                     if (!m_scalePinned) {
                         m_dynamicResolution->Reconfigure(m_resolutionConfig);
                         m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
                     }
+                } else if (!m_scalePinned) {
+                    // E50: a scene's remembered size was a share of the old window (nothing to forget for a game that notes
+                    // no scenes).
+                    m_dynamicResolution->ForgetScenes();
                 }
             }
             // E47: the player's request (a game's options row), before this frame's time is judged. One that asks for what the
@@ -1704,6 +1730,8 @@ void SupersonicApp::Run() {
                         const bool paced = m_dynamicResolution->LoopPaced();
                         m_dynamicResolution = std::make_unique<DynamicResolution>(m_resolutionConfig);
                         m_dynamicResolution->SetLoopPaced(paced);
+                        // E50: the new controller takes up the scene the game is in (adopted where it is, with no settle).
+                        if (!m_sceneKey.empty()) m_dynamicResolution->EnterScene(m_sceneKey, m_sceneLines);
                         m_scalePinned = false;
                         m_pinnedFraction = 0.0f;
                     }
@@ -1711,6 +1739,34 @@ void SupersonicApp::Run() {
                     SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: "
                                                          << (request.mode == RenderScaleMode::Fixed ? "held at " : "automatic from ")
                                                          << m_dynamicResolution->Scale() << " (asked by the game).";
+                }
+            }
+            // E50: the scene the game noted (opt-in: a game that notes none never gets here). Taken after the request, so a
+            // controller built by it hears of the scene; the frame the note came from (the load) is the first the scene's
+            // settle counts.
+            std::string sceneKey;
+            std::uint32_t sceneLines = 0;
+            if (m_renderScaleControl.TakeScene(&sceneKey, &sceneLines) && !sceneKey.empty() &&
+                (sceneKey != m_sceneKey || sceneLines != m_sceneLines)) {
+                // The same scene with other lines (a zoom) is no visit: only its quality floor moved.
+                const bool sameScene = sceneKey == m_sceneKey;
+                m_sceneKey = std::move(sceneKey);
+                m_sceneLines = sceneLines;
+                if (m_dynamicResolution->EnterScene(m_sceneKey, m_sceneLines)) {
+                    m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
+                }
+                const std::string where = (m_dynamicResolution->Tiered()
+                                               ? std::to_string(std::lround(m_dynamicResolution->TierFps())) + " fps tier at "
+                                               : std::string("at "));
+                if (sameScene) {
+                    SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: scene " << m_sceneKey << " now " << m_sceneLines
+                                                         << " lines: " << where << m_dynamicResolution->Scale() << ", quality floor "
+                                                         << m_dynamicResolution->QualityScale() << ".";
+                } else {
+                    SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: scene " << m_sceneKey << ", " << m_sceneLines
+                                                         << " lines: " << where << m_dynamicResolution->Scale()
+                                                         << (m_dynamicResolution->LastSceneRemembered() ? " (remembered)."
+                                                                                                        : " (first visit).");
                 }
             }
         }
@@ -1728,14 +1784,53 @@ void SupersonicApp::Run() {
                                                      << m_dynamicResolution->Scale() << ".";
             }
         }
-        if (m_dynamicResolution && m_dynamicResolution->Observe(rawDelta)) {
+        // E50, where the tiers are in force (for any other controller both lines below change nothing): a resume settles the
+        // controller as a scene's entry does, and the frames of a window without focus (a phone's quarter-second of frames
+        // after it starts leaving, the editor behind another window) are not fed to it at all. The focus is the window's as
+        // this iteration's events left it (ApplyCursorMode, above), at the end of the frame rawDelta measured.
+        const bool tieredController = m_dynamicResolution && m_dynamicResolution->Tiered();
+        if (tieredController && m_resumeForController) m_dynamicResolution->NoteResume();
+        m_resumeForController = false;
+        const bool observeFrame = m_dynamicResolution && !(tieredController && !Input::WindowFocused());
+        const bool resized = observeFrame && m_dynamicResolution->ObserveFrame(rawDelta, frameWaitSeconds);
+        // A change of tier names its own scale, so a resize it made is logged once, by its own line below.
+        const DynamicResolution::TierChange tierChange =
+            observeFrame ? m_dynamicResolution->TakeTierChange() : DynamicResolution::TierChange::None;
+        if (resized) {
             m_editorLayer->SetRenderScale(m_dynamicResolution->Scale());
-            SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: scale " << m_dynamicResolution->Scale()
-                                                 << " (median frame " << m_dynamicResolution->LastMedianMilliseconds()
-                                                 << " ms)"
-                                                 << (m_dynamicResolution->LastChangeWasARevert()
-                                                         ? ": the last step down did not speed the frame up, taken back."
-                                                         : (m_dynamicResolution->LastChangeWasARise() ? ": a rise." : "."));
+            if (tierChange == DynamicResolution::TierChange::None) {
+                SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: scale " << m_dynamicResolution->Scale()
+                                                     << " (median frame " << m_dynamicResolution->LastMedianMilliseconds()
+                                                     << " ms)"
+                                                     << (m_dynamicResolution->LastChangeWasARevert()
+                                                             ? ": the last step down did not speed the frame up, taken back."
+                                                             : (m_dynamicResolution->LastChangeWasARise() ? ": a rise." : "."));
+            }
+        }
+        if (tierChange != DynamicResolution::TierChange::None) {
+            switch (tierChange) {
+            case DynamicResolution::TierChange::Down:
+                SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: " << m_dynamicResolution->TierFps() << " fps tier at "
+                                                     << m_dynamicResolution->Scale() << ": " << m_resolutionConfig.targetFps
+                                                     << " fps did not hold at " << m_dynamicResolution->QualityScale() << ".";
+                break;
+            case DynamicResolution::TierChange::Probe:
+                SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: " << m_dynamicResolution->TierFps() << " fps tier at "
+                                                     << m_dynamicResolution->Scale() << " on trial.";
+                break;
+            case DynamicResolution::TierChange::ProbeFailed:
+                if (m_dynamicResolution->ProbeFailures() >= DynamicResolution::kMaxProbeFailures) {
+                    SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: back to " << m_dynamicResolution->TierFps() << " fps at "
+                                                         << m_dynamicResolution->Scale() << "; no more tries in this scene.";
+                } else {
+                    SUPERSONIC_LOG_INFO("SupersonicApp") << "Dynamic resolution: back to " << m_dynamicResolution->TierFps() << " fps at "
+                                                         << m_dynamicResolution->Scale() << "; next try in "
+                                                         << m_dynamicResolution->TierHoldSeconds() << " s.";
+                }
+                break;
+            case DynamicResolution::TierChange::None:
+                break;
+            }
         }
         if (m_dynamicResolution) m_renderScaleControl.Publish(true, m_dynamicResolution->Scale());
 

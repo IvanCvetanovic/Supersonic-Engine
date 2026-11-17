@@ -61,9 +61,12 @@ public:
         bool focused{true};
         bool resumed{true};
         // The screen overlay was drawn on the window at its own resolution, not into the scaled picture
-        // (ScreenOverlay::Placement): ", hud window" ends the size line. False, the default, adds nothing to it. Last, so
-        // that no positional initialiser written before it existed changes meaning.
+        // (ScreenOverlay::Placement): ", hud window" ends the size line. False, the default, adds nothing to it.
         bool overlayAtWindow{false};
+        // The frame rate of the dynamic-resolution tier in force (DynamicResolution::TierFps): ", tier 30" ends the size line.
+        // 0, the default and every controller without tiers, adds nothing to it.
+        float tierFps{0.0f};
+        // (New fields go last, so that no positional initialiser written before they existed changes meaning.)
     };
 
     explicit PerfOverlay(const Settings& settings);

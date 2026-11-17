@@ -16,31 +16,55 @@ float Rounded(float scale) {
     return std::round(scale * 100.0f) / 100.0f;
 }
 
+// Two scales that a resize would tell apart (every scale is rounded to two decimals, so they differ by 0.01 or nothing).
+bool Moved(float before, float after) {
+    return std::fabs(after - before) >= 0.005f;
+}
+
 } // namespace
 
 DynamicResolution::DynamicResolution(const DynamicResolutionConfig& config) : m_config(config) {
     Mend();
     m_scale = Rounded(Clamp(m_config.startScale, m_config.minScale, m_config.maxScale));
     m_samples.reserve(256);
+    m_declared = m_config;
+    m_q = QualityScaleFor(m_declared, 0);
+    if (Tiered()) {
+        // The run starts in the upper tier, at the quality floor or above, with the grace a launch needs; and with no
+        // settle, as E47's controller starts (a slow GPU's first window is already long).
+        m_waits.reserve(256);
+        ApplyView(m_scale, false);
+        m_settle = 0;
+        m_tierGrace = kTierGraceSeconds;
+    }
+}
+
+DynamicResolutionConfig DynamicResolution::Mended(const DynamicResolutionConfig& given) {
+    // A config that contradicts itself is mended, never trusted: a floor above the ceiling, or a start outside both, would
+    // otherwise make the first window change the scale for no reason.
+    DynamicResolutionConfig config = given;
+    config.minScale = Clamp(config.minScale, 0.05f, 1.0f);
+    config.maxScale = Clamp(config.maxScale, config.minScale, 1.0f);
+    config.targetFps = std::max(config.targetFps, 1.0f);
+    config.headroomFps = std::max(config.headroomFps, config.targetFps);
+    config.windowSeconds = std::max(config.windowSeconds, 0.2f);
+    // A rise margin under 1.1 would open the way up on windows the step (which lands on 1.2 x the target) then declines to act on.
+    config.riseMargin = std::max(config.riseMargin, 1.1f);
+    // An emergency floor that is not under the floor, or with no speed to trigger it, is no emergency floor.
+    config.emergencyBelowFps = std::max(config.emergencyBelowFps, 0.0f);
+    if (config.emergencyBelowFps > 0.0f && config.emergencyScale > 0.0f && config.emergencyScale < config.minScale) {
+        config.emergencyScale = Clamp(config.emergencyScale, 0.05f, config.minScale);
+    } else {
+        config.emergencyScale = 0.0f;
+    }
+    // E50. A lower tier near the target is no second tier (and one under 10 fps is not a game).
+    if (!(config.lowTierFps >= 10.0f && config.lowTierFps <= config.targetFps / 1.5f)) config.lowTierFps = 0.0f;
+    config.qualityMaxShare = Clamp(config.qualityMaxShare, 0.05f, 1.0f);
+    return config;
 }
 
 void DynamicResolution::Mend() {
-    // A config that contradicts itself is mended, never trusted: a floor above the ceiling, or a start outside both, would
-    // otherwise make the first window change the scale for no reason.
-    m_config.minScale = Clamp(m_config.minScale, 0.05f, 1.0f);
-    m_config.maxScale = Clamp(m_config.maxScale, m_config.minScale, 1.0f);
-    m_config.targetFps = std::max(m_config.targetFps, 1.0f);
-    m_config.headroomFps = std::max(m_config.headroomFps, m_config.targetFps);
-    m_config.windowSeconds = std::max(m_config.windowSeconds, 0.2f);
-    // A rise margin under 1.1 would open the way up on windows the step (which lands on 1.2 x the target) then declines to act on.
-    m_config.riseMargin = std::max(m_config.riseMargin, 1.1f);
-    // An emergency floor that is not under the floor, or with no speed to trigger it, is no emergency floor.
-    m_config.emergencyBelowFps = std::max(m_config.emergencyBelowFps, 0.0f);
-    if (m_config.emergencyBelowFps > 0.0f && m_config.emergencyScale > 0.0f && m_config.emergencyScale < m_config.minScale) {
-        m_config.emergencyScale = Clamp(m_config.emergencyScale, 0.05f, m_config.minScale);
-    } else {
-        m_config.emergencyScale = 0.0f;
-    }
+    m_config = Mended(m_config);
 }
 
 float DynamicResolution::FloorFor(float fps) const {
@@ -56,6 +80,7 @@ DynamicResolutionConfig DynamicResolution::ForWindow(const DynamicResolutionConf
     DynamicResolutionConfig config = declared;
     config.minScale = FloorForTargetHeight(declared.minScale, declared.maxScale, windowHeight, declared.minTargetHeight);
     config.emergencyScale = declared.emergencyBelowFps > 0.0f && config.minScale > declared.minScale ? declared.minScale : 0.0f;
+    config.windowHeight = windowHeight;
     return config;
 }
 
@@ -66,6 +91,7 @@ DynamicResolutionConfig DynamicResolution::Pinned(const DynamicResolutionConfig&
     pinned.minTargetHeight = 0;
     pinned.emergencyBelowFps = 0.0f;
     pinned.emergencyScale = 0.0f;
+    pinned.lowTierFps = 0.0f;
     return pinned;
 }
 
@@ -87,14 +113,50 @@ float DynamicResolution::FloorForTargetHeight(float minScale, float maxScale, st
     return std::min(std::max(minScale, needed), ceiling);
 }
 
+float DynamicResolution::QualityScaleFor(const DynamicResolutionConfig& forWindow, std::uint32_t sceneLines) {
+    const DynamicResolutionConfig config = Mended(forWindow);
+    if (config.lowTierFps <= 0.0f || config.qualityTargetHeight == 0 || config.windowHeight == 0) return config.minScale;
+    // A scene with fewer lines of art on screen than the target gains nothing from more lines than it has.
+    const std::uint32_t lines = sceneLines > 0 ? std::min(config.qualityTargetHeight, sceneLines) : config.qualityTargetHeight;
+    const float needed = FloorForTargetHeight(config.minScale, config.maxScale, config.windowHeight, lines);
+    return Clamp(std::min(needed, config.qualityMaxShare), config.minScale, config.maxScale);
+}
+
 void DynamicResolution::Reconfigure(const DynamicResolutionConfig& config) {
-    m_config = config;
-    Mend();
-    // Into the comfortable range, not the emergency one: a floor that was raised (a window that got shorter) lifts a picture that
-    // had fallen below it, and the next windows judge it at the floor again.
-    m_scale = Rounded(Clamp(m_scale, m_config.minScale, m_config.maxScale));
-    // What was learned about the old configuration is not evidence about the new one.
+    const bool wasTiered = Tiered();
+    m_declared = Mended(config);
+    // What a scene learned under the old configuration is not evidence about the new one either.
+    ForgetScenes();
+    if (!Tiered()) {
+        m_lowTier = false;
+        m_onTrial = false;
+        m_tierDown = 0.0;
+        m_tierUp = 0.0;
+        m_fastRiseLeft = 0.0;
+        m_q = m_declared.minScale;
+        m_config = m_declared;
+        // Into the comfortable range, not the emergency one: a floor that was raised (a window that got shorter) lifts a
+        // picture that had fallen below it, and the next windows judge it at the floor again.
+        m_scale = Rounded(Clamp(m_scale, m_config.minScale, m_config.maxScale));
+        // What was learned about the old configuration is not evidence about the new one.
+        ForgetJudgement();
+        return;
+    }
+    // Tiered: the tier is kept (a controller that was held at one size starts in the upper one), the probe on trial ends
+    // where it is, and the grace starts as at a launch.
+    if (!wasTiered) m_lowTier = false;
+    m_onTrial = false;
+    m_trialSeconds = 0.0;
+    m_tierDown = 0.0;
+    m_tierUp = 0.0;
+    m_q = QualityScaleFor(m_declared, m_sceneLines);
+    ApplyView(m_scale, false);
+    m_tierGrace = kTierGraceSeconds;
+}
+
+void DynamicResolution::ForgetJudgement() {
     m_samples.clear();
+    m_waits.clear();
     m_windowSeconds = 0.0;
     m_calmSeconds = 0.0;
     m_judging = false;
@@ -105,6 +167,46 @@ void DynamicResolution::Reconfigure(const DynamicResolutionConfig& config) {
     m_riseHoldSeconds = 0.0;
     m_nextRiseHoldSeconds = kFirstRiseHoldSeconds;
     m_settle = kSettleFrames;
+}
+
+void DynamicResolution::ApplyView(float scale, bool allowEmergency) {
+    DynamicResolutionConfig view = m_declared;
+    // Nothing reads it in a view (the tier rules read m_declared), and the lower tier's view, whose target IS lowTierFps,
+    // would mend it away if it were ever mended.
+    view.lowTierFps = 0.0f;
+    if (Tiered()) {
+        if (m_lowTier) {
+            // The pixel floor, the emergency floor under it and the relaxed rise all stay: the lower tier is E47's controller
+            // aiming at lowTierFps.
+            view.targetFps = m_declared.lowTierFps;
+        } else {
+            // Below the quality floor belongs to the lower tier. With no emergency floor, AtTheFloor() means "at Q".
+            view.minScale = Clamp(std::max(view.minScale, m_q), view.minScale, view.maxScale);
+            view.emergencyBelowFps = 0.0f;
+            view.emergencyScale = 0.0f;
+        }
+    }
+    view.upAfterSeconds = m_fastRiseLeft > 0.0 ? std::min(kSceneRiseAfterSeconds, m_declared.upAfterSeconds)
+                                               : m_declared.upAfterSeconds;
+    m_minRiseStep = Tiered() && m_lowTier ? kLowTierMinRiseStep : 0.0f;
+    m_config = view;
+    const float low = allowEmergency ? AbsoluteFloor() : m_config.minScale;
+    m_scale = Rounded(Clamp(scale, low, m_config.maxScale));
+    ForgetJudgement();
+}
+
+void DynamicResolution::FollowQuality() {
+    if (!Tiered() || m_lowTier) return;
+    m_config.minScale = Clamp(std::max(m_declared.minScale, m_q), m_declared.minScale, m_declared.maxScale);
+    if (m_scale < m_config.minScale) {
+        m_scale = Rounded(m_config.minScale);
+        // A step being judged was a step across another floor, and the window gathered was at another size.
+        m_judging = false;
+        m_samples.clear();
+        m_waits.clear();
+        m_windowSeconds = 0.0;
+        m_settle = kSettleFrames;
+    }
 }
 
 float DynamicResolution::ScaleAfterShortfall(float scale, float fps, float target, float minScale) {
@@ -131,6 +233,7 @@ bool DynamicResolution::Observe(float frameSeconds) {
     if (frameSeconds > kIgnoreAboveSeconds) {
         // A load or a hitch: what was gathered before it describes a different moment.
         m_samples.clear();
+        m_waits.clear();
         m_windowSeconds = 0.0;
         m_settle = std::max(m_settle, 2);
         return false;
@@ -154,6 +257,9 @@ bool DynamicResolution::Observe(float frameSeconds) {
     const double elapsed = m_windowSeconds;
     m_samples.clear();
     m_windowSeconds = 0.0;
+    // (E50: read by ObserveFrame only, after this returns.)
+    ++m_windowsEnded;
+    m_lastWindowSeconds = elapsed;
 
     const bool shortfall = fps < m_config.targetFps * kShortfallTolerance;
     m_windowMedianMs = median * 1000.0f;
@@ -227,6 +333,8 @@ bool DynamicResolution::Observe(float frameSeconds) {
             if (m_calmSeconds >= m_config.upAfterSeconds && !(relaxed && m_riseHoldSeconds > 0.0)) {
                 m_calmSeconds = 0.0;
                 next = ScaleAfterHeadroom(m_scale, fps, m_config.targetFps, m_config.maxScale);
+                // 0 unless a tier view asks for more (kLowTierMinRiseStep): E47's rise is untouched.
+                if (m_minRiseStep > 0.0f) next = std::min(m_config.maxScale, std::max(next, Rounded(m_scale + m_minRiseStep)));
                 rose = true;
             }
         } else {
@@ -252,6 +360,303 @@ bool DynamicResolution::Observe(float frameSeconds) {
     m_lastWasRevert = revert;
     m_settle = kSettleFrames;
     return true;
+}
+
+// ---- E50: the tiers and the scene memory ---------------------------------------------------------------------------------
+
+bool DynamicResolution::Tiered() const {
+    return m_declared.enabled && m_declared.lowTierFps > 0.0f && !Fixed();
+}
+
+float DynamicResolution::TierFps() const {
+    if (!Tiered()) return 0.0f;
+    return m_lowTier ? m_declared.lowTierFps : m_declared.targetFps;
+}
+
+DynamicResolution::TierChange DynamicResolution::TakeTierChange() {
+    const TierChange change = m_tierChange;
+    m_tierChange = TierChange::None;
+    return change;
+}
+
+void DynamicResolution::StartSettle() {
+    m_sceneSettleFrames = kSceneSettleFrames;
+    m_sceneSettleSeconds = kSceneSettleSeconds;
+    m_samples.clear();
+    m_waits.clear();
+    m_windowSeconds = 0.0;
+}
+
+bool DynamicResolution::ObserveFrame(float frameSeconds, float waitSeconds) {
+    // E47, frame for frame, for a game that asked for neither tiers nor scenes.
+    if (!Tiered() && !m_hasScene) return Observe(frameSeconds);
+    if (!m_config.enabled) return false;
+
+    // After a scene's entry or a resume: frames counted, not measured. Both counts must run out, so a long load frame (one
+    // frame, a tenth of a second) cannot end the settle by itself, nor a burst of quick frames before a second has passed.
+    if (SceneSettling()) {
+        if (frameSeconds > 0.0f) {
+            if (m_sceneSettleFrames > 0) --m_sceneSettleFrames;
+            m_sceneSettleSeconds -= std::min(static_cast<double>(frameSeconds), kSceneSettleFrameCapSeconds);
+        }
+        if (m_sceneSettleFrames <= 0 && m_sceneSettleSeconds <= 0.0) {
+            m_sceneSettleFrames = 0;
+            m_sceneSettleSeconds = 0.0;
+            m_samples.clear();
+            m_waits.clear();
+            m_windowSeconds = 0.0;
+        }
+        return false;
+    }
+
+    const float before = m_scale;
+    const std::size_t samplesBefore = m_samples.size();
+    const std::uint64_t windowsBefore = m_windowsEnded;
+    const bool changed = Observe(frameSeconds);
+    if (m_windowsEnded == windowsBefore) {
+        // The waits follow the samples one for one, so each window's waits are its frames' waits.
+        if (m_samples.size() > samplesBefore) m_waits.push_back(waitSeconds);
+        return Moved(before, m_scale);
+    }
+    // A window ended with this frame (whose sample was taken and cleared with the rest). Its waits' median, or -1 when any
+    // of them was unknown: a prediction from a part of the window would be a guess.
+    m_waits.push_back(waitSeconds);
+    float waitMedian = -1.0f;
+    if (std::none_of(m_waits.begin(), m_waits.end(), [](float wait) { return wait < 0.0f; })) {
+        std::vector<float> sorted = m_waits;
+        std::sort(sorted.begin(), sorted.end());
+        waitMedian = sorted.size() % 2 == 1 ? sorted[sorted.size() / 2]
+                                            : 0.5f * (sorted[sorted.size() / 2 - 1] + sorted[sorted.size() / 2]);
+    }
+    m_waits.clear();
+
+    // A first visit's quicker rise runs out with the windows; only the view's upAfterSeconds goes back (a whole new view
+    // would forget the judgement and the holds).
+    if (m_fastRiseLeft > 0.0) {
+        m_fastRiseLeft -= m_lastWindowSeconds;
+        if (m_fastRiseLeft <= 0.0) {
+            m_fastRiseLeft = 0.0;
+            m_config.upAfterSeconds = m_declared.upAfterSeconds;
+        }
+    }
+    // The window was measured at `before`: Observe may just have stepped away from it (a step down to be judged, a step
+    // taken back), and the tier rules judge the size the frames were drawn at, not the one they have not seen yet.
+    if (Tiered()) JudgeTier(changed, waitMedian, before);
+    return Moved(before, m_scale);
+}
+
+void DynamicResolution::SwitchTier(bool lowTier, float scale) {
+    m_lowTier = lowTier;
+    m_tierDown = 0.0;
+    m_tierUp = 0.0;
+    if (lowTier) {
+        m_onTrial = false;
+        m_trialSeconds = 0.0;
+    }
+    ApplyView(scale, true);
+    // A tier's change is neither a rise on room nor a step taken back, and its window is the one the getters describe.
+    m_lastWasRise = false;
+    m_lastWasRevert = false;
+    m_lastMedianMs = m_windowMedianMs;
+}
+
+void DynamicResolution::JudgeTier(bool changedThisWindow, float waitMedian, float measuredScale) {
+    const double elapsed = m_lastWindowSeconds;
+    const float median = m_windowMedianMs / 1000.0f;
+    const float fps = median > 0.0f ? 1.0f / median : 0.0f;
+    const bool missed = m_windowMissed;
+
+    // The grace blocks a tier DOWN only. A step taken back during it was the launch's or the load's transient, not the
+    // scene: its hold is let go when the grace ends, or a GPU that is merely slow to start would be held at its first size
+    // and then judged stuck there.
+    const bool inGrace = m_tierGrace > 0.0;
+    if (inGrace) {
+        if (changedThisWindow && m_lastWasRevert) m_graceRevert = true;
+        m_tierGrace = std::max(0.0, m_tierGrace - elapsed);
+        if (m_tierGrace <= 0.0 && m_graceRevert) {
+            m_graceRevert = false;
+            m_holdSeconds = 0.0;
+        }
+    }
+    m_tierHold = std::max(0.0, m_tierHold - elapsed);
+    const float target = m_declared.targetFps;
+    const float probeFrame = 1.0f / (kProbeHeadroom * target);
+
+    if (!m_lowTier) {
+        if (m_onTrial) {
+            m_trialSeconds += elapsed;
+            if (m_trialSeconds >= kTierTrialSeconds && !missed) {
+                // The probe held: the next failure starts the holds from the shortest again.
+                m_onTrial = false;
+                m_nextTierHold = kFirstTierHoldSeconds;
+            }
+        }
+        // Nothing left to try in the upper tier: measured at the quality floor, or held after a step that bought nothing (a
+        // frame the CPU decides), or a probe that missed. Hopeless: not even the lower tier's rate measured at the floor.
+        // A step Observe has just taken is still to be judged, and a switch now would forget that judgement (ApplyView):
+        // a CPU-bound frame stepped onto the floor would go down a tier there instead of having the step taken back, so
+        // such a window counts for nothing. A probe's miss is the exception: its way down is the lower tier's own size.
+        const bool measuredAtFloor = measuredScale <= AbsoluteFloor() + 0.005f;
+        const bool stuck = missed && (m_onTrial || (!m_judging && (measuredAtFloor || m_holdSeconds > 0.0)));
+        const bool hopeless = measuredAtFloor && fps < kShortfallTolerance * m_declared.lowTierFps;
+        m_tierDown = (stuck && !inGrace) ? m_tierDown + elapsed : 0.0;
+        const double needed = (m_onTrial || hopeless) ? kTierQuickDownSeconds : kTierDownAfterSeconds;
+        if (m_tierDown >= needed) {
+            float scale = m_scale;
+            if (m_onTrial) {
+                scale = m_scaleLeft30;
+                m_tierHold = m_nextTierHold;
+                m_nextTierHold = std::min(m_nextTierHold * 2.0, kLongestTierHoldSeconds);
+                ++m_probeFailures;
+                m_tierChange = TierChange::ProbeFailed;
+            } else {
+                m_tierChange = TierChange::Down;
+            }
+            // The lower tier starts where the upper one is now (at the floor, back at the size a step that bought nothing was
+            // taken back to, or where the lower tier was before the probe) and falls from there.
+            SwitchTier(true, scale);
+        }
+        return;
+    }
+
+    if (m_tierHold > 0.0 || m_probeFailures >= kMaxProbeFailures) {
+        m_tierUp = 0.0;
+        return;
+    }
+    // Would the upper tier hold at the quality floor? Seen directly (the lower tier's view is not paced, so a frame can run
+    // far above its target), or predicted: the part of the frame the CPU spent not waiting is exact whatever the size, and
+    // the GPU's part (the whole frame, when it waited) follows the pixel count. Both from the size the window was drawn at.
+    const bool direct = measuredScale >= m_q - 0.005f && fps >= kShortfallTolerance * target;
+    bool predicted = false;
+    if (!m_loopPaced && waitMedian >= 0.0f && median > 0.0f && measuredScale > 0.0f) {
+        const float ratio = m_q / measuredScale;
+        predicted = std::max(median - waitMedian, median * ratio * ratio) <= probeFrame;
+    }
+    if (direct || predicted) {
+        m_tierUp += elapsed;
+        // No rise in the lower tier past a size the upper one can reach: the probe decides that.
+        m_calmSeconds = 0.0;
+    } else {
+        m_tierUp = 0.0;
+    }
+    if (m_tierUp >= kTierUpAfterSeconds) {
+        m_scaleLeft30 = m_scale;
+        const float scale =
+            direct ? measuredScale : Clamp(measuredScale * std::sqrt(probeFrame / median), m_q, m_declared.maxScale);
+        m_onTrial = true;
+        m_trialSeconds = 0.0;
+        m_tierChange = TierChange::Probe;
+        SwitchTier(false, scale);
+    }
+}
+
+DynamicResolution::SceneMemory DynamicResolution::Remember() const {
+    SceneMemory memory;
+    // A scene left during a probe is remembered as it was before the probe: the lower tier at its size, with no failure.
+    memory.lowTier = m_onTrial || m_lowTier;
+    memory.scale = m_onTrial ? m_scaleLeft30 : m_scale;
+    memory.tierHold = m_tierHold;
+    memory.nextTierHold = m_nextTierHold;
+    memory.probeFailures = m_probeFailures;
+    memory.holdSeconds = m_holdSeconds;
+    memory.nextHoldSeconds = m_nextHoldSeconds;
+    memory.revertFps = m_revertFps;
+    memory.riseHoldSeconds = m_riseHoldSeconds;
+    memory.nextRiseHoldSeconds = m_nextRiseHoldSeconds;
+    return memory;
+}
+
+bool DynamicResolution::EnterScene(std::string_view key, std::uint32_t sceneLines) {
+    if (key.empty()) return false;
+    const float before = m_scale;
+
+    // The same scene with another count of lines (a zoom): only the quality floor moves.
+    if (m_hasScene && key == m_sceneKey) {
+        if (sceneLines == m_sceneLines) return false;
+        m_sceneLines = sceneLines;
+        m_q = QualityScaleFor(m_declared, sceneLines);
+        FollowQuality();
+        return Moved(before, m_scale);
+    }
+
+    // The first scene a controller hears of (at a launch, or a new controller after a pick): adopted where it is, with no
+    // settle (a launch has its grace) and nothing to remember of the frames before.
+    if (!m_hasScene) {
+        m_hasScene = true;
+        m_sceneKey.assign(key);
+        m_sceneLines = sceneLines;
+        m_lastSceneRemembered = false;
+        m_q = QualityScaleFor(m_declared, sceneLines);
+        FollowQuality();
+        return Moved(before, m_scale);
+    }
+
+    // Another scene. A picture held at one size remembers nothing and moves nowhere.
+    const SceneMemory left = Remember();
+    if (!Fixed()) m_scenes.insert_or_assign(m_sceneKey, left);
+    m_sceneKey.assign(key);
+    m_sceneLines = sceneLines;
+    m_q = QualityScaleFor(m_declared, sceneLines);
+    if (Fixed()) {
+        m_lastSceneRemembered = false;
+        return false;
+    }
+
+    SceneMemory memory;
+    float scale = left.scale;
+    bool lowTier = left.lowTier;
+    const auto found = m_scenes.find(key);
+    if (found != m_scenes.end()) {
+        memory = found->second;
+        scale = memory.scale;
+        lowTier = memory.lowTier;
+        m_fastRiseLeft = 0.0;
+        m_lastSceneRemembered = true;
+    } else {
+        // A first visit starts where the last scene was (as it was before a probe on trial), in its tier, and rises sooner
+        // for a while. Its holds start empty.
+        m_fastRiseLeft = kSceneFastRiseSeconds;
+        m_lastSceneRemembered = false;
+        // On a loop the display paces, the lower tier below the quality floor has no way up (no relaxed rise, no
+        // prediction, and the direct probe is seen only at the floor), so a heavy scene's size would decide a light one's
+        // for the session. There a first visit starts no lower than its own quality floor, and the lower tier's rules lower
+        // it again where lowTierFps does not hold at it.
+        if (m_loopPaced && Tiered() && lowTier) scale = std::max(scale, m_q);
+    }
+    m_lowTier = Tiered() && lowTier;
+    m_onTrial = false;
+    m_trialSeconds = 0.0;
+    m_tierDown = 0.0;
+    m_tierUp = 0.0;
+    m_graceRevert = false;
+    ApplyView(scale, true);
+    // After the view (which forgets holds): this scene's own, which counted down only while it was current.
+    m_tierHold = memory.tierHold;
+    m_nextTierHold = memory.nextTierHold;
+    m_probeFailures = memory.probeFailures;
+    m_holdSeconds = memory.holdSeconds;
+    m_nextHoldSeconds = memory.nextHoldSeconds;
+    m_revertFps = memory.revertFps;
+    m_riseHoldSeconds = memory.riseHoldSeconds;
+    m_nextRiseHoldSeconds = memory.nextRiseHoldSeconds;
+    StartSettle();
+    if (Tiered()) m_tierGrace = kTierGraceSeconds;
+    return Moved(before, m_scale);
+}
+
+void DynamicResolution::ForgetScenes() {
+    m_scenes.clear();
+    m_tierHold = 0.0;
+    m_nextTierHold = kFirstTierHoldSeconds;
+    m_probeFailures = 0;
+}
+
+void DynamicResolution::NoteResume() {
+    if (!Tiered() && !m_hasScene) return;
+    StartSettle();
+    m_tierDown = 0.0;
+    m_tierUp = 0.0;
+    if (Tiered()) m_tierGrace = kTierGraceSeconds;
 }
 
 } // namespace Supersonic

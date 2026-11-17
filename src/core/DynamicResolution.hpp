@@ -30,9 +30,24 @@
 //     size it starts at (startMaxPixels) is the most it will have. The engine's mailbox present, which Android and most
 //     desktops offer, is unpaced.
 // Steps are rare on purpose: each one recreates the scene target, which costs a frame or two.
+//
+// TWO TIERS AND A MEMORY PER SCENE (E50, opt-in: lowTierFps, and EnterScene). A GPU too slow for the target at any size
+// worth looking at would otherwise be chased down to the emergency floor, a picture stretched three times over, for a
+// frame rate it never reaches. With lowTierFps set, the controller has two tiers. The upper one is E47's controller with
+// its floor raised to a quality floor Q (qualityTargetHeight lines of picture); where the target cannot be held at Q, the
+// lower tier keeps a steady lowTierFps (30) at the largest size that holds it, and a probe goes back up when the frames
+// say the upper tier would hold at Q (seen directly, or predicted from the time the frame waited for the GPU). A failed
+// probe holds the next one off for a minute, doubling, and two failures end the probing of that scene.
+// A scene (EnterScene, a key the game chooses) keeps its own tier and size, and its own holds, for the session: a heavy
+// menu no longer decides a light level's size, and a reload does not re-arm a probe that already failed. Every decision
+// is still the window's median, so a hitch moves nothing. A game that sets neither has E47's controller, frame for frame.
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <map>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace Supersonic {
@@ -85,6 +100,20 @@ struct DynamicResolutionConfig {
     // (SupersonicApp: the floor as the game declared it) and is mended to nothing unless it is under minScale.
     float emergencyBelowFps{0.0f};
     float emergencyScale{0.0f};
+
+    // ---- Opt-in tiers (E50). Off by default (lowTierFps 0): a game that sets none of them has E47's controller.
+
+    // The frame rate of the lower tier, kept where targetFps cannot be held at the quality floor. Mended to 0 (no tiers)
+    // unless it lies in [10, targetFps / 1.5]: a lower tier that is nearly the target is no second tier.
+    float lowTierFps{0.0f};
+    // The quality floor of the upper tier in lines of picture: the upper tier never goes below it, and gives way to the lower
+    // tier instead. 0 is minScale itself. A scene with fewer lines of art on screen (EnterScene) asks for no more than those.
+    std::uint32_t qualityTargetHeight{0};
+    // ... and never more than this share of the window, so a short window is not asked for nearly all of its lines.
+    float qualityMaxShare{0.75f};
+    // The window's height in pixels, written by ForWindow: the quality floor is worked out from it. 0 is unknown (Q is then
+    // minScale).
+    std::uint32_t windowHeight{0};
 };
 
 class DynamicResolution {
@@ -97,8 +126,92 @@ public:
 
     // Takes a new configuration while running (a graphics-quality pick): mended like the constructor's, the judgement and
     // the hold forgotten, the current scale kept when it still fits the new range and moved into it when it does not. The
-    // caller compares Scale() before and after to know whether to resize.
+    // caller compares Scale() before and after to know whether to resize. What the scenes learned is forgotten as well
+    // (ForgetScenes), and a tiered controller keeps its tier and starts the tier grace.
     void Reconfigure(const DynamicResolutionConfig& config);
+
+    // ---- E50: the tiers and the scene memory (opt-in) ----
+
+    // One frame's wall time and the part of it the CPU spent waiting for the GPU (the frame's fence and acquire waits), in
+    // seconds; a wait below 0 is unknown. With no tiers and no scene ever entered this is Observe(frameSeconds), exactly.
+    // True when the scale changed.
+    bool ObserveFrame(float frameSeconds, float waitSeconds);
+
+    // The game's scene, by a key it chooses, and the lines of art it shows (0: unknown; the quality floor then asks for
+    // qualityTargetHeight lines). Leaving a scene remembers its tier, size and holds for the session; entering one that was
+    // seen restores them, and a first visit starts from where the last scene was (on a loop the display paces, no lower
+    // than its own quality floor: nothing else could lift it there) and rises faster for a while. The frames
+    // after an entry are not measured (kSceneSettleFrames and kSceneSettleSeconds: the load frame and the first draws are
+    // not the scene's speed). The same key with other lines only moves the quality floor. An empty key is no scene. True
+    // when the scale changed.
+    bool EnterScene(std::string_view key, std::uint32_t sceneLines);
+    // Forgets what every scene learned (the current one stays current, as on a first visit), and the probes' holds and
+    // failures: a window of another height is another picture.
+    void ForgetScenes();
+    // The app came back from the background: the same settle and tier grace as a scene's entry, and nothing forgotten. The
+    // first frames after a resume (a new swapchain, a sound stream opening) are not the scene's speed. Nothing for E47's
+    // controller (no tiers, no scene).
+    void NoteResume();
+
+    // Whether the two tiers are in force (lowTierFps, mended, on an enabled controller that is not held at one size).
+    bool Tiered() const;
+    // The frame rate the current tier keeps (targetFps or lowTierFps); 0 with no tiers.
+    float TierFps() const;
+    // The quality floor of the current scene, as a scale; minScale with no tiers.
+    float QualityScale() const { return m_q; }
+    // The last tier change, for the log; taking it clears it.
+    enum class TierChange { None, Down, Probe, ProbeFailed };
+    TierChange TakeTierChange();
+    // The current scene's probe hold (seconds left) and failed probes; whether the frames are not being measured after a
+    // scene's entry or a resume; whether the last scene entered had been seen before; seconds of tier grace left; and how
+    // many windows ended so far (for the log and the tests).
+    double TierHoldSeconds() const { return m_tierHold; }
+    int ProbeFailures() const { return m_probeFailures; }
+    bool SceneSettling() const { return m_sceneSettleFrames > 0 || m_sceneSettleSeconds > 0.0; }
+    bool LastSceneRemembered() const { return m_lastSceneRemembered; }
+    double TierGraceSeconds() const { return m_tierGrace; }
+    std::uint64_t WindowsEnded() const { return m_windowsEnded; }
+
+    // No tier change for this long after a launch, a scene's entry or a resume: pipeline compiles and first draws look
+    // like a GPU that cannot hold the target (the Pad 5 launches with about three windows at 8-15 fps).
+    static constexpr double kTierGraceSeconds = 4.0;
+    // The upper tier gives way after this long with nothing left to try (at the quality floor, or held after a step that
+    // did not pay, which is a CPU-bound frame), and after one window when even the lower tier's rate is out of reach at
+    // the floor or a probe missed.
+    static constexpr double kTierDownAfterSeconds = 2.4;
+    static constexpr double kTierQuickDownSeconds = 1.2;
+    // The lower tier probes after this long of windows that say the upper one would hold (as long as upAfterSeconds).
+    static constexpr double kTierUpAfterSeconds = 8.0;
+    // A probe is on trial this long (as a relaxed rise is).
+    static constexpr double kTierTrialSeconds = 20.0;
+    // After a failed probe: no probe for this long, doubling up to the longest; after kMaxProbeFailures, none in that scene
+    // for the session.
+    static constexpr double kFirstTierHoldSeconds = 60.0;
+    static constexpr double kLongestTierHoldSeconds = 480.0;
+    static constexpr int kMaxProbeFailures = 2;
+    // A probe aims at targetFps x this (69.6 fps at 58: 14.4 ms), where ScaleAfterHeadroom lands.
+    static constexpr float kProbeHeadroom = 1.2f;
+    // The settle after a scene's entry or a resume lasts at least this many frames AND this many seconds, a frame counting
+    // for no more than kSceneSettleFrameCapSeconds: a 600 ms load frame is one frame and a tenth of a second, not the settle.
+    static constexpr int kSceneSettleFrames = 30;
+    static constexpr double kSceneSettleSeconds = 1.0;
+    static constexpr double kSceneSettleFrameCapSeconds = 0.1;
+    // A first visit to a scene rises after this long of calm (instead of upAfterSeconds) for its first seconds.
+    static constexpr float kSceneRiseAfterSeconds = 2.4f;
+    static constexpr double kSceneFastRiseSeconds = 20.0;
+    // The lower tier's least rise. ScaleAfterHeadroom sizes a rise as if the whole frame were the GPU's, which is right
+    // when it is; when the CPU sets the frame (the GPU waits for nothing), the picture can grow for free until the GPU's
+    // part reaches the CPU's, and the predicted step shrinks to nothing: a CPU-heavy scene entered at a heavy menu's size
+    // (38.5 fps at 0.31, a step of 0.0106) stayed there for good. A rise that overshoots is caught by the rise trial and
+    // held, as any rise is.
+    static constexpr float kLowTierMinRiseStep = 0.03f;
+
+    // The quality floor, as a scale, of a configuration worked out for its window (ForWindow writes windowHeight), for a
+    // scene showing `sceneLines` lines of art (0: unknown): qualityTargetHeight lines, or the scene's own if fewer, never
+    // more than qualityMaxShare of the window, inside [minScale, maxScale]. minScale with no tiers or no height.
+    static float QualityScaleFor(const DynamicResolutionConfig& forWindow, std::uint32_t sceneLines);
+    // A configuration mended as the controller mends it (the constructor and Reconfigure): pure, so a test can state it.
+    static DynamicResolutionConfig Mended(const DynamicResolutionConfig& config);
 
     // Whether the loop is paced by the display (a FIFO present: MoltenVK, a device with no MAILBOX). Set by the engine, which
     // knows the present mode; a paced loop never takes the relaxed rise (DynamicResolutionConfig::relaxedRise).
@@ -169,7 +282,37 @@ public:
     static DynamicResolutionConfig Pinned(const DynamicResolutionConfig& config, float scale);
 
 private:
+    // What a scene learned, kept while another is current: its tier and size, and every hold with the length of the next.
+    struct SceneMemory {
+        bool lowTier{false};
+        float scale{1.0f};
+        double tierHold{0.0};
+        double nextTierHold{kFirstTierHoldSeconds};
+        int probeFailures{0};
+        double holdSeconds{0.0};
+        double nextHoldSeconds{kFirstHoldSeconds};
+        float revertFps{0.0f};
+        double riseHoldSeconds{0.0};
+        double nextRiseHoldSeconds{kFirstRiseHoldSeconds};
+    };
+
     void Mend();
+    // The configuration E47's machinery runs on, built from m_declared for the current tier (the upper tier's floor raised
+    // to the quality floor, with no emergency floor under it; the lower tier aiming at lowTierFps), then Reconfigure's
+    // forgetting: the scale moved into the view's range (the emergency range too when `allowEmergency`), the window, the
+    // judgement, the holds and the rise trial cleared, the settle frames to run.
+    void ApplyView(float scale, bool allowEmergency);
+    // Reconfigure's forgetting, shared by it and ApplyView.
+    void ForgetJudgement();
+    // The quality floor moved (a scene's lines, a scene adopted): the upper tier's floor follows it without forgetting
+    // anything, and lifts a picture under it.
+    void FollowQuality();
+    // The tier rules, on a window that just ended, measured at `measuredScale` (the scale before Observe acted on it).
+    void JudgeTier(bool changedThisWindow, float waitMedian, float measuredScale);
+    void SwitchTier(bool lowTier, float scale);
+    SceneMemory Remember() const;
+    void StartSettle();
+    bool Fixed() const { return m_declared.minScale >= m_declared.maxScale; }
     // The lowest scale there is: the emergency floor when the config has one, else minScale.
     float AbsoluteFloor() const { return m_config.emergencyScale > 0.0f ? m_config.emergencyScale : m_config.minScale; }
     // The floor a shortfall at `fps` may fall to from the current scale: minScale from above (a fall is measured at the
@@ -206,6 +349,38 @@ private:
     double m_sinceRiseSeconds{0.0};
     double m_riseHoldSeconds{0.0};
     double m_nextRiseHoldSeconds{kFirstRiseHoldSeconds};
+
+    // ---- E50. m_config above is the view of the current tier; m_declared is the configuration as given (mended), which
+    // every tier rule reads. With no tiers the two are the same.
+    DynamicResolutionConfig m_declared;
+    float m_q{0.0f};                 // the current scene's quality floor, as a scale
+    bool m_lowTier{false};
+    // A probe on trial in the upper tier: for how long, and the size the lower tier had, to go back to.
+    bool m_onTrial{false};
+    double m_trialSeconds{0.0};
+    float m_scaleLeft30{1.0f};
+    // Seconds of windows that ask for a tier down, and for a probe.
+    double m_tierDown{0.0};
+    double m_tierUp{0.0};
+    double m_tierGrace{0.0};
+    bool m_graceRevert{false};       // a step was taken back during the grace: its hold is the transient's, not the scene's
+    double m_tierHold{0.0};
+    double m_nextTierHold{kFirstTierHoldSeconds};
+    int m_probeFailures{0};
+    TierChange m_tierChange{TierChange::None};
+    double m_fastRiseLeft{0.0};      // a first visit's quicker rise, seconds left
+    float m_minRiseStep{0.0f};       // the view's least rise: kLowTierMinRiseStep in the lower tier, 0 elsewhere (E47)
+    int m_sceneSettleFrames{0};
+    double m_sceneSettleSeconds{0.0};
+    bool m_hasScene{false};
+    std::string m_sceneKey;
+    std::uint32_t m_sceneLines{0};
+    bool m_lastSceneRemembered{false};
+    std::map<std::string, SceneMemory, std::less<>> m_scenes;
+    // The frames' waits for the GPU, beside m_samples; and the windows that ended, with the last one's length.
+    std::vector<float> m_waits;
+    std::uint64_t m_windowsEnded{0};
+    double m_lastWindowSeconds{0.0};
 };
 
 } // namespace Supersonic
