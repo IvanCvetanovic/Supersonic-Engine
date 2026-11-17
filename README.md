@@ -652,7 +652,7 @@ verified by a screenshot of geometry it never touched.
 | `test_log` | The engine log: bounded with a count of what it dropped (oldest first), a file sink that is flushed per line, and four threads logging at once losing nothing that was kept |
 | `test_platform` | What a desktop window answers about a screen it does not have: zero safe-area insets, every frame |
 | `test_worldshapes` | The world-space shape buffer's tessellation and accumulation; the pixels need a device and are not covered here |
-| `test_device` | The renderer's device-facing code on a real Vulkan device (a GPU, or lavapipe under Xvfb; Skipped, exit 77, without one): texture uploads read back from the GPU, the mip chain, a replace that must keep its size and slot, a mesh replace that keeps its id, the pipeline cache saved and reloaded, and the deferred-destroy queue freeing in order |
+| `test_device` | The renderer's device-facing code on a real Vulkan device (a GPU, or lavapipe under Xvfb; Skipped, exit 77, without one): texture uploads read back from the GPU, the mip chain, a replace that must keep its size and slot, a mesh replace that keeps its id, a host-visible mesh (`MeshResidency::HostVisible`) uploaded and replaced without one queue drain, into fresh buffers whose mapping holds the bytes, with the old ones queued for the deferred destroy (and the default path's four drains as the negative control), the pipeline cache saved and reloaded, and the deferred-destroy queue freeing in order |
 
 Every suite is a regression test for a bug that actually happened. The header
 comment on each one says which.

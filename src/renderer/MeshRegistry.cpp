@@ -99,7 +99,7 @@ void MeshRegistry::BuildSections(const std::vector<GltfLoader::Submesh>& submesh
     }
 }
 
-uint32_t MeshRegistry::Upload(const std::string& key, const MeshData& data) {
+uint32_t MeshRegistry::Upload(const std::string& key, const MeshData& data, MeshResidency residency) {
     if (auto it = m_lookup.find(key); it != m_lookup.end()) {
         return it->second;
     }
@@ -109,14 +109,17 @@ uint32_t MeshRegistry::Upload(const std::string& key, const MeshData& data) {
         return m_cubeMesh;
     }
 
-    GpuMesh mesh = createGpuMesh(data);
+    GpuMesh mesh = createGpuMesh(data, residency);
 
     const auto id = static_cast<uint32_t>(m_meshes.size());
     m_meshes.push_back(std::move(mesh));
     m_lookup.emplace(key, id);
 
+    // The residency is named only when it is not the default, so the line every
+    // existing upload writes is the line it always wrote.
     SUPERSONIC_LOG_INFO("MeshRegistry") << "Uploaded '" << key << "' (" << data.vertices.size()
-              << " vertices, " << data.indices.size() / 3 << " triangles)." << std::endl;
+              << " vertices, " << data.indices.size() / 3 << " triangles"
+              << (residency == MeshResidency::HostVisible ? ", host-visible" : "") << ")." << std::endl;
     return id;
 }
 
@@ -125,11 +128,12 @@ uint32_t MeshRegistry::Find(const std::string& key) const {
     return it == m_lookup.end() ? kInvalidMesh : it->second;
 }
 
-GpuMesh MeshRegistry::createGpuMesh(const MeshData& data) {
+GpuMesh MeshRegistry::createGpuMesh(const MeshData& data, MeshResidency residency) {
     GpuMesh mesh;
     mesh.indexCount = static_cast<uint32_t>(data.indices.size());
     mesh.boundsMin = data.boundsMin;
     mesh.boundsMax = data.boundsMax;
+    mesh.residency = residency;
 
     // EVERY mesh gets a section, here, at the one place geometry becomes a
     // GpuMesh. A procedural cube, an OBJ and a single-material glTF all end up
@@ -137,6 +141,28 @@ GpuMesh MeshRegistry::createGpuMesh(const MeshData& data) {
     // whether a mesh has sections - the empty case does not exist. Acquire
     // replaces this when a file actually described more than one surface.
     mesh.sections.push_back(MeshSection{0u, mesh.indexCount, MeshMaterial{}});
+
+    if (residency == MeshResidency::HostVisible) {
+        // Written where the GPU reads it: no staging buffer, no command buffer,
+        // no submit and so no wait. UploadData flushes, which a mapping that is
+        // not HOST_COHERENT needs (a phone's cached host-visible type can be
+        // that), and the next queue submit makes flushed host writes visible to
+        // the device without a barrier - the rule the per-frame uniform buffers
+        // already rely on. The buffers are new ones nothing has recorded yet,
+        // so no frame in flight can be reading what is written here.
+        const vk::DeviceSize vertexBytes = sizeof(Vertex) * data.vertices.size();
+        mesh.vertexBuffer = std::make_unique<VulkanBuffer>(
+            m_deviceRef.GetAllocator(), vertexBytes, vk::BufferUsageFlagBits::eVertexBuffer,
+            VMA_MEMORY_USAGE_CPU_TO_GPU, VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        mesh.vertexBuffer->UploadData(data.vertices.data(), vertexBytes);
+
+        const vk::DeviceSize indexBytes = sizeof(uint32_t) * data.indices.size();
+        mesh.indexBuffer = std::make_unique<VulkanBuffer>(
+            m_deviceRef.GetAllocator(), indexBytes, vk::BufferUsageFlagBits::eIndexBuffer,
+            VMA_MEMORY_USAGE_CPU_TO_GPU, VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        mesh.indexBuffer->UploadData(data.indices.data(), indexBytes);
+        return mesh;
+    }
 
     // Vertices: staged through a host-visible buffer into device-local memory.
     {
@@ -362,7 +388,10 @@ bool MeshRegistry::Replace(uint32_t id, const MeshData& data) {
     // gather both read the mesh's own count, and the texture resolve reads a
     // section's material and not its range. But a section that lies about
     // its range is exactly the thing the next reader trusts.
-    GpuMesh fresh = createGpuMesh(data);
+    //
+    // In the mesh's own residency: a mesh a game put in host-visible memory so
+    // that rebuilding it waits for nothing keeps that for every rebuild after.
+    GpuMesh fresh = createGpuMesh(data, m_meshes[id].residency);
 
     auto oldVertex = std::move(m_meshes[id].vertexBuffer);
     auto oldIndex = std::move(m_meshes[id].indexBuffer);
@@ -372,6 +401,7 @@ bool MeshRegistry::Replace(uint32_t id, const MeshData& data) {
     m_meshes[id].indexCount = fresh.indexCount;
     m_meshes[id].boundsMin = fresh.boundsMin;
     m_meshes[id].boundsMax = fresh.boundsMax;
+    m_meshes[id].residency = fresh.residency;
 
     // One section covering everything, as a fresh upload has. Replaced
     // geometry is procedural by construction - a file's surfaces come through

@@ -15,6 +15,7 @@
 
 #include "core/MeshData.hpp"
 #include "core/ModelLoader.hpp"
+#include "core/Profiler.hpp"
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/PipelineCache.hpp"
 #include "renderer/TextureRegistry.hpp"
@@ -276,6 +277,138 @@ static void testAReplacedMeshKeepsItsId(DeviceFixture& f) {
     f.device->FlushDeferredDestroys();
 }
 
+static void testAHostVisibleMeshIsWrittenWithoutWaitingOnTheQueue(DeviceFixture& f) {
+    // A mesh a game rewrites while it plays - a projected shadow strip, rebuilt on every frame its light moves - went
+    // through the staged path: two copies, each followed by a wait for the graphics queue to go idle, up to hundreds
+    // of waits a second in a game's menu while a light followed a finger. MeshResidency::HostVisible writes it into
+    // mapped memory instead. What must hold: no wait at all; the bytes in the buffers' mapped memory; a
+    // Replace that puts the new geometry into NEW buffers (a frame in flight may still be reading the old ones, and
+    // the shadow pass tells meshes apart by their buffer handles) and queues the old ones for the deferred destroy
+    // rather than freeing them; and a default upload that still waits - the negative control, without which the
+    // zeros could come from a counter that never counts.
+    MeshRegistry meshes(*f.device, f.pool);   // its fallback cube is staged, so every count starts after it
+
+    // A shadow strip's shape: five vertices, three triangles.
+    const std::array<glm::vec2, 5> corners = {glm::vec2(0.0f, 0.0f), glm::vec2(0.0f, 1.0f), glm::vec2(0.5f, 0.0f),
+                                              glm::vec2(1.0f, 1.0f), glm::vec2(1.0f, 0.0f)};
+    MeshData strip;
+    for (const glm::vec2& corner : corners) {
+        Vertex v{};
+        v.pos = glm::vec3(corner * glm::vec2(40.0f, 120.0f), 0.0f);
+        v.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+        v.color = glm::vec3(1.0f);
+        v.texCoord = corner;
+        strip.vertices.push_back(v);
+    }
+    strip.indices = {0, 1, 2, 2, 1, 3, 2, 3, 4};
+    strip.computeBounds();
+
+    // What a buffer's mapping holds, byte for byte against what was handed in.
+    const auto holds = [](const VulkanBuffer* buffer, const void* bytes, size_t size) {
+        return buffer != nullptr && buffer->GetMappedData() != nullptr &&
+               buffer->GetSize() == static_cast<vk::DeviceSize>(size) &&
+               std::memcmp(buffer->GetMappedData(), bytes, size) == 0;
+    };
+
+    // Upload.
+    Profiler::BeginFrame();
+    const uint32_t id = meshes.Upload("device-test:strip", strip, MeshResidency::HostVisible);
+    const int uploadDrains = Profiler::QueueDrains();
+    CHECK_MSG(uploadDrains == 0,
+              "a host-visible upload waited on the queue " + std::to_string(uploadDrains) + " time(s)");
+    const GpuMesh* uploaded = meshes.Get(id);
+    CHECK_MSG(uploaded != nullptr && uploaded->residency == MeshResidency::HostVisible, "the mesh is host-visible");
+    CHECK_MSG(uploaded != nullptr && uploaded->vertexBuffer != nullptr && uploaded->indexBuffer != nullptr &&
+                  uploaded->vertexBuffer->GetMappedData() != nullptr &&
+                  uploaded->indexBuffer->GetMappedData() != nullptr,
+              "both of its buffers are mapped");
+    CHECK_MSG(uploaded != nullptr &&
+                  holds(uploaded->vertexBuffer.get(), strip.vertices.data(), sizeof(Vertex) * strip.vertices.size()),
+              "its vertex buffer holds the vertices");
+    CHECK_MSG(uploaded != nullptr &&
+                  holds(uploaded->indexBuffer.get(), strip.indices.data(), sizeof(uint32_t) * strip.indices.size()),
+              "its index buffer holds the indices");
+    CHECK_MSG(uploaded != nullptr && uploaded->indexCount == strip.indices.size(), "with its index count");
+
+    // Replace, with the far corner moved (as a light moving past moves it) and one triangle fewer, so that the
+    // index count and both ends of the bounds have to follow.
+    const VulkanBuffer* oldVertex = uploaded != nullptr ? uploaded->vertexBuffer.get() : nullptr;
+    const VulkanBuffer* oldIndex = uploaded != nullptr ? uploaded->indexBuffer.get() : nullptr;
+    const vk::Buffer oldVertexHandle = oldVertex != nullptr ? oldVertex->GetBuffer() : vk::Buffer{};
+    const vk::Buffer oldIndexHandle = oldIndex != nullptr ? oldIndex->GetBuffer() : vk::Buffer{};
+    const size_t pendingBeforeReplace = f.device->PendingDestroyCount();
+    const size_t slotsBeforeReplace = meshes.Size();
+    const uint64_t generationBeforeReplace = meshes.Generation();
+
+    MeshData moved = strip;
+    moved.vertices[4].pos += glm::vec3(25.0f, -10.0f, 0.0f);
+    moved.indices = {0, 1, 2, 2, 1, 3};
+    moved.computeBounds();
+
+    Profiler::BeginFrame();
+    const bool replaced = meshes.Replace(id, moved);
+    const int replaceDrains = Profiler::QueueDrains();
+    CHECK_MSG(replaced, "a host-visible mesh can be replaced");
+    CHECK_MSG(replaceDrains == 0,
+              "a host-visible replace waited on the queue " + std::to_string(replaceDrains) + " time(s)");
+    // Old and new compared as values only: the old buffers sit in the deferred-destroy queue, still alive, so
+    // nothing can have been given their addresses or their handles.
+    const GpuMesh* rebuilt = meshes.Get(id);
+    CHECK_MSG(rebuilt != nullptr && rebuilt->vertexBuffer != nullptr && rebuilt->indexBuffer != nullptr &&
+                  rebuilt->vertexBuffer.get() != oldVertex && rebuilt->indexBuffer.get() != oldIndex,
+              "the new geometry is in new buffers, not written over the old ones");
+    CHECK_MSG(rebuilt != nullptr && rebuilt->vertexBuffer != nullptr && rebuilt->indexBuffer != nullptr &&
+                  rebuilt->vertexBuffer->GetBuffer() != oldVertexHandle &&
+                  rebuilt->indexBuffer->GetBuffer() != oldIndexHandle,
+              "with new handles, which the shadow pass's signature sees");
+    CHECK_EQ(f.device->PendingDestroyCount(), pendingBeforeReplace + 1);   // the old pair queued, not freed
+    CHECK_EQ(meshes.Size(), slotsBeforeReplace);                           // no slot spent on the way
+    CHECK_EQ(meshes.Generation(), generationBeforeReplace + 1);            // so cached resolves look again
+    CHECK_MSG(rebuilt != nullptr &&
+                  holds(rebuilt->vertexBuffer.get(), moved.vertices.data(), sizeof(Vertex) * moved.vertices.size()),
+              "the new vertex buffer holds the moved vertices");
+    CHECK_MSG(rebuilt != nullptr &&
+                  holds(rebuilt->indexBuffer.get(), moved.indices.data(), sizeof(uint32_t) * moved.indices.size()),
+              "the new index buffer holds the shorter index list");
+    CHECK_MSG(rebuilt != nullptr && rebuilt->indexCount == moved.indices.size(), "the index count follows");
+    CHECK_MSG(rebuilt != nullptr && rebuilt->boundsMin == moved.boundsMin && rebuilt->boundsMax == moved.boundsMax,
+              "and so do the bounds");
+    CHECK_MSG(rebuilt != nullptr && rebuilt->residency == MeshResidency::HostVisible,
+              "a replace keeps the mesh host-visible");
+
+    // Invalidate hands host-visible buffers to the deferred-destroy queue as it does any others.
+    const size_t pendingBeforeInvalidate = f.device->PendingDestroyCount();
+    CHECK_MSG(meshes.Invalidate("device-test:strip"), "a host-visible mesh can be invalidated");
+    CHECK_MSG(meshes.Find("device-test:strip") == MeshRegistry::kInvalidMesh, "and its key no longer answers");
+    CHECK_EQ(f.device->PendingDestroyCount(), pendingBeforeInvalidate + 1);
+
+    // The negative control: the same strip on the default path waits twice to upload and twice to replace.
+    Profiler::BeginFrame();
+    const uint32_t staged = meshes.Upload("device-test:staged-strip", strip);
+    const bool stagedReplaced = meshes.Replace(staged, moved);
+    const int stagedDrains = Profiler::QueueDrains();
+    CHECK_MSG(stagedReplaced, "a staged mesh can be replaced");
+    CHECK_MSG(stagedDrains == 4,
+              "the staged path waits twice to upload and twice to replace; it waited " +
+                  std::to_string(stagedDrains) + " time(s)");
+    const GpuMesh* stagedMesh = meshes.Get(staged);
+    CHECK_MSG(stagedMesh != nullptr && stagedMesh->residency == MeshResidency::DeviceLocal &&
+                  stagedMesh->vertexBuffer != nullptr && stagedMesh->vertexBuffer->GetMappedData() == nullptr,
+              "a default upload is device-local and unmapped, as every mesh was before");
+
+    // An upload under a key already cached is that mesh as it is: no new buffers, no wait, the same residency.
+    Profiler::BeginFrame();
+    const uint32_t again = meshes.Upload("device-test:staged-strip", strip, MeshResidency::HostVisible);
+    const int againDrains = Profiler::QueueDrains();
+    CHECK_MSG(again == staged && againDrains == 0, "an upload under a cached key answers with that mesh");
+    const GpuMesh* still = meshes.Get(staged);
+    CHECK_MSG(still != nullptr && still->residency == MeshResidency::DeviceLocal,
+              "and leaves its residency as its first upload made it");
+
+    f.device->GetDevice().waitIdle();
+    f.device->FlushDeferredDestroys();
+}
+
 static void testThePipelineCacheWritesAFileAndReadsItBack(DeviceFixture& f) {
     // Unique per run: two copies of the suite (the release and the sanitizer trees, run
     // side by side) would otherwise write and delete one file under each other.
@@ -420,6 +553,7 @@ int main() {
     testAReplacedTextureLeavesTheTableTheSizeItWas(*fixture);
     testARefusedUploadDoesNotStealTheFallbackImage(*fixture);
     testAReplacedMeshKeepsItsId(*fixture);
+    testAHostVisibleMeshIsWrittenWithoutWaitingOnTheQueue(*fixture);
     testThePipelineCacheWritesAFileAndReadsItBack(*fixture);
     testADeferredDestroyWaitsForTheFrameItWasQueuedOn(*fixture);
 
@@ -431,5 +565,5 @@ int main() {
               "the validation layers reported " + std::to_string(VulkanContext::ValidationErrorCount()) +
                   " error(s) during the suite");
 
-    return ::test::summary("test_device", 20);
+    return ::test::summary("test_device", 46);
 }

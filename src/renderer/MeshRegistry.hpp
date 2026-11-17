@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -12,8 +13,23 @@
 
 namespace Supersonic {
 
-// GPU-resident mesh: device-local vertex and index buffers plus the local-space
-// bounds the picker uses.
+// Where a mesh's vertex and index buffers live.
+//
+// DeviceLocal is what every mesh always had, and the default: the data is
+// staged through a transfer buffer and copied, and the registry waits for the
+// graphics queue to go idle after each copy (two per mesh). That is the right
+// trade for geometry uploaded once at load and drawn for the rest of the run.
+//
+// HostVisible is for geometry a game rewrites while it plays - a projected
+// shadow strip, rebuilt on every frame its light moves. Each of those waits
+// drains every frame already in flight, so a rebuild per frame left the GPU
+// idle for part of every frame it happened in. A HostVisible mesh is written
+// straight into mapped memory (the per-frame uniform buffers already are), so
+// its Upload and Replace wait for nothing. The cost is that the GPU may fetch
+// the vertices across the bus on a discrete card, which for a few hundred bytes
+// is nothing; for a large static mesh it would be the wrong choice.
+enum class MeshResidency : uint8_t { DeviceLocal, HostVisible };
+
 // One contiguous run of indices sharing a material.
 //
 // A model is authored as several named surfaces and arrives as several
@@ -42,6 +58,8 @@ struct MeshSection {
     uint32_t ormTextureID{0};
 };
 
+// GPU-resident mesh: vertex and index buffers (where MeshResidency says) plus
+// the local-space bounds the picker uses.
 struct GpuMesh {
     std::unique_ptr<VulkanBuffer> vertexBuffer;
     std::unique_ptr<VulkanBuffer> indexBuffer;
@@ -74,6 +92,10 @@ struct GpuMesh {
     // the entity during the load - would overwrite whatever the user had since
     // authored, every time the asset hot-reloaded.
     MeshMaterial material;
+
+    // Chosen at the mesh's first Upload and kept by every Replace, so a mesh a
+    // game asked to keep off the staged path never drifts back onto it.
+    MeshResidency residency{MeshResidency::DeviceLocal};
 };
 
 // Owns every mesh the scene can draw, keyed by the MeshComponent description.
@@ -96,8 +118,15 @@ public:
     // a bad asset degrades to visible geometry instead of a missing draw.
     uint32_t Acquire(const std::string& primitiveType, const std::string& filePath);
 
-    // Uploads caller-supplied geometry under an explicit cache key.
-    uint32_t Upload(const std::string& key, const MeshData& data);
+    // Uploads caller-supplied geometry under an explicit cache key, into the
+    // memory `residency` names (see MeshResidency; the default is the staged,
+    // device-local path every mesh had before there was a choice).
+    //
+    // A key already cached returns that mesh as it is: its geometry AND its
+    // residency stay what its first Upload made them. Use Find and Replace to
+    // change the geometry; the residency of a mesh does not change.
+    uint32_t Upload(const std::string& key, const MeshData& data,
+                    MeshResidency residency = MeshResidency::DeviceLocal);
 
     // The id a key resolves to, or kInvalidMesh when nothing is cached under
     // it. Upload answers a known key with its id too, but SILENTLY - it keeps
@@ -152,6 +181,14 @@ public:
     // This is the one that matters for a mesh rebuilt every frame - fog, a
     // dynamic terrain patch, a debug overlay. Invalidate-then-Acquire would
     // allocate a new id per frame and grow the vector without bound.
+    //
+    // The new geometry goes into the mesh's own residency, and always into
+    // FRESH buffers, never into the old ones - HostVisible included, where
+    // writing in place would be possible and cheaper. A frame submitted before
+    // this call may still be reading the old buffers (they are handed to the
+    // deferred-destroy queue, not freed), and the shadow pass recognises "the
+    // same mesh as last time" partly by its buffer handles, so a buffer that
+    // kept its handle while its contents changed would be served stale.
     bool Replace(uint32_t id, const MeshData& data);
 
     // Bumped whenever an id stops meaning what it meant.
@@ -167,16 +204,18 @@ public:
     size_t Size() const { return m_meshes.size(); }
 
 private:
-    // Stages the vertices and indices into device-local buffers and fills in
-    // everything a GpuMesh derives from the data: the count, the bounds and
-    // the one section covering every index. The registry's bookkeeping - the
-    // slot, the key, the material - is the caller's.
+    // Puts the vertices and indices into new buffers - staged into device-local
+    // memory, or written into mapped host-visible memory, as `residency` says -
+    // and fills in everything a GpuMesh derives from the data: the count, the
+    // bounds, the residency and the one section covering every index. The
+    // registry's bookkeeping - the slot, the key, the material - is the
+    // caller's.
     //
     // Shared by Upload and Replace. Replace used to get its buffers by
     // uploading under a scratch key and stealing them back, which left one
     // dead slot in the vector per call and one section describing the OLD
     // index count on the mesh it had just replaced.
-    GpuMesh createGpuMesh(const MeshData& data);
+    GpuMesh createGpuMesh(const MeshData& data, MeshResidency residency);
 
     VulkanDevice& m_deviceRef;
     vk::CommandPool m_commandPool;
