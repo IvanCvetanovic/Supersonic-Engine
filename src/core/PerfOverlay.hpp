@@ -60,6 +60,10 @@ public:
         double secondsSinceTouch{-1.0};
         bool focused{true};
         bool resumed{true};
+        // The screen overlay was drawn on the window at its own resolution, not into the scaled picture
+        // (ScreenOverlay::Placement): ", hud window" ends the size line. False, the default, adds nothing to it. Last, so
+        // that no positional initialiser written before it existed changes meaning.
+        bool overlayAtWindow{false};
     };
 
     explicit PerfOverlay(const Settings& settings);

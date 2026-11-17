@@ -43,7 +43,7 @@ std::string Describe(const PerfOverlay::Environment& environment) {
     return "scale " + Fixed(environment.scale, 2) + " " + std::to_string(environment.sceneWidth) + "x" +
            std::to_string(environment.sceneHeight) + " of " + std::to_string(environment.windowWidth) + "x" +
            std::to_string(environment.windowHeight) + ", " + std::to_string(environment.samples) + "x, " +
-           environment.presentMode;
+           environment.presentMode + (environment.overlayAtWindow ? ", hud window" : "");
 }
 
 // The touch layer's state in one short line ("touch 0 fingers, last event 3.2 s ago, focus yes, resumed yes").

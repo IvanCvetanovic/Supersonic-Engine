@@ -131,7 +131,9 @@ set_tests_properties(
     test_screenoverlay # reads assets/shaders/screen_overlay.vert, to check its
                        # vertex table is the one ScreenOverlay::CornerOf states,
                        # and bloom_composite.frag, to check its branches are
-                       # numbered as RenderSettings::SceneEncoding is
+                       # numbered as RenderSettings::SceneEncoding is, and
+                       # third_party/imgui/backends/imgui_impl_vulkan.cpp, to
+                       # check the window overlay's pipeline blends as ImGui's
     PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")
 
 # The engine against a real Vulkan device (tests/DeviceFixture.hpp): uploads, the texture and mesh registries, the

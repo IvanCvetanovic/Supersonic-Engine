@@ -257,6 +257,8 @@ private:
 
     // writeScreenshot and writeUiScreenshot, each file that reached the disk.
     long long m_capturesWritten{0};
+    // writeScreenshot has said that its picture holds no screen overlay (the overlay was drawn on the window).
+    bool m_screenshotOverlayNoted{false};
     uint64_t m_replayExpectedHash{0};
     uint64_t m_replayActualHash{0};
 

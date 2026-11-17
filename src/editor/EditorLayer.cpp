@@ -24,10 +24,12 @@
 #include "core/TimeTravelDebugger.hpp"
 #include "core/EcsUtils.hpp"
 #include "editor/GamePackager.hpp"
+#include "renderer/WindowOverlay.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "ImGuizmo.h"
 
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -399,6 +401,27 @@ void EditorLayer::buildGameView(entt::registry& registry) {
 
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         ImGui::Image(m_offscreenPass->GetTextureID(), size);
+
+        // The screen overlay on the window, right after the picture and before
+        // the HUD below (SetWindowOverlayHook): when the picture this frame draws
+        // is not the size it is shown at, the overlay drawn into it would be
+        // stretched with it. This frame's size is the target's now - the resize
+        // asked for above applies at the top of the next frame - and the shown
+        // size is the image's, in the framebuffer's pixels.
+        if (m_overlayDraw != nullptr && (m_overlayReady == nullptr || m_overlayReady(m_overlayRenderer))) {
+            const ImVec2 framebufferScale = ImGui::GetIO().DisplayFramebufferScale;
+            const glm::uvec2 picture(m_offscreenPass->GetWidth(), m_offscreenPass->GetHeight());
+            const glm::uvec2 image(static_cast<uint32_t>(std::lround(size.x * framebufferScale.x)),
+                                   static_cast<uint32_t>(std::lround(size.y * framebufferScale.y)));
+            if (ScreenOverlay::AtWindowResolution(m_overlayPlacement, picture, image)) {
+                // Where ImGui::Image put the picture: inside its border, when a
+                // style gives it one.
+                const float border = ImGui::GetStyle().ImageBorderSize;
+                const ImVec2 imageMin(origin.x + border, origin.y + border);
+                const ImVec2 imageMax(imageMin.x + size.x, imageMin.y + size.y);
+                PlaceWindowOverlay(*ImGui::GetWindowDrawList(), m_overlayDraw, m_overlayRenderer, imageMin, imageMax);
+            }
+        }
 
         // The HUD, over the game and nothing else. Nothing else is on screen
         // to take the pointer, so it is always the game's.

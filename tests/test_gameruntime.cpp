@@ -1701,6 +1701,44 @@ static void testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo() {
     CHECK_MSG(GameRuntime::Parse(GameRuntime::Serialize(one)).minimumVulkanMinor == 2u, "nor read it back");
 }
 
+// WHERE THE SCREEN OVERLAY IS DRAWN (ScreenOverlay::Placement): into the picture by default, as it always was, and never
+// in the manifest's text. And the perf log's size line names the window path only on a frame that took it.
+static void testTheOverlayPlacementIsThePictureByDefaultAndNeverInTheManifestsText() {
+    const GameManifest plain;
+    CHECK_MSG(plain.screenOverlayPlacement == ScreenOverlay::Placement::Picture, "a game that never heard of it is unchanged");
+    GameManifest asking;
+    asking.isGame = true;
+    asking.screenOverlayPlacement = ScreenOverlay::Placement::WindowWhenScaled;
+    GameManifest quiet;
+    quiet.isGame = true;
+    CHECK_MSG(GameRuntime::Serialize(asking) == GameRuntime::Serialize(quiet), "the manifest's text carries no placement");
+    CHECK_MSG(GameRuntime::Parse(GameRuntime::Serialize(asking)).screenOverlayPlacement == ScreenOverlay::Placement::Picture,
+              "nor reads one back");
+    asking.screenOverlayPlacement = ScreenOverlay::Placement::Window;
+    CHECK_MSG(GameRuntime::Serialize(asking) == GameRuntime::Serialize(quiet), "whichever it is");
+
+    PerfOverlay::Environment environment;
+    environment.presentMode = "Mailbox";
+    environment.windowWidth = 1340;
+    environment.windowHeight = 800;
+    environment.sceneWidth = 402;
+    environment.sceneHeight = 240;
+    environment.scale = 0.3f;
+    PerfOverlay::Settings settings;
+    settings.logSeconds = 1.0f;
+    PerfOverlay overlay(settings);
+    FramePerfSample sample;
+    sample.frameSeconds = 0.020f;
+    for (double t = 0.0; t < 1.5; t += sample.frameSeconds) overlay.Observe(sample, environment);
+    const std::string before = overlay.BuildReport(environment);
+    CHECK_MSG(before.find("Perf: ") != std::string::npos && before.find("hud window") == std::string::npos,
+              "the size line as it always was while the overlay is in the picture");
+    environment.overlayAtWindow = true;
+    for (double t = 0.0; t < 1.5; t += sample.frameSeconds) overlay.Observe(sample, environment);
+    CHECK_MSG(overlay.BuildReport(environment).find("Mailbox, hud window") != std::string::npos,
+              "and it ends with the window path once the overlay is drawn there");
+}
+
 static std::string ReadWhole(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
@@ -2047,6 +2085,7 @@ static void runTests() {
     testTheSceneSampleCapIsOffByDefaultAndClampedToOneTwoOrFour();
     testTheShadowMapResolutionIsOffByDefaultClampedAndNeverInTheManifestText();
     testTheVulkanMinimumIsOneTwoByDefaultAndClampedIntoOneToTwo();
+    testTheOverlayPlacementIsThePictureByDefaultAndNeverInTheManifestsText();
     testTheFileLogCarriesElapsedTimeOnlyWhenAsked();
     testHidingTheCursorIsTheSameRequestInputArbitrates();
     testTheModesAMenuListsAreTheTrueColourOnesOnceEach();
@@ -2059,4 +2098,4 @@ static void runTests() {
     testTheEnginesOwnBuildNamesNoRoot();
 }
 
-TEST_MAIN("test_gameruntime", 62)
+TEST_MAIN("test_gameruntime", 68)

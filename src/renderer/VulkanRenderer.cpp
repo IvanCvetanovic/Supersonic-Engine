@@ -22,10 +22,12 @@
 #endif
 #include "backends/imgui_impl_vulkan.h"
 #include "ImGuizmo.h"
+#include "renderer/WindowOverlay.hpp"
 
 #include <array>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -156,6 +158,7 @@ VulkanRenderer::~VulkanRenderer() {
         device.destroyRenderPass(m_screenOverlayRenderPass);
         m_screenOverlayRenderPass = nullptr;
     }
+    destroyWindowOverlay();
     m_shadowPipeline.reset();
     m_shadowCutoutPipeline.reset();
     m_shadowMap.reset();
@@ -244,6 +247,16 @@ void VulkanRenderer::RecreateSwapchain() {
     createRenderPass();
     createFramebuffers();
 
+    // The window overlay's pipeline was built against a pass of the old
+    // swapchain's format; a new swapchain need not have it (a surface given back
+    // by the platform is chosen afresh). The device is idle, so the old ones go.
+    if (m_overlayPlacement != ScreenOverlay::Placement::Picture &&
+        (m_swapchainRef.GetImageFormat() != m_windowOverlayFormat ||
+         m_swapchainRef.IsReadable() != m_windowOverlayReadable)) {
+        destroyWindowOverlay();
+        buildWindowOverlay();
+    }
+
     // The swapchain image count can change, and renderFinished semaphores are
     // sized per image, so the sync objects have to be rebuilt with it.
     destroySyncObjects();
@@ -278,9 +291,15 @@ bool VulkanRenderer::HasSurface() const {
 }
 #endif
 
-void VulkanRenderer::createRenderPass() {
+namespace {
+
+// The swapchain's pass: one colour attachment in the swapchain's format, cleared, drawn and presented. Also built, and
+// never begun, for the window overlay's pipeline (buildWindowOverlay), which must be built against a pass COMPATIBLE with
+// this one: made by this same function from the same format and readability, it is identical, which is compatible under
+// the strictest reading of the rules.
+vk::RenderPass makeSwapchainRenderPass(vk::Device device, vk::Format format, bool readable) {
     vk::AttachmentDescription colorAttachment{};
-    colorAttachment.format = m_swapchainRef.GetImageFormat();
+    colorAttachment.format = format;
     colorAttachment.samples = vk::SampleCountFlagBits::e1;
     colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
     colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
@@ -326,10 +345,17 @@ void VulkanRenderer::createRenderPass() {
     renderPassInfo.pAttachments = &colorAttachment;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = m_swapchainRef.IsReadable() ? 2u : 1u;
+    renderPassInfo.dependencyCount = readable ? 2u : 1u;
     renderPassInfo.pDependencies = dependencies.data();
 
-    m_renderPass = m_deviceRef.GetDevice().createRenderPass(renderPassInfo);
+    return device.createRenderPass(renderPassInfo);
+}
+
+} // namespace
+
+void VulkanRenderer::createRenderPass() {
+    m_renderPass = makeSwapchainRenderPass(m_deviceRef.GetDevice(), m_swapchainRef.GetImageFormat(),
+                                           m_swapchainRef.IsReadable());
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "Swapchain RenderPass (ImGui UI Pass) created." << std::endl;
 }
 
@@ -634,21 +660,12 @@ void VulkanRenderer::createGraphicsPipeline() {
         if (!m_screenOverlayRenderPass) {
             m_screenOverlayRenderPass = BloomPass::MakeOverlayRenderPass(m_deviceRef.GetDevice());
         }
-        VulkanPipeline::Options overlayOptions{};
-        overlayOptions.blendEnable = true;
-        overlayOptions.depthWrite = false;
-        overlayOptions.cullMode = vk::CullModeFlagBits::eNone;
-        overlayOptions.useVertexInput = false;
-        overlayOptions.cache = m_pipelineCache->Get();
-        overlayOptions.samples = vk::SampleCountFlagBits::e1;
-        overlayOptions.pushConstantSize = static_cast<uint32_t>(sizeof(ScreenOverlayPushConstants));
-
         m_screenOverlayPipeline = std::make_unique<VulkanPipeline>(
             m_deviceRef.GetDevice(),
             m_screenOverlayRenderPass,
             "assets/shaders/screen_overlay_vert.spv",
             "assets/shaders/screen_overlay_frag.spv",
-            overlayOptions);
+            screenOverlayOptions());
         pumpStartup();
     }
 
@@ -656,6 +673,71 @@ void VulkanRenderer::createGraphicsPipeline() {
     m_pipelineCache->Save();
 
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "Scene, grid, shape, overlay and shadow pipelines created." << std::endl;
+}
+
+VulkanPipeline::Options VulkanRenderer::screenOverlayOptions() const {
+    return ScreenOverlayPipelineOptions(m_pipelineCache ? m_pipelineCache->Get() : vk::PipelineCache{});
+}
+
+void VulkanRenderer::SetScreenOverlayPlacement(ScreenOverlay::Placement placement) {
+    m_overlayPlacement = placement;
+    if (m_windowOverlayPipeline || m_windowOverlayRenderPass) {
+        // A frame in flight may still be drawing with them.
+        { Profiler::DrainScope drain; m_deviceRef.GetDevice().waitIdle(); }
+        destroyWindowOverlay();
+    }
+    if (placement != ScreenOverlay::Placement::Picture) buildWindowOverlay();
+}
+
+void VulkanRenderer::buildWindowOverlay() {
+    const vk::Format format = m_swapchainRef.GetImageFormat();
+    const bool readable = m_swapchainRef.IsReadable();
+    // Remembered whether or not anything is built, so RecreateSwapchain tries again only when they change.
+    m_windowOverlayFormat = format;
+    m_windowOverlayReadable = readable;
+
+    // The overlay mixes display values over display values (ScreenOverlay.hpp), which is what a blend does on an 8-bit
+    // UNORM image and on nothing else: an sRGB one would decode, blend in linear light and encode again, and a wider one
+    // is not the bytes the picture path writes. VulkanSwapchain asks for UNORM; a surface without it keeps the old path.
+    if (format != vk::Format::eB8G8R8A8Unorm && format != vk::Format::eR8G8B8A8Unorm) {
+        if (!m_windowOverlayRefusalLogged) {
+            m_windowOverlayRefusalLogged = true;
+            SUPERSONIC_LOG_WARN("VulkanRenderer")
+                << "Screen overlay: the swapchain is " << vk::to_string(format)
+                << ", not 8-bit UNORM, so the overlay is drawn into the picture rather than on the window.";
+        }
+        return;
+    }
+
+    // Caught: this path is an opt-in a game takes for sharper text, and a driver that cannot build it must cost that
+    // game its sharp text, not its start.
+    try {
+        m_windowOverlayRenderPass = makeSwapchainRenderPass(m_deviceRef.GetDevice(), format, readable);
+        m_windowOverlayPipeline = std::make_unique<VulkanPipeline>(
+            m_deviceRef.GetDevice(),
+            m_windowOverlayRenderPass,
+            "assets/shaders/screen_overlay_vert.spv",
+            "assets/shaders/screen_overlay_frag.spv",
+            screenOverlayOptions());
+    } catch (const std::exception& error) {
+        SUPERSONIC_LOG_ERROR("VulkanRenderer") << "Screen overlay: the window's pipeline could not be built ("
+                                               << error.what() << "); the overlay is drawn into the picture.";
+        destroyWindowOverlay();
+        return;
+    }
+    pumpStartup();
+    if (m_pipelineCache) m_pipelineCache->Save();
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Screen overlay: can be drawn on the window (" << vk::to_string(format)
+                                          << ").";
+}
+
+void VulkanRenderer::destroyWindowOverlay() {
+    // Callers make sure the device is idle (or was waited idle since the last submit that used these).
+    m_windowOverlayPipeline.reset();
+    if (m_windowOverlayRenderPass) {
+        m_deviceRef.GetDevice().destroyRenderPass(m_windowOverlayRenderPass);
+        m_windowOverlayRenderPass = nullptr;
+    }
 }
 
 void VulkanRenderer::createUniformBuffers() {
@@ -2167,61 +2249,47 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     offscreen.RecordPostProcess(cmd);
 
     // The screen overlay, over the composited image and in display values
-    // (core/ScreenOverlay.hpp). Consumed and CLEARED here, as the world shapes
-    // are, which is what makes it immediate.
-    if (auto** overlaySlot = registry.ctx().find<ScreenOverlay*>()) {
-        ScreenOverlay* overlay = *overlaySlot;
-        if (overlay != nullptr && !overlay->Empty() && m_screenOverlayPipeline) {
-            // Every texture and material set resolved BEFORE the pass opens:
-            // a first Acquire reads a file and uploads it, which belongs outside
-            // a render pass.
-            //
-            // UNORM, not sRGB - `srgb` false. Sampled through an sRGB view the
-            // hardware would decode each texel to linear light, and a pass that
-            // blends in display values would be back to blending linear ones.
-            // Acquire keys the two separately, so the same file used by a world
-            // sprite keeps its sRGB copy.
-            TextureRegistry& textures = *m_textureRegistry;
-            const uint32_t white = textures.GetWhiteTexture();
-            std::vector<vk::DescriptorSet> sets;
-            sets.reserve(overlay->Quads().size());
-            for (const ScreenOverlay::Quad& quad : overlay->Quads()) {
-                const uint32_t image = quad.texture.empty() ? white : textures.Acquire(quad.texture, false, white);
-                sets.push_back(textures.AcquireMaterialSet(image, textures.GetFlatNormalTexture(),
-                                                           textures.GetNeutralOrmTexture(),
-                                                           textures.GetBlackTexture(),
-                                                           textures.GetWhiteTexture(),
-                                                           quad.clampToEdge));
-            }
-
+    // (core/ScreenOverlay.hpp). Consumed and CLEARED after the swapchain pass
+    // below, as the world shapes are, which is what makes it immediate.
+    //
+    // Into the picture, as it always was - or on the window, when the placement
+    // asks for it and the editor put WindowOverlayCallback after the picture's
+    // image in this frame's draw data (SetScreenOverlayPlacement): then the
+    // callback records the quads inside the swapchain pass, and the picture gets
+    // no overlay pass at all. With no window pipeline nothing is searched for.
+    ScreenOverlay* overlay = nullptr;
+    if (auto** overlaySlot = registry.ctx().find<ScreenOverlay*>()) overlay = *overlaySlot;
+    const bool atWindow = m_windowOverlayPipeline && drawData != nullptr &&
+                          FindWindowOverlay(drawData, &VulkanRenderer::WindowOverlayCallback).has_value();
+    // What --screenshot's note and the perf line read: quads were handed to the window this frame.
+    m_lastOverlayAtWindow = atWindow && overlay != nullptr && !overlay->Empty() && m_screenOverlayPipeline;
+    if (overlay != nullptr && !overlay->Empty() && m_screenOverlayPipeline) {
+        // Every texture and material set resolved BEFORE any pass opens - the
+        // window path's included, which records in the swapchain pass: a first
+        // Acquire reads a file and uploads it, which belongs outside a render
+        // pass.
+        resolveOverlaySets(*overlay);
+        if (atWindow) {
+            m_windowOverlay = overlay;
+            // Where ImGui's coordinates land in the framebuffer, as the backend
+            // works it out (its fb_width and fb_height), inside the pass's own
+            // render area.
+            const vk::Extent2D area = m_swapchainRef.GetExtent();
+            const auto pixels = [](float size, float scale, uint32_t limit) {
+                const float value = size * scale;
+                if (!(value > 0.0f)) return uint32_t{0};
+                return value >= static_cast<float>(limit) ? limit : static_cast<uint32_t>(value);
+            };
+            m_windowOverlayDisplayPos = glm::vec2(drawData->DisplayPos.x, drawData->DisplayPos.y);
+            m_windowOverlayFramebufferScale = glm::vec2(drawData->FramebufferScale.x, drawData->FramebufferScale.y);
+            m_windowOverlayFramebuffer =
+                glm::uvec2(pixels(drawData->DisplaySize.x, drawData->FramebufferScale.x, area.width),
+                           pixels(drawData->DisplaySize.y, drawData->FramebufferScale.y, area.height));
+        } else {
             offscreen.RecordOverlay(cmd, [&](vk::CommandBuffer pass) {
-                VulkanPipeline& pipeline = *m_screenOverlayPipeline;
-                pass.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
-                vk::DescriptorSet bound{};
-                const auto& quads = overlay->Quads();
-                for (std::size_t i = 0; i < quads.size(); ++i) {
-                    // A null set is a pool already exhausted and logged; the
-                    // quad is skipped rather than drawn through nothing.
-                    if (!sets[i]) continue;
-                    if (sets[i] != bound) {
-                        pass.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
-                                                VulkanPipeline::kMaterialSet, 1, &sets[i], 0, nullptr);
-                        bound = sets[i];
-                    }
-                    const ScreenOverlay::Quad& quad = quads[i];
-                    ScreenOverlayPushConstants push{};
-                    push.rect = glm::vec4(quad.min, quad.max);
-                    push.uv = glm::vec4(quad.uvMin, quad.uvMax);
-                    push.color = quad.color;
-                    push.basis = glm::vec4(quad.basis[0], quad.basis[1]);
-                    pass.pushConstants(pipeline.GetLayout(),
-                                       vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
-                                       sizeof(push), &push);
-                    pass.draw(static_cast<uint32_t>(ScreenOverlay::kVerticesPerQuad), 1, 0, 0);
-                }
+                recordOverlayQuads(pass, *m_screenOverlayPipeline, *overlay);
             });
         }
-        if (overlay != nullptr) overlay->Clear();
     }
 
     // ---------------------------------------------------------------------
@@ -2249,11 +2317,20 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     cmd.setViewport(0, 1, &swapchainViewport);
     cmd.setScissor(0, 1, &swapchainScissor);
 
+    // Once, whatever the overlay's path: the backend's vertex and index buffers
+    // are per frame, and a second call in one frame would overwrite the first's.
+    // The window path's quads are recorded from inside this call.
     if (drawData) {
         ImGui_ImplVulkan_RenderDrawData(drawData, static_cast<VkCommandBuffer>(cmd));
     }
 
     cmd.endRenderPass();
+
+    // Drawn by now on either path - or never, where the callback did not run (a
+    // picture shown nowhere on the framebuffer) - and cleared on every path, so
+    // no frame's quads reach the next.
+    m_windowOverlay = nullptr;
+    if (overlay != nullptr) overlay->Clear();
 
     // After the ImGui pass, so every UI component is in it, and before the
     // present, after which the image is not ours to read.
@@ -2307,6 +2384,84 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     }
 
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+void VulkanRenderer::resolveOverlaySets(const ScreenOverlay& overlay) {
+    // UNORM, not sRGB - `srgb` false. Sampled through an sRGB view the
+    // hardware would decode each texel to linear light, and a pass that
+    // blends in display values would be back to blending linear ones.
+    // Acquire keys the two separately, so the same file used by a world
+    // sprite keeps its sRGB copy.
+    TextureRegistry& textures = *m_textureRegistry;
+    const uint32_t white = textures.GetWhiteTexture();
+    m_overlaySets.clear();
+    m_overlaySets.reserve(overlay.Quads().size());
+    for (const ScreenOverlay::Quad& quad : overlay.Quads()) {
+        const uint32_t image = quad.texture.empty() ? white : textures.Acquire(quad.texture, false, white);
+        m_overlaySets.push_back(textures.AcquireMaterialSet(image, textures.GetFlatNormalTexture(),
+                                                            textures.GetNeutralOrmTexture(),
+                                                            textures.GetBlackTexture(),
+                                                            textures.GetWhiteTexture(),
+                                                            quad.clampToEdge));
+    }
+}
+
+void VulkanRenderer::recordOverlayQuads(vk::CommandBuffer cmd, const VulkanPipeline& pipeline,
+                                        const ScreenOverlay& overlay) const {
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
+    vk::DescriptorSet bound{};
+    const auto& quads = overlay.Quads();
+    for (std::size_t i = 0; i < quads.size() && i < m_overlaySets.size(); ++i) {
+        // A null set is a pool already exhausted and logged; the
+        // quad is skipped rather than drawn through nothing.
+        if (!m_overlaySets[i]) continue;
+        if (m_overlaySets[i] != bound) {
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
+                                   VulkanPipeline::kMaterialSet, 1, &m_overlaySets[i], 0, nullptr);
+            bound = m_overlaySets[i];
+        }
+        const ScreenOverlay::Quad& quad = quads[i];
+        ScreenOverlayPushConstants push{};
+        push.rect = glm::vec4(quad.min, quad.max);
+        push.uv = glm::vec4(quad.uvMin, quad.uvMax);
+        push.color = quad.color;
+        push.basis = glm::vec4(quad.basis[0], quad.basis[1]);
+        cmd.pushConstants(pipeline.GetLayout(),
+                          vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
+                          sizeof(push), &push);
+        cmd.draw(static_cast<uint32_t>(ScreenOverlay::kVerticesPerQuad), 1, 0, 0);
+    }
+}
+
+void VulkanRenderer::WindowOverlayCallback(const ImDrawList*, const ImDrawCmd* cmd) {
+    if (cmd == nullptr) return;
+    // The backend's state lives only while ImGui_ImplVulkan_RenderDrawData runs, which is the only time it calls this;
+    // anything else finds it null and records nothing.
+    const auto* state = static_cast<const ImGui_ImplVulkan_RenderState*>(ImGui::GetPlatformIO().Renderer_RenderState);
+    if (state == nullptr || state->CommandBuffer == VK_NULL_HANDLE) return;
+    const std::optional<WindowOverlayCall> call = WindowOverlayCallOf(*cmd);
+    if (!call || call->renderer == nullptr) return;
+    static_cast<VulkanRenderer*>(call->renderer)->recordWindowOverlay(vk::CommandBuffer(state->CommandBuffer), *call);
+}
+
+void VulkanRenderer::recordWindowOverlay(vk::CommandBuffer cmd, const WindowOverlayCall& call) {
+    // Taken, so a second call in the same draw data draws nothing rather than the HUD twice.
+    const ScreenOverlay* overlay = std::exchange(m_windowOverlay, nullptr);
+    if (overlay == nullptr || !m_windowOverlayPipeline) return;
+    const ScreenOverlay::WindowRect rect = ScreenOverlay::WindowRectFor(
+        glm::vec2(call.imageMin[0], call.imageMin[1]), glm::vec2(call.imageMax[0], call.imageMax[1]),
+        m_windowOverlayDisplayPos, m_windowOverlayFramebufferScale, m_windowOverlayFramebuffer);
+    if (!rect.visible) return;
+
+    // The viewport is the image, so a quad's fractions are fractions of what the
+    // player sees; the backend's reset, placed after this callback, sets its own
+    // viewport back, and it sets a scissor for every draw of its own.
+    const vk::Viewport viewport{rect.offset.x, rect.offset.y, rect.extent.x, rect.extent.y, 0.0f, 1.0f};
+    const vk::Rect2D scissor{{rect.scissorOffset.x, rect.scissorOffset.y},
+                             {rect.scissorExtent.x, rect.scissorExtent.y}};
+    cmd.setViewport(0, 1, &viewport);
+    cmd.setScissor(0, 1, &scissor);
+    recordOverlayQuads(cmd, *m_windowOverlayPipeline, *overlay);
 }
 
 namespace {

@@ -73,6 +73,18 @@ vk::PipelineColorBlendAttachmentState ColorBlendFor(const VulkanPipelineOptions&
     return state;
 }
 
+VulkanPipelineOptions ScreenOverlayPipelineOptions(vk::PipelineCache cache) {
+    VulkanPipelineOptions options{};
+    options.blendEnable = true;
+    options.depthWrite = false;
+    options.cullMode = vk::CullModeFlagBits::eNone;
+    options.useVertexInput = false;
+    options.cache = cache;
+    options.samples = vk::SampleCountFlagBits::e1;
+    options.pushConstantSize = static_cast<uint32_t>(sizeof(ScreenOverlayPushConstants));
+    return options;
+}
+
 VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
                                const std::string& vertPath, const std::string& fragPath,
                                const Options& options)

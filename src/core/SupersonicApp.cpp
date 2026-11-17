@@ -410,6 +410,19 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     m_renderer->SetSpritesOnlyScenePipelines(m_manifest.spritesOnlyScenePipelines);
     m_renderer->SetOffscreenRenderPass(m_editorLayer->GetOffscreen().GetRenderPass(),
                                        m_editorLayer->GetOffscreen().GetSampleCount());
+    // The screen overlay on the window, for a game that asked (GameManifest::screenOverlayPlacement): its pipeline is
+    // compiled here, while the start still reads the window's events, and the game view places the callback that draws it.
+    // A game that did not ask gets neither, and every frame records what it always did.
+    if (m_manifest.screenOverlayPlacement != ScreenOverlay::Placement::Picture) {
+        m_renderer->SetScreenOverlayPlacement(m_manifest.screenOverlayPlacement);
+        m_editorLayer->SetWindowOverlayHook(m_manifest.screenOverlayPlacement, &VulkanRenderer::WindowOverlayCallback,
+                                            &VulkanRenderer::WindowOverlayReady, m_renderer.get());
+        SUPERSONIC_LOG_INFO("SupersonicApp")
+            << "Screen overlay: on the window at its own resolution"
+            << (m_manifest.screenOverlayPlacement == ScreenOverlay::Placement::WindowWhenScaled
+                    ? " while the picture is scaled, in the picture otherwise."
+                    : ", whatever the picture's size.");
+    }
     m_renderer->SetStartupPump({});
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Renderer ready.";
     pumpStartupEvents();
@@ -1187,6 +1200,8 @@ void SupersonicApp::RefreshPerfEnvironment() {
     if (env.scene != m_sceneManager.CurrentPath()) env.scene = m_sceneManager.CurrentPath();
     env.hasController = m_dynamicResolution != nullptr;
     env.atFloorMissed = m_dynamicResolution && m_dynamicResolution->AtTheFloor() && m_dynamicResolution->WindowMissedTheTarget();
+    // True only where a game placed the overlay on the window (never under the default, Picture).
+    env.overlayAtWindow = m_renderer->LastOverlayAtWindow();
     const SafeAreaInsets safe = SafeArea::Get();
     env.safeLeft = safe.left;
     env.safeTop = safe.top;
@@ -2269,6 +2284,14 @@ void SupersonicApp::writeScreenshot(const std::string& path) {
         SUPERSONIC_LOG_INFO("SupersonicApp")
             << "Wrote " << path << " ("
             << offscreen.GetWidth() << "x" << offscreen.GetHeight() << ").";
+        // The picture is what --screenshot has always read; on the window path the overlay is not in it. Said once, so a
+        // capture without its HUD is not mistaken for a HUD that failed to draw.
+        if (m_renderer->LastOverlayAtWindow() && !m_screenshotOverlayNoted) {
+            m_screenshotOverlayNoted = true;
+            SUPERSONIC_LOG_INFO("SupersonicApp")
+                << "--screenshot holds the scene picture only: the screen overlay (the HUD, its text and buttons) was "
+                   "drawn on the window at the window's resolution, which --screenshot-ui captures.";
+        }
     } else {
         SUPERSONIC_LOG_ERROR("SupersonicApp") << "Screenshot " << path << " failed: " << error;
     }

@@ -19,6 +19,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -286,6 +287,150 @@ void testTheCompositeShaderBranchesOnTheEnumsNumbers() {
     CHECK_MSG(source.find("vec3(31.0, 63.0, 31.0)") != std::string::npos, "to 5, 6 and 5 bits");
 }
 
+void testThePlacementDecidesWhereTheOverlayIsDrawn() {
+    // A game that sets nothing draws into the picture, whatever the picture's
+    // size; WindowWhenScaled leaves the picture only when it is not the image's
+    // size, down to one line; Window leaves it always; and no extent of zero is
+    // a picture to decide about.
+    CHECK_MSG(ScreenOverlay::Placement{} == ScreenOverlay::Placement::Picture, "the default is the picture");
+    using P = ScreenOverlay::Placement;
+    const glm::uvec2 window(1340u, 800u);
+    const struct {
+        P placement;
+        glm::uvec2 picture;
+        glm::uvec2 image;
+        bool atWindow;
+        const char* what;
+    } rows[] = {
+        {P::Picture, window, window, false, "Picture, the picture at the image's size"},
+        {P::Picture, glm::uvec2(402u, 240u), window, false, "Picture, a picture at 0.3"},
+        {P::Picture, glm::uvec2(1340u, 799u), window, false, "Picture, a picture one line short"},
+        {P::Picture, glm::uvec2(0u, 800u), window, false, "Picture, no picture"},
+        {P::Picture, window, glm::uvec2(0u, 0u), false, "Picture, no image"},
+        {P::WindowWhenScaled, window, window, false, "WindowWhenScaled, the picture at the image's size"},
+        {P::WindowWhenScaled, glm::uvec2(402u, 240u), window, true, "WindowWhenScaled, a picture at 0.3"},
+        {P::WindowWhenScaled, glm::uvec2(1340u, 799u), window, true, "WindowWhenScaled, a picture one line short"},
+        {P::WindowWhenScaled, glm::uvec2(0u, 800u), window, false, "WindowWhenScaled, no picture"},
+        {P::WindowWhenScaled, window, glm::uvec2(0u, 0u), false, "WindowWhenScaled, no image"},
+        {P::Window, window, window, true, "Window, the picture at the image's size"},
+        {P::Window, glm::uvec2(402u, 240u), window, true, "Window, a picture at 0.3"},
+        {P::Window, glm::uvec2(1340u, 799u), window, true, "Window, a picture one line short"},
+        {P::Window, glm::uvec2(0u, 800u), window, false, "Window, no picture"},
+        {P::Window, window, glm::uvec2(0u, 0u), false, "Window, no image"},
+    };
+    for (const auto& row : rows) {
+        CHECK_MSG(ScreenOverlay::AtWindowResolution(row.placement, row.picture, row.image) == row.atWindow, row.what);
+    }
+}
+
+void testTheWindowRectIsWhereThePictureIsShown() {
+    using Rect = ScreenOverlay::WindowRect;
+    const auto viewportIs = [](const Rect& rect, glm::vec2 offset, glm::vec2 extent) {
+        return near2(rect.offset, offset) && near2(rect.extent, extent);
+    };
+    const auto scissorIs = [](const Rect& rect, glm::ivec2 offset, glm::uvec2 extent) {
+        return rect.scissorOffset == offset && rect.scissorExtent == extent;
+    };
+    const glm::uvec2 tablet(1340u, 800u);
+
+    // The game view: the picture shown edge to edge on a 1340x800 window.
+    Rect rect = ScreenOverlay::WindowRectFor(glm::vec2(0.0f), glm::vec2(1340.0f, 800.0f), glm::vec2(0.0f),
+                                             glm::vec2(1.0f), tablet);
+    CHECK(rect.visible);
+    CHECK_MSG(viewportIs(rect, glm::vec2(0.0f), glm::vec2(1340.0f, 800.0f)), "the viewport is the window");
+    CHECK_MSG(scissorIs(rect, glm::ivec2(0), tablet), "and so is the scissor");
+
+    // A retina display: ImGui's points are half the framebuffer's pixels.
+    rect = ScreenOverlay::WindowRectFor(glm::vec2(0.0f), glm::vec2(670.0f, 400.0f), glm::vec2(0.0f), glm::vec2(2.0f),
+                                        tablet);
+    CHECK_MSG(rect.visible && viewportIs(rect, glm::vec2(0.0f), glm::vec2(1340.0f, 800.0f)),
+              "at a framebuffer scale of 2 the viewport is in pixels");
+    CHECK(scissorIs(rect, glm::ivec2(0), tablet));
+
+    // An image placed inside the display, whose own origin is not (0, 0).
+    rect = ScreenOverlay::WindowRectFor(glm::vec2(150.0f, 100.0f), glm::vec2(450.0f, 300.0f), glm::vec2(100.0f, 50.0f),
+                                        glm::vec2(1.0f), tablet);
+    CHECK_MSG(rect.visible && viewportIs(rect, glm::vec2(50.0f, 50.0f), glm::vec2(300.0f, 200.0f)),
+              "the display's origin is taken off");
+    CHECK(scissorIs(rect, glm::ivec2(50, 50), glm::uvec2(300u, 200u)));
+
+    // Half off the framebuffer: the quads are fractions of the WHOLE image, so
+    // the viewport keeps it whole, and only the scissor is clamped.
+    rect = ScreenOverlay::WindowRectFor(glm::vec2(-670.0f, 0.0f), glm::vec2(670.0f, 800.0f), glm::vec2(0.0f),
+                                        glm::vec2(1.0f), tablet);
+    CHECK(rect.visible);
+    CHECK_MSG(viewportIs(rect, glm::vec2(-670.0f, 0.0f), glm::vec2(1340.0f, 800.0f)), "the viewport is not clamped");
+    CHECK_MSG(scissorIs(rect, glm::ivec2(0), glm::uvec2(670u, 800u)), "the scissor is");
+    rect = ScreenOverlay::WindowRectFor(glm::vec2(670.0f, 400.0f), glm::vec2(2010.0f, 1200.0f), glm::vec2(0.0f),
+                                        glm::vec2(1.0f), tablet);
+    CHECK_MSG(rect.visible && scissorIs(rect, glm::ivec2(670, 400), glm::uvec2(670u, 400u)),
+              "off the bottom-right too");
+
+    // Nothing to draw: an empty image, one wholly off the framebuffer, no framebuffer.
+    CHECK(!ScreenOverlay::WindowRectFor(glm::vec2(10.0f), glm::vec2(10.0f, 50.0f), glm::vec2(0.0f), glm::vec2(1.0f),
+                                        tablet).visible);
+    CHECK(!ScreenOverlay::WindowRectFor(glm::vec2(-500.0f, 0.0f), glm::vec2(-10.0f, 800.0f), glm::vec2(0.0f),
+                                        glm::vec2(1.0f), tablet).visible);
+    CHECK(!ScreenOverlay::WindowRectFor(glm::vec2(0.0f), glm::vec2(1340.0f, 800.0f), glm::vec2(0.0f), glm::vec2(1.0f),
+                                        glm::uvec2(0u)).visible);
+
+    // A fractional edge is rounded outwards, so a pixel whose centre the image
+    // covers is not cut by the scissor.
+    rect = ScreenOverlay::WindowRectFor(glm::vec2(0.5f, 0.5f), glm::vec2(100.25f, 50.75f), glm::vec2(0.0f),
+                                        glm::vec2(1.0f), tablet);
+    CHECK(scissorIs(rect, glm::ivec2(0), glm::uvec2(101u, 51u)));
+}
+
+void testTheWindowPipelineBlendsAsImGuiDoes() {
+    // On the window the overlay is drawn over the picture ImGui has just drawn,
+    // and the claim that an opaque HUD pixel is the same on both paths, and a
+    // translucent one mixes the same way, rests on the two blends being one.
+    // ImGui's is in its backend's source (imgui_impl_vulkan.cpp, the pipeline it
+    // builds: color_attachment[0]), which is read here, as the shaders are.
+    std::ifstream file("third_party/imgui/backends/imgui_impl_vulkan.cpp");
+    CHECK_MSG(file.good(), "third_party/imgui/backends/imgui_impl_vulkan.cpp opens (the suite runs from the project root)");
+    if (!file.good()) return;
+    std::stringstream text;
+    text << file.rdbuf();
+    const std::string source = text.str();
+
+    const std::map<std::string, int> constants = {
+        {"VK_TRUE", static_cast<int>(VK_TRUE)},
+        {"VK_FALSE", static_cast<int>(VK_FALSE)},
+        {"VK_BLEND_FACTOR_ZERO", static_cast<int>(VK_BLEND_FACTOR_ZERO)},
+        {"VK_BLEND_FACTOR_ONE", static_cast<int>(VK_BLEND_FACTOR_ONE)},
+        {"VK_BLEND_FACTOR_SRC_ALPHA", static_cast<int>(VK_BLEND_FACTOR_SRC_ALPHA)},
+        {"VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA", static_cast<int>(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)},
+        {"VK_BLEND_OP_ADD", static_cast<int>(VK_BLEND_OP_ADD)},
+    };
+    const auto imguiValue = [&](const std::string& field) {
+        const std::regex line("color_attachment\\[0\\]\\." + field + R"(\s*=\s*(VK_[A-Z_]+)\s*;)");
+        std::smatch match;
+        if (!std::regex_search(source, match, line)) return -1;
+        const auto known = constants.find(match[1].str());
+        return known == constants.end() ? -1 : known->second;
+    };
+
+    const VulkanPipelineOptions options = ScreenOverlayPipelineOptions(nullptr);
+    const vk::PipelineColorBlendAttachmentState blend = ColorBlendFor(options);
+    CHECK_MSG(imguiValue("blendEnable") == static_cast<int>(blend.blendEnable), "both blend");
+    CHECK_MSG(imguiValue("srcColorBlendFactor") == static_cast<int>(blend.srcColorBlendFactor), "colour from the source's alpha");
+    CHECK_MSG(imguiValue("dstColorBlendFactor") == static_cast<int>(blend.dstColorBlendFactor), "over one minus it");
+    CHECK_MSG(imguiValue("colorBlendOp") == static_cast<int>(blend.colorBlendOp), "added");
+    CHECK_MSG(imguiValue("srcAlphaBlendFactor") == static_cast<int>(blend.srcAlphaBlendFactor), "alpha taken whole");
+    CHECK_MSG(imguiValue("dstAlphaBlendFactor") == static_cast<int>(blend.dstAlphaBlendFactor), "over one minus it");
+    CHECK_MSG(imguiValue("alphaBlendOp") == static_cast<int>(blend.alphaBlendOp), "added");
+
+    // And the rest of the shape both overlay pipelines are built with: what the
+    // picture's pipeline always was.
+    CHECK_MSG(options.blendEnable && !options.depthWrite &&
+                  options.cullMode == vk::CullModeFlags(vk::CullModeFlagBits::eNone) &&
+                  !options.useVertexInput && options.samples == vk::SampleCountFlagBits::e1 &&
+                  options.pushConstantSize == sizeof(ScreenOverlayPushConstants) &&
+                  options.blendEquation == BlendEquation::Mix,
+              "blended (Mix), no depth, no vertices, one sample, the quad's push block");
+}
+
 } // namespace
 
 static void runTests() {
@@ -301,6 +446,10 @@ static void runTests() {
     testTheCompositeUnderTheOverlayIsUnchangedByDefault();
     testADisplayEncodedCompositeRunsNoBloomWhateverItsIntensity();
     testTheCompositeShaderBranchesOnTheEnumsNumbers();
+
+    testThePlacementDecidesWhereTheOverlayIsDrawn();
+    testTheWindowRectIsWhereThePictureIsShown();
+    testTheWindowPipelineBlendsAsImGuiDoes();
 }
 
-TEST_MAIN("test_screenoverlay", 40)
+TEST_MAIN("test_screenoverlay", 80)

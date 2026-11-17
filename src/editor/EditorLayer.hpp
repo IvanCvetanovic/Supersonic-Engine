@@ -7,6 +7,7 @@
 
 #include "core/PlayMode.hpp"
 #include "core/SceneManager.hpp"
+#include "core/ScreenOverlay.hpp"
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanOffscreen.hpp"
 #include "editor/SceneHierarchyPanel.hpp"
@@ -66,6 +67,21 @@ public:
         if (scale >= 1.0f) return static_cast<uint32_t>(extent);
         const uint32_t evened = static_cast<uint32_t>(extent * scale) & ~1u;
         return evened < 64u ? 64u : evened;
+    }
+
+    // The screen overlay on the window (ScreenOverlay::Placement, renderer/WindowOverlay.hpp). With a callback set, the
+    // game view places `draw`, carrying `renderer`, right after the picture's image whenever `placement` says the picture
+    // is drawn at another size than it is shown at; the renderer still decides whether to draw there. Only the game view:
+    // the editor's viewport panel keeps the picture path. Unset, the default, places nothing.
+    // `ready` is asked every frame before anything is placed: a renderer that could not build the window path (a
+    // swapchain format it refuses, or a recreate that dropped it) then gets a draw list without the callback and its
+    // reset, exactly the one it had before there was a window path.
+    void SetWindowOverlayHook(ScreenOverlay::Placement placement, ImDrawCallback draw, bool (*ready)(const void*),
+                              void* renderer) {
+        m_overlayPlacement = placement;
+        m_overlayDraw = draw;
+        m_overlayReady = ready;
+        m_overlayRenderer = renderer;
     }
 
     // Applies any viewport resize requested during BuildUI. Call at the top of
@@ -178,6 +194,12 @@ private:
     bool m_gameMode{false};
     float m_renderScale{1.0f};
     bool m_showDemoWindow{false};
+
+    // SetWindowOverlayHook's.
+    ScreenOverlay::Placement m_overlayPlacement{ScreenOverlay::Placement::Picture};
+    ImDrawCallback m_overlayDraw{nullptr};
+    bool (*m_overlayReady)(const void*){nullptr};
+    void* m_overlayRenderer{nullptr};
 
     std::string m_statusMessage;
     bool m_statusIsError{false};

@@ -20,6 +20,7 @@
 #include "core/RenderSystem.hpp"
 #include "core/ClusterGrid.hpp"
 #include "core/Light2D.hpp"
+#include "core/ScreenOverlay.hpp"
 #include "renderer/ShadowCache.hpp"
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/TextureRegistry.hpp"
@@ -31,8 +32,12 @@
 #include "platform/Window.hpp"
 
 struct ImDrawData;
+struct ImDrawList;
+struct ImDrawCmd;
 
 namespace Supersonic {
+
+struct WindowOverlayCall;
 
 // Records and submits frames. Deliberately knows nothing about the editor:
 // the offscreen target and the finished ImGui draw data are handed in, so the
@@ -136,6 +141,28 @@ public:
     // The scene pipelines specialised to the sprite path (GameManifest::spritesOnlyScenePipelines). Read when
     // they are built, by SetOffscreenRenderPass: so before it.
     void SetSpritesOnlyScenePipelines(bool spritesOnly) { m_spritesOnlyScene = spritesOnly; }
+
+    // Where the screen overlay may be drawn (GameManifest::screenOverlayPlacement). Anything but Picture builds a second
+    // overlay pipeline, against a render pass compatible with the swapchain's, so the quads can be recorded inside the
+    // swapchain pass - but only on an 8-bit UNORM swapchain, the one format whose blend is the display-value blend the
+    // overlay is drawn with into the picture; any other keeps the picture path, and says so once. Picture, the default,
+    // builds nothing and records exactly what the renderer always recorded. Whether a frame uses the window is the draw
+    // data's to say: the editor places WindowOverlayCallback after the picture's image when the placement asks for it
+    // (EditorLayer::SetWindowOverlayHook), and a frame without that callback draws into the picture.
+    void SetScreenOverlayPlacement(ScreenOverlay::Placement placement);
+    // Whether the last frame recorded drew the overlay on the window: its picture, which --screenshot reads, then holds
+    // no overlay.
+    bool LastOverlayAtWindow() const { return m_lastOverlayAtWindow; }
+
+    // The draw callback the editor places for the window path (renderer/WindowOverlay.hpp). Static, because ImGui calls
+    // a plain function; the renderer comes in the call it carries. Records the frame's overlay on the command buffer
+    // ImGui's backend is recording, inside its pass, then the backend's reset (placed after it) restores ImGui's state.
+    static void WindowOverlayCallback(const ImDrawList* list, const ImDrawCmd* cmd);
+    // Whether the window path exists now (the hook's `ready`, EditorLayer::SetWindowOverlayHook): the pipeline is built
+    // only on a UNORM8 swapchain, and a recreate onto another format drops it.
+    static bool WindowOverlayReady(const void* renderer) {
+        return renderer != nullptr && static_cast<const VulkanRenderer*>(renderer)->m_windowOverlayPipeline != nullptr;
+    }
 
     // The renderer's transfer/graphics command pool, for one-off work like a
     // screenshot readback.
@@ -284,6 +311,40 @@ private:
     // with it on every resize.
     vk::RenderPass m_screenOverlayRenderPass{nullptr};
     std::unique_ptr<VulkanPipeline> m_screenOverlayPipeline;
+
+    // Both overlay pipelines are built from these (ScreenOverlayPipelineOptions with the renderer's cache).
+    VulkanPipeline::Options screenOverlayOptions() const;
+
+    // The overlay's material sets, one per quad, resolved before any pass opens: a texture's first use reads its file
+    // and uploads it, which belongs outside a render pass. A member, reused, so the window path can record from them
+    // later in the frame and neither path allocates a vector a frame.
+    void resolveOverlaySets(const ScreenOverlay& overlay);
+    // The quads, in order, with `pipeline`, on a command buffer inside a pass whose viewport is the image's.
+    void recordOverlayQuads(vk::CommandBuffer cmd, const VulkanPipeline& pipeline, const ScreenOverlay& overlay) const;
+    std::vector<vk::DescriptorSet> m_overlaySets;
+
+    // The window path (SetScreenOverlayPlacement). Its own render pass, as m_screenOverlayRenderPass has one: the
+    // swapchain's is destroyed and rebuilt with every swapchain, and a pipeline needs only a compatible pass, so it is
+    // built with one that lives as long as it does - rebuilt only if the swapchain's format (or its readability, which
+    // adds a dependency to the pass) changes.
+    void buildWindowOverlay();
+    void destroyWindowOverlay();
+    ScreenOverlay::Placement m_overlayPlacement{ScreenOverlay::Placement::Picture};
+    vk::RenderPass m_windowOverlayRenderPass{nullptr};
+    std::unique_ptr<VulkanPipeline> m_windowOverlayPipeline;
+    vk::Format m_windowOverlayFormat{vk::Format::eUndefined};
+    bool m_windowOverlayReadable{false};
+    bool m_windowOverlayRefusalLogged{false};
+
+    // This frame's window path, set in DrawFrame before ImGui's backend runs and cleared after its pass: the overlay the
+    // callback draws (null once drawn, so a second callback draws nothing), and where ImGui's coordinates land in the
+    // framebuffer.
+    void recordWindowOverlay(vk::CommandBuffer cmd, const WindowOverlayCall& call);
+    const ScreenOverlay* m_windowOverlay{nullptr};
+    glm::vec2 m_windowOverlayDisplayPos{0.0f};
+    glm::vec2 m_windowOverlayFramebufferScale{1.0f};
+    glm::uvec2 m_windowOverlayFramebuffer{0u};
+    bool m_lastOverlayAtWindow{false};
 
     // Depth-only pass from the primary directional light.
     std::unique_ptr<ShadowMap> m_shadowMap;

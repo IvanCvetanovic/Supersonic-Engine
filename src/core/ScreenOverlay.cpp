@@ -52,4 +52,38 @@ ScreenOverlay::Corner ScreenOverlay::CornerOf(const Quad& quad, int index) {
     return corner;
 }
 
+bool ScreenOverlay::AtWindowResolution(Placement placement, glm::uvec2 picture, glm::uvec2 image) {
+    if (picture.x == 0 || picture.y == 0 || image.x == 0 || image.y == 0) return false;
+    switch (placement) {
+    case Placement::Window:
+        return true;
+    case Placement::WindowWhenScaled:
+        return picture != image;
+    case Placement::Picture:
+    default:
+        return false;
+    }
+}
+
+ScreenOverlay::WindowRect ScreenOverlay::WindowRectFor(glm::vec2 imageMin, glm::vec2 imageMax, glm::vec2 displayPos,
+                                                       glm::vec2 framebufferScale, glm::uvec2 framebuffer) {
+    WindowRect rect;
+    rect.offset = (imageMin - displayPos) * framebufferScale;
+    rect.extent = (imageMax - imageMin) * framebufferScale;
+    // Written as "not greater" so that a NaN is no image either.
+    if (!(rect.extent.x > 0.0f && rect.extent.y > 0.0f) || framebuffer.x == 0 || framebuffer.y == 0) return rect;
+
+    const glm::vec2 limit(static_cast<float>(framebuffer.x), static_cast<float>(framebuffer.y));
+    const glm::vec2 clipMin = glm::clamp(glm::floor(rect.offset), glm::vec2(0.0f), limit);
+    const glm::vec2 clipMax = glm::clamp(glm::ceil(rect.offset + rect.extent), glm::vec2(0.0f), limit);
+    if (!(clipMax.x > clipMin.x && clipMax.y > clipMin.y)) return rect;
+
+    // Whole numbers inside [0, framebuffer] by now, so the conversions are exact.
+    rect.scissorOffset = glm::ivec2(static_cast<int>(clipMin.x), static_cast<int>(clipMin.y));
+    rect.scissorExtent = glm::uvec2(static_cast<unsigned>(clipMax.x - clipMin.x),
+                                    static_cast<unsigned>(clipMax.y - clipMin.y));
+    rect.visible = true;
+    return rect;
+}
+
 } // namespace Supersonic

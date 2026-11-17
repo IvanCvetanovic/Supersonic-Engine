@@ -125,6 +125,62 @@ public:
     };
     static Corner CornerOf(const Quad& quad, int index);
 
+    // WHERE the overlay is drawn: into the picture, or over it on the window.
+    //
+    // The picture is the scene target, and a game that scales it to keep its
+    // frame rate (DynamicResolution) shrinks everything drawn into it: a HUD
+    // drawn at 0.3 of a phone's window and stretched back up by a linear sampler
+    // is a HUD whose text cannot be read. Drawn on the window instead - the same
+    // quads, the same shaders and the same blend, straight onto the swapchain
+    // image right after the picture - it is drawn at the window's resolution
+    // whatever the picture's.
+    //
+    //   Picture           into the picture, as the overlay always was. The
+    //                     default: a game that sets nothing is unchanged, and
+    //                     --screenshot (which reads the picture) shows the HUD.
+    //   WindowWhenScaled  on the window when the picture is not the image's size,
+    //                     into the picture when it is: a game that scales only
+    //                     some of the time keeps the old path, and its captures,
+    //                     whenever it does not.
+    //   Window            on the window whenever it can be: for a developer, and
+    //                     for a test that compares the two paths at one size.
+    //
+    // The renderer may still refuse the window (a swapchain whose format it
+    // cannot blend in display values), and then draws into the picture.
+    enum class Placement { Picture, WindowWhenScaled, Window };
+
+    // Whether `placement` draws on the window for a picture of `picture` pixels
+    // shown as an image of `image` pixels. Extents, not a scale: the scaled
+    // extent is rounded and evened (EditorLayer::ScaledExtent), so a scale below
+    // 1 can still give the image's size, and the comparison is what decides
+    // whether anything is stretched. A zero extent is no picture at all: false.
+    static bool AtWindowResolution(Placement placement, glm::uvec2 picture, glm::uvec2 image);
+
+    // The viewport and scissor that put the overlay on the window exactly where
+    // the picture is shown, in framebuffer pixels.
+    //
+    // The viewport is the image's rectangle, NOT clamped: a quad's position is a
+    // fraction of the image (Quad::min), so the viewport must be the whole image
+    // even where part of it lies off the framebuffer, or every quad would shift.
+    // The scissor is that rectangle clamped to the framebuffer, as ImGui clamps
+    // its own (vkCmdSetScissor takes nothing outside it), and rounded outwards
+    // so that a pixel whose centre the image covers is not cut.
+    struct WindowRect {
+        glm::vec2 offset{0.0f};
+        glm::vec2 extent{0.0f};
+        glm::ivec2 scissorOffset{0};
+        glm::uvec2 scissorExtent{0u};
+        // False when nothing of the image is on the framebuffer, or the image is
+        // empty: then nothing may be recorded (a zero-sized viewport is invalid).
+        bool visible{false};
+    };
+
+    // `imageMin` and `imageMax` are the image's corners in ImGui's coordinates
+    // (points), `displayPos` and `framebufferScale` the draw data's, and
+    // `framebuffer` the pixels the pass renders to.
+    static WindowRect WindowRectFor(glm::vec2 imageMin, glm::vec2 imageMax, glm::vec2 displayPos,
+                                    glm::vec2 framebufferScale, glm::uvec2 framebuffer);
+
 private:
     std::vector<Quad> m_quads;
     std::size_t m_dropped{0};

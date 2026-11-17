@@ -405,6 +405,11 @@ struct VulkanPipelineOptions {
 // and a swapped factor draws a glow as a dark square rather than failing.
 vk::PipelineColorBlendAttachmentState ColorBlendFor(const VulkanPipelineOptions& options);
 
+// The screen overlay's pipeline (core/ScreenOverlay.hpp): no vertex input, blended (Mix), no depth, one sample. One
+// function for both of its pipelines - the one that draws into the picture and the one that draws on the window - so
+// they cannot drift apart, and out here so a suite can read its blend without a device.
+VulkanPipelineOptions ScreenOverlayPipelineOptions(vk::PipelineCache cache);
+
 class VulkanPipeline {
 public:
     using Options = VulkanPipelineOptions;

@@ -5,6 +5,7 @@
 
 #include "core/DynamicResolution.hpp"
 #include "core/LaunchOptions.hpp"
+#include "core/ScreenOverlay.hpp"
 
 namespace Supersonic {
 
@@ -132,6 +133,12 @@ struct GameManifest {
     // 120 MiB is a tenth of what a low-memory manager looks at. Set by a game's main; not read from or written to game.manifest's
     // text.
     uint32_t shadowMapResolution{0};
+
+    // Where the screen overlay (ScreenOverlay.hpp) is drawn: into the picture, Picture, the default and the engine as it was;
+    // or on the window at its own resolution, WindowWhenScaled or Window (ScreenOverlay::Placement says when each does). A game
+    // whose picture is scaled down (dynamicResolution) draws its HUD into that smaller picture otherwise, and the stretch back
+    // up blurs every letter of it. Set by a game's main; not read from or written to game.manifest's text.
+    ScreenOverlay::Placement screenOverlayPlacement{ScreenOverlay::Placement::Picture};
 
     // What the engine opens at when nothing asks for anything, which is the
     // literal that used to be the only answer.

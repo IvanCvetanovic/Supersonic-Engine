@@ -819,6 +819,13 @@ written is a display value. Order of `Add` is order of drawing; there is no
 depth. `--screenshot` reads that same image, so a capture shows the overlay; the
 swapchain's ImGui pass, which the screenshot does not read, would not have.
 
+A game whose picture is scaled can ask for the overlay at the window's own
+resolution instead (`GameManifest::screenOverlayPlacement`): the editor places a
+draw callback after the picture's image (`renderer/WindowOverlay.hpp`), and the
+same quads, with the same shaders and blend, are recorded inside the swapchain
+pass, so text and edges are not stretched with the picture. Then `--screenshot`
+holds no overlay, and `--screenshot-ui`, which reads the window, holds it.
+
 A game emits the overlay from `OnUpdate`, once a frame: a list emitted on the
 tick would be empty on a frame with no tick and doubled on one with two.
 

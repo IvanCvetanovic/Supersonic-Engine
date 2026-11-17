@@ -18,6 +18,7 @@
 #include "core/Components.hpp"
 #include "core/UIInput.hpp"
 #include "core/UISystem.hpp"
+#include "renderer/WindowOverlay.hpp"
 
 #include <entt/entt.hpp>
 #include <imgui.h>
@@ -25,6 +26,8 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstring>
+#include <optional>
 #include <string>
 
 using namespace Supersonic;
@@ -1044,6 +1047,129 @@ static void testAClipUnderAPlainContainerStillClips() {
               "and the same row inside it is drawn");
 }
 
+// The screen overlay on the window (renderer/WindowOverlay.hpp): the renderer's
+// callback goes into the game view's draw list right after the picture's image,
+// and the backend's reset right after it, so ImGui's own state is restored
+// before anything later in the list - the HUD, a later window - is drawn. Where
+// in the list is all a suite can see without a device; what the callback
+// records is the renderer's.
+//
+// The two stand-in callbacks do different things on purpose: two empty
+// functions may be folded into one address by the linker, and then "the next
+// command is the reset" would hold of the overlay's own callback.
+int g_overlayCalls = 0;
+int g_resetCalls = 0;
+void standInOverlay(const ImDrawList*, const ImDrawCmd*) { ++g_overlayCalls; }
+void standInReset(const ImDrawList*, const ImDrawCmd*) { ++g_resetCalls; }
+
+constexpr ImTextureID kPicture = 0x5050;
+
+// The command that draws the picture, in whichever list holds it: -1 for none.
+struct Found {
+    int list{-1};
+    int command{-1};
+};
+Found findPicture(const ImDrawData* data) {
+    for (int list = 0; data != nullptr && list < data->CmdListsCount; ++list) {
+        const ImVector<ImDrawCmd>& commands = data->CmdLists[list]->CmdBuffer;
+        for (int i = 0; i < commands.Size; ++i) {
+            const ImDrawCmd& command = commands[i];
+            if (command.UserCallback == nullptr && command.ElemCount > 0 && command.TexRef._TexData == nullptr &&
+                command.TexRef._TexID == kPicture) {
+                return Found{list, i};
+            }
+        }
+    }
+    return Found{};
+}
+
+// One frame: the game view's image, the overlay placed after it or not, and a
+// later window over it all. Returns what placing answered.
+bool drawGameView(bool place, int* commandsBeforePlacing = nullptr, int* commandsAfterPlacing = nullptr) {
+    ImGui::NewFrame();
+    // As the editor's game view is: no padding, so the picture fills the window from its corner.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(1340.0f, 800.0f));
+    ImGui::Begin("game", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground);
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImGui::Image(ImTextureRef(kPicture), ImVec2(1340.0f, 800.0f));
+    bool placed = false;
+    if (place) {
+        ImDrawList& list = *ImGui::GetWindowDrawList();
+        if (commandsBeforePlacing != nullptr) *commandsBeforePlacing = list.CmdBuffer.Size;
+        placed = PlaceWindowOverlay(list, &standInOverlay, &g_overlayCalls, origin,
+                                    ImVec2(origin.x + 1340.0f, origin.y + 800.0f));
+        if (commandsAfterPlacing != nullptr) *commandsAfterPlacing = list.CmdBuffer.Size;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+
+    ImGui::SetNextWindowPos(ImVec2(40.0f, 40.0f));
+    ImGui::SetNextWindowSize(ImVec2(300.0f, 120.0f));
+    ImGui::Begin("later", nullptr, ImGuiWindowFlags_NoDecoration);
+    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(50.0f, 50.0f), ImVec2(150.0f, 100.0f), kHudButton);
+    ImGui::End();
+    ImGui::Render();
+    return placed;
+}
+
+void testTheWindowOverlayIsPlacedRightAfterThePictureAndThenTheReset() {
+    HeadlessImGui imgui;
+    ImGui::GetPlatformIO().DrawCallback_ResetRenderState = &standInReset;
+
+    CHECK_MSG(drawGameView(true), "placed when the backend offers a reset");
+    const ImDrawData* data = ImGui::GetDrawData();
+    const Found picture = findPicture(data);
+    CHECK_MSG(picture.list >= 0, "the picture is drawn");
+    if (picture.list < 0) return;
+    const ImVector<ImDrawCmd>& commands = data->CmdLists[picture.list]->CmdBuffer;
+    const bool room = picture.command + 2 < commands.Size;
+    CHECK_MSG(room && commands[picture.command + 1].UserCallback == &standInOverlay,
+              "the overlay's callback is the very next command");
+    CHECK_MSG(room && commands[picture.command + 2].UserCallback == &standInReset, "and the reset the one after it");
+    if (!room) return;
+
+    // The call is copied into the list, and readable once Render has run.
+    const std::optional<WindowOverlayCall> carried = WindowOverlayCallOf(commands[picture.command + 1]);
+    CHECK_MSG(carried && carried->renderer == &g_overlayCalls && carried->imageMin[0] == 0.0f &&
+                  carried->imageMin[1] == 0.0f && carried->imageMax[0] == 1340.0f && carried->imageMax[1] == 800.0f,
+              "it carries the renderer and where the picture is shown");
+    const std::optional<WindowOverlayCall> found = FindWindowOverlay(data, &standInOverlay);
+    CHECK_MSG(found && carried && std::memcmp(&*found, &*carried, sizeof(WindowOverlayCall)) == 0,
+              "FindWindowOverlay finds the same call");
+    CHECK_MSG(!FindWindowOverlay(data, &standInReset), "and only the callback it is asked about");
+
+    // A later window draws after the game view, and so over the overlay.
+    int later = -1;
+    for (int list = 0; list < data->CmdListsCount; ++list) {
+        for (const ImDrawCmd& command : data->CmdLists[list]->CmdBuffer) {
+            if (command.ElemCount > 0 && list != picture.list) later = list;
+        }
+    }
+    CHECK_MSG(later > picture.list, "a later window's list comes after the game view's");
+    CHECK_MSG(g_overlayCalls == 0 && g_resetCalls == 0, "placing calls nothing: the backend does, as it renders");
+
+    // A frame that places nothing has nothing to find.
+    drawGameView(false);
+    CHECK_MSG(findPicture(ImGui::GetDrawData()).list >= 0 && !FindWindowOverlay(ImGui::GetDrawData(), &standInOverlay),
+              "nothing found where nothing was placed");
+}
+
+void testTheWindowOverlayIsRefusedWithoutABackendReset() {
+    // Without the reset, ImGui's next draw would run with the overlay's
+    // pipeline and its set 1: so nothing is placed, and the overlay goes into
+    // the picture as before.
+    HeadlessImGui imgui;
+    ImGui::GetPlatformIO().DrawCallback_ResetRenderState = nullptr;
+    int before = -1;
+    int after = -2;
+    CHECK_MSG(!drawGameView(true, &before, &after), "refused with no reset to restore ImGui's state");
+    CHECK_MSG(before == after, "and the draw list is as it was");
+    CHECK_MSG(!FindWindowOverlay(ImGui::GetDrawData(), &standInOverlay), "nothing to find");
+}
+
 } // namespace
 
 static void runTests() {
@@ -1072,6 +1198,9 @@ static void runTests() {
     testAClippedRowTakesNoClick();
     testNestedClipsIntersectRatherThanReplace();
     testAClipUnderAPlainContainerStillClips();
+
+    testTheWindowOverlayIsPlacedRightAfterThePictureAndThenTheReset();
+    testTheWindowOverlayIsRefusedWithoutABackendReset();
 }
 
-TEST_MAIN("test_uilayer", 61)
+TEST_MAIN("test_uilayer", 74)
