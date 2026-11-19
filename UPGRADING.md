@@ -16,9 +16,12 @@ The price of the freedom is this file. **A breaking change with no entry here is
 one way to get this policy wrong**, because the game finds out by itself, later,
 with a bisect.
 
-Whether determinism stays the default is a separate decision and is still open.
-Until it is made, a change that moves a `StateHash` value, a replay file or a golden
-is recorded here like any other.
+Determinism stays the default
+([docs/planning/2026-11-19-owner-decisions.md](docs/planning/2026-11-19-owner-decisions.md)).
+That fixes the *property* (a run reproduces itself, bit for bit, on every machine),
+not the *values*: a change that moves a `StateHash` value, a replay file or a golden
+is allowed and is recorded here like any other, and a change that makes a run stop
+reproducing itself is not.
 
 ## What counts, and how it is labelled
 

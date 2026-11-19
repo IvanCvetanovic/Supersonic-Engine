@@ -28,6 +28,8 @@ directory and that section disagree, that section is right.
 | [2026-10-01-engine-hardening-plan.md](2026-10-01-engine-hardening-plan.md) | 1 Oct 2026 | What can be improved without changing anything a game sees, from three read-only audits and a baseline build (57 of 58 suites pass; `test_jobs` is flaky under load). Splits the work by whether a game could notice: housekeeping, defects on inputs that already fail, bit-identical speedups, and the items held for the owner's decision. Phases 0 and 1 have since been carried out; the Outcome section at the end of the file records what was done, where it differs, and what was not checked |
 | [2026-11-11-local-verification-handoff.md](2026-11-11-local-verification-handoff.md) | 11 Nov 2026 | What a branch of improvements changed, what was and was not checked on a Linux box with only a software Vulkan device, and the ordered checklist for the local run that can check the rest: MSVC, a real GPU, the pictures and replays of the shipped games against the original engine, the editor by hand. Ends in an Outcome section for that run to fill in |
 
+| [2026-11-19-owner-decisions.md](2026-11-19-owner-decisions.md) | 19 Nov 2026 | What the owner decided in one conversation: a universal engine measured by capability, breaking changes allowed and recorded in UPGRADING.md, determinism kept as the default (the property, not the values), a small speed suite as a guardrail, and what is still open |
+
 ## Moved with their games
 
 On 19 September 2026 the three game ports left `games/` for repositories of
