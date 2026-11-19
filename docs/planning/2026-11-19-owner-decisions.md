@@ -153,3 +153,35 @@ The consequences, so that the plan does not rediscover them:
 Still open, and not the owner's to decide: whether the 11 November Penumbra
 `test_pn_render_hud` failure (handed to the local agent) is fixed, and the
 public-versus-private wording in `AGENTS.md` and `ci.yml`.
+
+## 8. The engine stays in C++
+
+Asked the same day whether to move the engine to Rust, the owner decided to stay with
+C++ "for now". The reasoning, so that the question is not re-run from nothing:
+
+- The engine is about 65,000 lines in `src/` and 47,000 in `tests/`, and the two live
+  games link it directly in C++. A breaking API change costs a game a few edits; a
+  language change costs it a rewrite, and discards the confidence the 66 suites and the
+  determinism gate represent.
+- The Vulkan-protocol defects this repository has had (two showstoppers that survived
+  six commits) are not what Rust's borrow checker catches, and a Rust Vulkan binding is
+  `unsafe` anyway; the validation layers stay necessary.
+- The hot-reloaded `GameScripts` plugin relies on C++ in a DLL; Rust has no stable ABI,
+  so it would go through a C interface.
+- C++'s weak spot is already covered by the ASan, UBSan, TSan and checked-STL legs of
+  `tools/check.sh`.
+- Rust's real advantages (memory safety, no float contraction by default, Cargo) did not
+  outweigh a rewrite. Determinism is not free in Rust: its `sin` and `cos` call the
+  platform's maths library, so `DetMath` would be rebuilt there too.
+
+Where language does decide competitiveness is the one **game developers** write in, not
+the one the engine is written in: Godot has GDScript and C#, Unity has C#, and here
+gameplay code means a compiled C++ plugin. That is a capability question for the
+scripting domain of the matrix, and the likely answer is an embedded scripting layer on
+top of C++ (Lua, C# or WASM), not a rewrite.
+
+What would reopen the question: a count of the fixed defects in the history showing
+that memory-safety errors, not logic or protocol errors, dominate (not done; offered and
+not taken up); or a new subsystem that could live behind a C interface, an asset-cooking
+tool for example. This is a judgement, not a measurement: the Rust engines' standing was
+recalled, not re-checked.
