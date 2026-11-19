@@ -457,6 +457,11 @@ empty when it is built for itself. The rule and its reasons are in
 thing it costs is that a relative `--screenshot`, `--record` or `--replay` path
 then resolves from the engine's root, so pass those as absolute paths.
 
+**Moving a game to a newer engine.** The engine may change what a game sees, and
+[UPGRADING.md](UPGRADING.md) is the ledger of every such change: what differs, what
+the game has to do, and which of its tests are expected to move. Read it from the
+commit the game is pinned at to the one it is moving to.
+
 ---
 
 ## How a frame runs

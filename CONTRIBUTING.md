@@ -29,6 +29,12 @@ line. `// increment i` is noise; `// Cull against the LIGHT's frustum, not the
 camera's: an object behind the viewer can still cast into view` is the reason
 the next person does not "simplify" it.
 
+**An [UPGRADING.md](UPGRADING.md) entry, if a game could notice.** The engine may
+make breaking changes when they make it better, and the games that build against it
+are upgraded by hand. The entry goes in the same commit as the change: what the game
+will see, what it has to do, and which of its tests are expected to move. A
+breaking change with no entry is the one thing that policy does not allow.
+
 **Zero warnings.** MSVC builds at `/W4`, GCC and Clang at `-Wall -Wextra
 -Wpedantic`. Vendored code under `third_party/` is excluded from that; the
 project's own code never is.

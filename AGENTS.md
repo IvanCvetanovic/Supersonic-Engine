@@ -444,6 +444,18 @@ cmake --build build --target clean
 rm -rf build            # or: Remove-Item -Recurse -Force build
 ```
 
+## Changing what a game sees
+
+The engine may make breaking changes whenever they make it better; a game's upgrade
+cost is not a reason to hold a change back. What is required instead is the record:
+every change a game could notice - a renamed symbol, a moved picture or hash, a
+changed file format, a CMake target - gets an entry in
+[UPGRADING.md](UPGRADING.md), in the same commit, from the game's side. Where a
+game's own suite can be run against the new engine, run it and record which tests
+moved and why. Planning documents dated before 19 November 2026 describe an earlier
+policy (anything a game could notice was held for a decision) and are history, not
+a constraint.
+
 ## Other platforms
 
 Windows is the primary target; Linux builds from the same tree. macOS and Android
