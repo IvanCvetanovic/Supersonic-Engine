@@ -75,7 +75,7 @@ and `dedupe_bench`, outside ctest.
 2. The detailed plan is written from that, with costs, dependencies, waves, and a
    statement per item of what the cloud can verify and what needs the owner's PC,
    device or eyes. The frontier-rendering roadmap
-   (`docs/planning` copy to be added with the plan) is its rendering lane.
+   ([docs/planning copy](2026-11-19-frontier-rendering-roadmap.md)) is its rendering lane.
 
 ## 6. Open when this was first written
 
