@@ -77,7 +77,11 @@ and `dedupe_bench`, outside ctest.
    device or eyes. The frontier-rendering roadmap
    (`docs/planning` copy to be added with the plan) is its rendering lane.
 
-## 6. Still open
+## 6. Open when this was first written
+
+Three questions were open at the end of the first conversation. All three were
+answered later the same day, in section 7. They are kept here as asked, because the
+shape of the question is part of the record.
 
 - Which two of the four games that build against the engine are live (the status
   column in [UPGRADING.md](../../UPGRADING.md)).
@@ -87,3 +91,65 @@ and `dedupe_bench`, outside ctest.
 - Where committed shader blobs are built: the owner's PC through the local agent each
   time, or a dispatched CI job that uploads them. The policy above allows shader
   changes; it does not remove the need for the pinned compiler.
+
+## 7. Answered the same day
+
+**The live games are Penumbra and Magic Portals.** Wolf Brigade and HUSK are test
+beds. [UPGRADING.md](../../UPGRADING.md) writes its entries for the two live games
+only, and its status table says so.
+
+**Verification runs on both of the owner's laptops, which is two GPUs from two
+vendors.** One is the integrated AMD Radeon 780M of the 11 November device run
+(Ryzen 7 250, Windows 11); the other, from the 28 August document, is an RTX 3060
+Laptop (i7-12700H), whose driver, OS and toolchain have not been recorded since and are
+to be written down by the first run on it. The cloud session on which this is written
+is on neither: it has a software Vulkan device (lavapipe) and no GPU, and what runs on
+the laptops is the owner's local agent. How the two are used:
+
+- **Work that can change a picture or touch the GPU runs on both**: shader and
+  lighting changes, post-processing, anything that allocates GPU memory, the
+  validation-layer run, GPU timings. An integrated GPU shares system memory and a
+  discrete one has its own, and the two vendors differ in wave size, driver
+  behaviour and which optional features exist, so a bug one hides the other may show.
+  Optional features (ray query, mesh shaders, descriptor indexing) are read from the
+  device at run time and recorded per machine; an item that needs one is tested only
+  where the device reports it, and says so.
+- **Work that cannot** (CPU-only simulation, tools, file formats) runs in the cloud,
+  and once on one laptop for the MSVC build and the suites. Per item the plan states
+  which of cloud, one laptop, both laptops, or eyes it needs.
+- **Pictures are not assumed to be byte-identical between the two GPUs.** Two
+  vendors may rasterise, filter and resolve differently; nobody has measured how much
+  on this engine. `tools/verify-frames.sh` checks a run against itself on one machine
+  and is deliberately not a golden-picture check. The first job for the local agent is
+  to render `MainScene` on both laptops and diff the screenshots, so that the size of
+  the difference is a number before anything is built on an assumption.
+- **The simulation hash must be identical on both**, since it never touches the GPU:
+  record a replay on one laptop, play it on the other, and the hashes must match. Two
+  different CPUs (AMD and Intel) is a better test of the determinism property than one
+  machine is, and costs one run.
+- **Speed baselines are per machine.** The speed suite keeps one baseline file per
+  laptop; a count (draws, entities walked, allocations) is the same on both and is
+  asserted, a millisecond figure is compared only against the same machine's file.
+
+**Shader blobs are built on the owner's PC, by the local agent, with the pinned
+compiler.** GitHub Actions minutes are used up, so no dispatched CI job builds them.
+The consequences, so that the plan does not rediscover them:
+
+- The cloud session writes GLSL and the C++ around it and does not commit `.spv`
+  blobs: the only compiler obtainable here is a distribution package, not the pinned
+  one, and a blob from it may differ from the one CI's byte comparison expects. It may build
+  blobs into the working tree to look at a result on lavapipe; those are not committed.
+- The local agent rebuilds the blobs with the pinned compiler (the Vulkan SDK that
+  CI pins, 1.4.357.0 on the Radeon laptop in the 11 November run), runs the shader
+  check, and commits source and blobs together, since a source edit with a stale blob
+  is silently ignored by the build.
+- Without CI, `tools/check.sh shaders` on the PC is the byte comparison that CI would
+  have done. The second laptop, if it has the same compiler version, can confirm that
+  a rebuild reproduces the committed bytes; where it does not, that is not checked.
+- **Shader work is batched per wave** so that the trip to the PC happens once per
+  batch and not once per edit. A wave's shader items are written together, and the
+  blobs come back in one commit.
+
+Still open, and not the owner's to decide: whether the 11 November Penumbra
+`test_pn_render_hud` failure (handed to the local agent) is fixed, and the
+public-versus-private wording in `AGENTS.md` and `ci.yml`.

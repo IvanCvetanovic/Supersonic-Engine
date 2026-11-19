@@ -66,15 +66,20 @@ Verified:   which game suites were run against it, or "not run"
 
 ## The games that build against this engine
 
-The repository knows four. The owner has said two are live; the status column is
-for the owner to fill in, so that an entry can say who it matters to.
+The repository knows four. The owner confirmed on 19 November 2026 which two are
+live: an entry's *Affects* and *Verified* lines are written for those two, and the
+other two are not tracked.
 
 | Repository | Status |
 |---|---|
-| The-Wolf-Brigade | owner to confirm |
-| HUSK | owner to confirm |
-| Magic-Portals-Enhanced | owner to confirm |
-| Penumbra-and-the-Castle-of-Shadows-Enhanced | owner to confirm |
+| Penumbra-and-the-Castle-of-Shadows-Enhanced | **live**: an entry says what it does to this game |
+| Magic-Portals-Enhanced | **live**: an entry says what it does to this game |
+| The-Wolf-Brigade | test bed: no entry is written for it, and its suites are not run for the ledger |
+| HUSK | test bed: no entry is written for it, and its suites are not run for the ledger |
+
+A test bed still builds against the engine, and a change that breaks one of them may
+say so in a line; what it does not get is the work of an entry, a migrator or a
+"Verified" run. Either can be promoted back to live by editing this table.
 
 ## Unreleased
 
