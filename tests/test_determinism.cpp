@@ -375,21 +375,23 @@ void checkTrail(const char* scene, const Trail& actual, const Trail& recorded) {
     }
 }
 
-// Recorded on the engine at 5781518, the commit before integrateAfterSolve.
+// Recorded on the engine at 5781518, the commit before integrateAfterSolve, and RE-recorded when the friction solve was given axes that are fixed
+// for a contact's step and a signed accumulator each (PhysicsSystem, the velocity solve): the plane world's first 34 ticks are as they were, the mixed
+// world's boxes are in contact from its first tick and none of its checkpoints is.
 constexpr Trail kRecordedMixedWorld = {{
-    0xff21947b7b88ebecull, // tick 1
-    0x3e1307db1c0e39a7ull, // tick 2
-    0x807750ae67e4a915ull, // tick 3
-    0x38a4762c2801e23bull, // tick 5
-    0x8fcb7faea7087c8aull, // tick 8
-    0xa7fe9991dd9e66abull, // tick 13
-    0x0470988b887e3244ull, // tick 21
-    0x3b9bffd40f088ac4ull, // tick 34
-    0x2bf5a740b25698f3ull, // tick 55
-    0x60fec68f3b1eb408ull, // tick 89
-    0x89597ae8fac55e9dull, // tick 144
-    0xee5a1f7ea2f884efull, // tick 233
-    0x889e68198934e316ull, // tick 377
+    0xe08cd43302dbec6cull, // tick 1
+    0xa6e1908d778c0e06ull, // tick 2
+    0x7609f47e5177622dull, // tick 3
+    0x6778872f60252346ull, // tick 5
+    0x3945becb19643f76ull, // tick 8
+    0x741abc2fb1de2b0dull, // tick 13
+    0x115cb5437ab90b60ull, // tick 21
+    0x2668b2f92c019284ull, // tick 34
+    0x75805b8a32bad9d8ull, // tick 55
+    0x59b40e36824458ecull, // tick 89
+    0xb7110e9df29ff8c0ull, // tick 144
+    0xdd372a3acdd659f5ull, // tick 233
+    0xeb60df113430e4e5ull, // tick 377
 }};
 constexpr Trail kRecordedPlaneWorld = {{
     0xff6a8bc1da27ac5bull, // tick 1
@@ -400,11 +402,11 @@ constexpr Trail kRecordedPlaneWorld = {{
     0x8cab6aeb7b8f581aull, // tick 13
     0x13e511022cac31adull, // tick 21
     0x5fc3b1c7fbc9f185ull, // tick 34
-    0xbb818f5b7e39cd66ull, // tick 55
-    0x4989425f109b9ffbull, // tick 89
-    0x00ff53b4fcd39830ull, // tick 144
-    0x95ec90e6d8f7f7c1ull, // tick 233
-    0xe3516252140896f1ull, // tick 377
+    0xbc57fe27de6e048cull, // tick 55
+    0xe93a445c00dd2d97ull, // tick 89
+    0x0187f7f8393bc49bull, // tick 144
+    0xa34a6512b66a055full, // tick 233
+    0x5390a18df1e53557ull, // tick 377
 }};
 
 } // namespace
@@ -473,7 +475,11 @@ static void testTheCanonicalSceneHashesToTheSameNumberOnEveryBuild() {
     // move is that and nothing else: putting back the old arithmetic for an
     // overlapping edge contact's depth - the one other number the fix touched -
     // leaves this value exactly where it is.
-    constexpr uint64_t kCanonical = 6794834318059694172ull;
+    //
+    // And once more, deliberately, from 6794834318059694172, when friction's two tangent axes were fixed for the step (the solver had derived
+    // the axis again on every pass from the contact's sliding direction, with one unsigned accumulator, and walked a box at rest sideways at a
+    // combined friction of 0.4 to 0.6). The scene's boxes land on a floor and rest there, which is what the change touches.
+    constexpr uint64_t kCanonical = 5315541090559602734ull;
 
     const uint64_t actual = runFor(240);
     CHECK_MSG(actual == kCanonical,

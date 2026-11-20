@@ -1656,13 +1656,25 @@ the world, so the box in the middle of a stack is pushed out of the box below it
 and straight into the box above, every step, and the stack sinks and shivers
 rather than settling.
 
-**Coulomb friction**, in the same pass, after the normal impulse. The tangent is
-recomputed from the relative velocity *after* that impulse and at the contact,
-spin included — friction acts on the surface speed, which is zero for a ball
-rolling without slipping and is the entire reason a ball rolls instead of
-sliding. The tangential impulse is clamped against the **accumulated** normal
-impulse, so it can slow sliding but never reverse it and never exceeds what the
-contact is actually being pressed together with.
+**Coulomb friction**, in the same pass, after the normal impulse, along **two
+tangent axes that are fixed for the contact's step** - the first is the way the
+contact is sliding when the step begins (any direction at right angles to the
+normal, chosen from the normal alone, when it is not sliding), the second is at
+right angles to both - each with its own **signed** accumulator. The velocity
+each axis is solved against is read *after* the normal impulse and at the
+contact, spin included — friction acts on the surface speed, which is zero for a
+ball rolling without slipping and is the entire reason a ball rolls instead of
+sliding. Each accumulator is clamped to plus or minus friction times the
+**accumulated** normal impulse, so friction never exceeds what the contact is
+actually being pressed together with, and - because the axis does not turn round
+when a pass overshoots - a later pass can take back what an earlier one
+overshot by. (Until this was written the axis was derived again on every pass
+from the sliding direction and the accumulator was one unsigned number: after an
+overshoot the new axis was the opposite one, the accumulator was already at its
+clamp, and friction could not undo it. A box lying on a floor at a combined
+friction of 0.4 to 0.6 was walked sideways for ever at several units a second,
+awake; the engine's `test_physics` has the box at rest at every friction a game
+uses, and a slide that stops where mu says.)
 
 Both impulses are applied linearly and angularly, at the arm from each body's
 centre. That arm is the whole of the difference between a body that slides and

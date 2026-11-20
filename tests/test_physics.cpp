@@ -1389,6 +1389,71 @@ static void testAGrippyFloorStopsASlideSooner() {
               "and about where mu = 1 says: " + std::to_string(onGrippyFloor) + " m");
 }
 
+static void testABoxAtRestStaysAtRestAtEveryFriction() {
+    // A box lying on a floor stays where it is, at EVERY combined friction a game uses.
+    // Friction's tangent used to be derived again on every solver pass from the contact's
+    // sliding direction, with one unsigned accumulator, so a pass that overshot (the point
+    // solved before it, on a face that is four points) left the next pass an axis that had
+    // turned round and an accumulator already at its clamp with nothing to undo it with:
+    // a box at rest was walked sideways for ever, awake, at a combined friction of 0.4 to
+    // 0.6 (5.7 units a second for a flat crate, 8.8 for a barrel), and held only from 0.6
+    // up. The pairs are the decoded ones of a 2D puzzle game's crates and barrels on its
+    // platforms and blocks (0.96 and 0.7 against 0.2 and 0.4) and the round numbers round
+    // them. Sleeping is off, so that a creep cannot be hidden by a body that was put away.
+    struct Pair {
+        float box;
+        float floor;
+    };
+    for (const Pair& pair : {Pair{0.96f, 0.2f}, Pair{0.7f, 0.2f}, Pair{0.7f, 0.4f}, Pair{0.5f, 0.5f}, Pair{0.2f, 0.2f},
+                             Pair{0.6f, 0.6f}, Pair{0.3f, 0.3f}, Pair{1.0f, 1.0f}}) {
+        PhysicsMaterialComponent surface;
+        surface.friction = pair.floor;
+        surface.restitution = 0.0f;
+        entt::registry registry;
+        makeFloorWithMaterial(registry, &surface);
+        const auto box = makeBox(registry, glm::vec3(0.0f, 1.2f, 0.0f));
+        auto& body = registry.get<RigidBodyComponent>(box);
+        body.friction = pair.box;
+        body.restitution = 0.0f;
+        body.allowSleep = false;
+        stepFor(registry, 1.0f);
+        const float settledX = registry.get<TransformComponent>(box).position.x;
+        float fastest = 0.0f;
+        for (int tick = 0; tick < 240; ++tick) {
+            PhysicsSystem::Update(registry, 1.0f / 60.0f);
+            const glm::vec3 velocity = registry.get<RigidBodyComponent>(box).velocity;
+            fastest = std::max(fastest, std::abs(velocity.x) + std::abs(velocity.z));
+        }
+        const float walked = std::abs(registry.get<TransformComponent>(box).position.x - settledX);
+        const std::string label = "a box with " + std::to_string(pair.box) + " on a floor with " + std::to_string(pair.floor);
+        CHECK_MSG(fastest < 0.02f, label + " lies still: it went along the floor at " + std::to_string(fastest) + " m/s");
+        CHECK_MSG(walked < 0.02f, label + " stays where it settled: it walked " + std::to_string(walked) + " m in four seconds");
+    }
+}
+
+static void testASlideStopsWhereTheFrictionSaysAtALowFriction() {
+    // The other end of the range: v^2 / 2 mu g at mu = 0.2 (0.2 on 0.2), 2.29 m for 3 m/s. Rotation frozen, so the
+    // slide cannot turn into a tumble; the fixed axes must slow a slide along its own line.
+    PhysicsMaterialComponent surface;
+    surface.friction = 0.2f;
+    entt::registry registry;
+    makeFloorWithMaterial(registry, &surface);
+    const auto box = makeBox(registry, glm::vec3(0.0f, 0.7f, 0.0f), 1.0f, glm::vec3(1.0f, 0.4f, 1.0f));
+    auto& body = registry.get<RigidBodyComponent>(box);
+    body.friction = 0.2f;
+    body.restitution = 0.0f;
+    body.freezeRotation = true;
+    body.allowSleep = false;
+    stepFor(registry, 0.5f);
+    const float start = registry.get<TransformComponent>(box).position.x;
+    registry.get<RigidBodyComponent>(box).velocity.x = 3.0f;
+    stepFor(registry, 4.0f);
+    const float slid = registry.get<TransformComponent>(box).position.x - start;
+    CHECK_MSG(test::nearly(slid, 9.0f / (2.0f * 0.2f * 9.81f), 0.2f),
+              "a slide at mu = 0.2 stops about where mu says: " + std::to_string(slid) + " m");
+    CHECK_MSG(std::abs(registry.get<RigidBodyComponent>(box).velocity.x) < 0.02f, "and it has stopped");
+}
+
 static void testAHullRestsOnTerrain() {
     // Named rather than implied: a hull against a HEIGHTFIELD collides as the
     // box that contains it, because the heightfield's contact model is written
@@ -4293,6 +4358,8 @@ static void runTests() {
     testACrateDroppedFlatOnAHullLandsFlat();
     testAFloorWithNoBounceKillsALanding();
     testAGrippyFloorStopsASlideSooner();
+    testABoxAtRestStaysAtRestAtEveryFriction();
+    testASlideStopsWhereTheFrictionSaysAtALowFriction();
 
     testASphereIsTheSameSizeWhicheverWayItIsTurned();
     testABallLandsOnTheTerrainInsteadOfFallingThroughIt();

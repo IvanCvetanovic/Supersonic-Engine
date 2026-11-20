@@ -28,6 +28,11 @@ namespace {
 constexpr float kRestitution = 0.3f;
 constexpr float kRestVelocity = 0.1f;
 
+// Slower than this along a contact's surface and the contact is taken to be at rest, so
+// its first friction axis is chosen from the normal alone and not from a direction that
+// is noise (the step's friction axes: PhysicsSystem's velocity solve).
+constexpr float kSlideAxisSpeed = 1e-3f;
+
 // Positional correction. Bodies are allowed to interpenetrate by kSlop before
 // anything is pushed apart, and only kCorrection of the remaining overlap is
 // removed per step: correcting to exactly zero makes resting stacks vibrate,
@@ -1101,7 +1106,26 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // the contact can only ever push. Without the accumulator, N iterations
         // apply N full impulses and everything launches.
         float normalImpulse{0.0f};
-        float tangentImpulse{0.0f};
+
+        // Friction acts along TWO tangent axes that are FIXED when the constraint is
+        // built, each with its own SIGNED accumulator clamped to +-(friction x the
+        // accumulated normal impulse) - Box2D's solver, whose tangent is
+        // cross(normal, 1) for the contact's life. Deriving the axis again on every
+        // pass from the contact's current sliding direction, with one unsigned
+        // accumulator, was the engine's friction until this was written: after a pass
+        // overshot (a box at rest is overshot by the point solved before it) the
+        // sliding direction reversed, so the new axis was the opposite one and the
+        // accumulator, already at its clamp, had nothing left to undo it with. A box
+        // lying on a floor at a combined friction of 0.4 to 0.6 was walked sideways
+        // for ever at 5.7 to 8.8 units a second, awake; at 0.1 to 0.3 it slid a few
+        // units and stopped, and at 0.6 and over it held, which is why a game that
+        // wanted a barrel to slide had to give every body a friction of 1.
+        glm::vec3 tangent1{1.0f, 0.0f, 0.0f};
+        glm::vec3 tangent2{0.0f, 0.0f, 1.0f};
+        float tangentMass1{0.0f};
+        float tangentMass2{0.0f};
+        float tangentImpulse1{0.0f};
+        float tangentImpulse2{0.0f};
 
         float friction{0.0f};
     };
@@ -1690,6 +1714,34 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             // not.
             constraint.targetVelocity = std::max(-restitution * alongNormal, -allowedApproach);
 
+            // The friction axes, fixed for this step. The first is the direction the
+            // contact is SLIDING in as the step begins, so that a sliding body is
+            // slowed along the line it slides on and not by two component clamps at an
+            // angle to it; with no slide to speak of (a body at rest) it is any
+            // direction at right angles to the normal, chosen by the normal alone so
+            // every point of a face agrees on it. The second is at right angles to
+            // both.
+            const glm::vec3 sliding = (velocityB - velocityA) - constraint.normal * alongNormal;
+            const float slidingSpeed = glm::length(sliding);
+            if (slidingSpeed > kSlideAxisSpeed) {
+                constraint.tangent1 = sliding / slidingSpeed;
+            } else {
+                const glm::vec3 helper = std::abs(constraint.normal.x) < 0.57f ? glm::vec3(1.0f, 0.0f, 0.0f)
+                                                                               : glm::vec3(0.0f, 1.0f, 0.0f);
+                constraint.tangent1 = glm::normalize(glm::cross(constraint.normal, helper));
+            }
+            constraint.tangent2 = glm::normalize(glm::cross(constraint.normal, constraint.tangent1));
+            for (int axis = 0; axis < 2; ++axis) {
+                const glm::vec3& tangent = axis == 0 ? constraint.tangent1 : constraint.tangent2;
+                const glm::vec3 tangentialA =
+                    glm::cross(a.inverseInertia * glm::cross(constraint.armA, tangent), constraint.armA);
+                const glm::vec3 tangentialB =
+                    glm::cross(b.inverseInertia * glm::cross(constraint.armB, tangent), constraint.armB);
+                const float tangentMass = linearInverseMass(a, tangent) + linearInverseMass(b, tangent) +
+                                          glm::dot(tangentialA + tangentialB, tangent);
+                (axis == 0 ? constraint.tangentMass1 : constraint.tangentMass2) = tangentMass;
+            }
+
             constraints.push_back(constraint);
         }
     }
@@ -2121,48 +2173,42 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
             // ---- Friction ----
             //
-            // Recomputed after the normal impulse and at the contact, spin
-            // included: friction acts on the SURFACE speed, which is zero for a
-            // ball rolling without slipping and is the entire reason a ball
-            // rolls rather than slides.
-            const glm::vec3 postSpinA = surfaceA ? rigidA->angularVelocity : glm::vec3(0.0f);
-            const glm::vec3 postSpinB = surfaceB ? rigidB->angularVelocity : glm::vec3(0.0f);
-            const glm::vec3 postRelative =
-                ((surfaceB ? rigidB->velocity : glm::vec3(0.0f)) + glm::cross(postSpinB, constraint.armB)) -
-                ((surfaceA ? rigidA->velocity : glm::vec3(0.0f)) + glm::cross(postSpinA, constraint.armA));
-
-            glm::vec3 tangent = postRelative - constraint.normal * glm::dot(postRelative, constraint.normal);
-            const float tangentLength = glm::length(tangent);
-            if (tangentLength < 1e-5f) continue;
-            tangent /= tangentLength;
-
-            const glm::vec3 tangentialA =
-                glm::cross(bodyA.inverseInertia * glm::cross(constraint.armA, tangent), constraint.armA);
-            const glm::vec3 tangentialB =
-                glm::cross(bodyB.inverseInertia * glm::cross(constraint.armB, tangent), constraint.armB);
-            const float tangentMass = linearInverseMass(bodyA, tangent) + linearInverseMass(bodyB, tangent)
-                                    + glm::dot(tangentialA + tangentialB, tangent);
-            if (tangentMass <= 1e-9f) continue;
-
-            float frictionLambda = -glm::dot(postRelative, tangent) / tangentMass;
-
-            // Clamped against the ACCUMULATED normal impulse, so friction can
-            // slow sliding but never reverse it, and never exceeds what the
-            // contact is actually being pressed together with.
+            // Along the two axes fixed when the constraint was built, each solved
+            // against the contact's velocity AS IT IS NOW - after the normal impulse
+            // and after the other axis - spin included: friction acts on the SURFACE
+            // speed, which is zero for a ball rolling without slipping and is the
+            // entire reason a ball rolls rather than slides. Each axis accumulates a
+            // SIGNED impulse clamped to what the contact is actually being pressed
+            // together with, so friction can slow sliding and, when a pass has
+            // overshot, take back what it overshot by - which an accumulator along an
+            // axis that turns round with the slide cannot.
             const float maxFriction = constraint.friction * constraint.normalImpulse;
-            const float previousTangent = constraint.tangentImpulse;
-            constraint.tangentImpulse =
-                std::clamp(previousTangent + frictionLambda, -maxFriction, maxFriction);
-            frictionLambda = constraint.tangentImpulse - previousTangent;
+            for (int axis = 0; axis < 2; ++axis) {
+                const glm::vec3& tangent = axis == 0 ? constraint.tangent1 : constraint.tangent2;
+                const float tangentMass = axis == 0 ? constraint.tangentMass1 : constraint.tangentMass2;
+                if (tangentMass <= 1e-9f) continue;
 
-            const glm::vec3 frictionImpulse = tangent * frictionLambda;
-            if (movableA) {
-                rigidA->velocity -= frictionImpulse * bodyA.inverseMass * bodyA.linearFactor;
-                rigidA->angularVelocity -= bodyA.inverseInertia * glm::cross(constraint.armA, frictionImpulse);
-            }
-            if (movableB) {
-                rigidB->velocity += frictionImpulse * bodyB.inverseMass * bodyB.linearFactor;
-                rigidB->angularVelocity += bodyB.inverseInertia * glm::cross(constraint.armB, frictionImpulse);
+                const glm::vec3 postSpinA = surfaceA ? rigidA->angularVelocity : glm::vec3(0.0f);
+                const glm::vec3 postSpinB = surfaceB ? rigidB->angularVelocity : glm::vec3(0.0f);
+                const glm::vec3 postRelative =
+                    ((surfaceB ? rigidB->velocity : glm::vec3(0.0f)) + glm::cross(postSpinB, constraint.armB)) -
+                    ((surfaceA ? rigidA->velocity : glm::vec3(0.0f)) + glm::cross(postSpinA, constraint.armA));
+
+                float frictionLambda = -glm::dot(postRelative, tangent) / tangentMass;
+                float& accumulated = axis == 0 ? constraint.tangentImpulse1 : constraint.tangentImpulse2;
+                const float previousTangent = accumulated;
+                accumulated = std::clamp(previousTangent + frictionLambda, -maxFriction, maxFriction);
+                frictionLambda = accumulated - previousTangent;
+
+                const glm::vec3 frictionImpulse = tangent * frictionLambda;
+                if (movableA) {
+                    rigidA->velocity -= frictionImpulse * bodyA.inverseMass * bodyA.linearFactor;
+                    rigidA->angularVelocity -= bodyA.inverseInertia * glm::cross(constraint.armA, frictionImpulse);
+                }
+                if (movableB) {
+                    rigidB->velocity += frictionImpulse * bodyB.inverseMass * bodyB.linearFactor;
+                    rigidB->angularVelocity += bodyB.inverseInertia * glm::cross(constraint.armB, frictionImpulse);
+                }
             }
         }
 
