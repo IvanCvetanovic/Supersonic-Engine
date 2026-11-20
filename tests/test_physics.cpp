@@ -1199,7 +1199,9 @@ static void testALockedBodyNeverLeavesItsPlane() {
     // The free axes are untouched: it fell, landed, moved along x and turned.
     const auto& transform = registry.get<TransformComponent>(crate);
     CHECK_MSG(test::nearly(transform.position.y, 1.0f, 0.05f), "it lands on the floor as an unlocked box would");
-    CHECK_MSG(transform.position.x > 0.1f, "and still moves along x");
+    // Which way: it lands spinning and bounces at the touch (restitution is applied at the contact), so the slide it comes to rest after is not
+    // the one that was thrown; only that x is free, and was used, is the claim.
+    CHECK_MSG(std::fabs(transform.position.x) > 0.05f, "and still moves along x: " + std::to_string(transform.position.x));
     CHECK_MSG(turned, "and still turns about z");
 }
 
@@ -1452,6 +1454,122 @@ static void testASlideStopsWhereTheFrictionSaysAtALowFriction() {
     CHECK_MSG(test::nearly(slid, 9.0f / (2.0f * 0.2f * 9.81f), 0.2f),
               "a slide at mu = 0.2 stops about where mu says: " + std::to_string(slid) + " m");
     CHECK_MSG(std::abs(registry.get<RigidBodyComponent>(box).velocity.x) < 0.02f, "and it has stopped");
+}
+
+static void testAStackOfBoxesSleeps() {
+    // Two boxes in contact, one on the other and two side by side, go to sleep. A body's contact told its neighbour whether it was MOVING by
+    // its live velocity, which by then held the step's own gravity (0.16 m/s at 60 Hz against a sleep speed of 0.05), so every awake body that
+    // rested on another looked like a moving one and each held the other's sleep timer at zero for ever: the stack of two never slept, at any
+    // friction, with the old friction solve or the new. The neighbour is judged by the velocity it had when the step began.
+    struct Pair {
+        float box;
+        float floor;
+    };
+    for (const Pair& pair : {Pair{0.7f, 0.2f}, Pair{0.96f, 0.2f}, Pair{0.5f, 0.5f}, Pair{1.0f, 1.0f}}) {
+        PhysicsMaterialComponent surface;
+        surface.friction = pair.floor;
+        surface.restitution = 0.0f;
+        const std::string label = "boxes at " + std::to_string(pair.box) + " on " + std::to_string(pair.floor);
+
+        entt::registry stack;
+        makeFloorWithMaterial(stack, &surface);
+        const auto lower = makeBox(stack, glm::vec3(0.0f, 1.0f, 0.0f), 1.0f, glm::vec3(0.58f, 0.76f, 0.58f));
+        const auto upper = makeBox(stack, glm::vec3(0.0f, 1.9f, 0.0f), 1.0f, glm::vec3(0.58f, 0.76f, 0.58f));
+        for (const auto box : {lower, upper}) {
+            auto& body = stack.get<RigidBodyComponent>(box);
+            body.friction = pair.box;
+            body.restitution = 0.0f;
+        }
+        stepFor(stack, 4.0f);
+        CHECK_MSG(stack.get<RigidBodyComponent>(lower).isSleeping && stack.get<RigidBodyComponent>(upper).isSleeping,
+                  "a stack of " + label + " is asleep after four seconds");
+
+        entt::registry pair2;
+        makeFloorWithMaterial(pair2, &surface);
+        const auto left = makeBox(pair2, glm::vec3(-0.4f, 1.0f, 0.0f), 1.0f, glm::vec3(0.58f, 0.76f, 0.58f));
+        const auto right = makeBox(pair2, glm::vec3(0.4f, 1.0f, 0.0f), 1.0f, glm::vec3(0.58f, 0.76f, 0.58f));
+        for (const auto box : {left, right}) {
+            auto& body = pair2.get<RigidBodyComponent>(box);
+            body.friction = pair.box;
+            body.restitution = 0.0f;
+        }
+        stepFor(pair2, 4.0f);
+        CHECK_MSG(pair2.get<RigidBodyComponent>(left).isSleeping && pair2.get<RigidBodyComponent>(right).isSleeping,
+                  "two " + label + " side by side are asleep after four seconds");
+    }
+}
+
+static void testABoxLandingOnASleepingBoxStillWakesIt() {
+    // What the neighbour rule is for, kept: a body that is moving when the step begins wakes the sleeper it touches.
+    entt::registry registry;
+    makeFloorWithMaterial(registry, nullptr);
+    const auto lower = makeBox(registry, glm::vec3(0.0f, 1.0f, 0.0f), 1.0f, glm::vec3(0.58f, 0.76f, 0.58f));
+    registry.get<RigidBodyComponent>(lower).restitution = 0.0f;
+    stepFor(registry, 2.0f);
+    CHECK_MSG(registry.get<RigidBodyComponent>(lower).isSleeping, "the lower box is asleep before the other lands");
+    const auto upper = makeBox(registry, glm::vec3(0.0f, 4.0f, 0.0f), 1.0f, glm::vec3(0.58f, 0.76f, 0.58f));
+    registry.get<RigidBodyComponent>(upper).restitution = 0.0f;
+    bool woke = false;
+    for (int tick = 0; tick < 120 && !woke; ++tick) {
+        PhysicsSystem::Update(registry, 1.0f / 60.0f);
+        woke = !registry.get<RigidBodyComponent>(lower).isSleeping;
+    }
+    CHECK_MSG(woke, "a box that lands on a sleeping one wakes it");
+}
+
+static void testABouncingBoxTurnsRoundAtTheTouchNotBeforeIt() {
+    // Restitution is applied at the contact. A pair that was apart and closing inside the step used to get its bounce at once, so a box of
+    // restitution 0.5 turned round up to a step's travel above the floor. Dropped 1 m (4.4 m/s, 0.07 m a step): the turn-round is at the floor,
+    // and the first rebound rises about e^2 h.
+    PhysicsMaterialComponent surface;
+    surface.restitution = 0.5f;
+    surface.friction = 0.4f;
+    entt::registry registry;
+    makeFloorWithMaterial(registry, &surface);
+    const auto box = makeBox(registry, glm::vec3(0.0f, 2.0f, 0.0f));
+    auto& body = registry.get<RigidBodyComponent>(box);
+    body.restitution = 0.5f;
+    body.freezeRotation = true;
+    body.allowSleep = false;
+    constexpr float kFloorTop = 0.5f;
+    constexpr float kHalf = 0.5f;
+    float turnGap = -1.0f;
+    float apex = 0.0f;
+    float previousVelocity = 0.0f;
+    bool bounced = false;
+    for (int tick = 0; tick < 240; ++tick) {
+        PhysicsSystem::Update(registry, 1.0f / 60.0f);
+        const float velocity = registry.get<RigidBodyComponent>(box).velocity.y;
+        const float bottom = registry.get<TransformComponent>(box).position.y - kHalf;
+        if (!bounced && previousVelocity < -1.0f && velocity > 0.0f) {
+            bounced = true;
+            turnGap = bottom - kFloorTop;
+        }
+        if (bounced) apex = std::max(apex, bottom - kFloorTop);
+        previousVelocity = velocity;
+    }
+    CHECK_MSG(bounced, "the box bounces");
+    CHECK_MSG(turnGap < 0.05f, "and turns round at the floor, not above it: " + std::to_string(turnGap) + " m over it");
+    CHECK_MSG(test::nearly(apex, 0.25f * 1.0f, 0.2f), "and rises about e^2 h: " + std::to_string(apex) + " m, not 0.25");
+}
+
+static void testAFastBouncingBoxDoesNotGoThroughAThinFloor() {
+    // The limit on the rule above: deeper than a tenth of a metre in one step the old rule stands, so a bouncing body that fast does not go
+    // through what it meets.
+    entt::registry registry;
+    const auto thin = makeStaticBox(registry, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(20.0f, 0.1f, 20.0f));
+    registry.emplace<PhysicsMaterialComponent>(thin, PhysicsMaterialComponent{});
+    registry.get<PhysicsMaterialComponent>(thin).restitution = 0.5f;
+    const auto box = makeBox(registry, glm::vec3(0.0f, 3.0f, 0.0f));
+    auto& body = registry.get<RigidBodyComponent>(box);
+    body.restitution = 0.5f;
+    body.velocity.y = -25.0f;
+    float lowest = 100.0f;
+    for (int tick = 0; tick < 120; ++tick) {
+        PhysicsSystem::Update(registry, 1.0f / 60.0f);
+        lowest = std::min(lowest, registry.get<TransformComponent>(box).position.y);
+    }
+    CHECK_MSG(lowest > -0.1f, "a box falling at 25 m/s does not go through a floor a tenth of a metre thick: it got to " + std::to_string(lowest));
 }
 
 static void testAHullRestsOnTerrain() {
@@ -2627,7 +2745,10 @@ static void testSleepChangesWhereThingsEndUpByNothing() {
         const glm::vec3 slept = sleeping.get<TransformComponent>(sleepingBodies[i]).position;
         const glm::vec3 ran = awake.get<TransformComponent>(awakeBodies[i]).position;
         const float drift = glm::length(slept - ran);
-        CHECK_MSG(drift < 1e-4f,
+        // Within a centimetre or two (the solver's resting slop is 5 mm): a body in contact with another now sleeps when its velocity is under the sleep
+        // speed for half a second, which can be a few millimetres before a stack has finished settling; a lone body on the floor is still
+        // frozen at the fixed point, exactly.
+        CHECK_MSG(drift < 0.02f,
                   "body " + std::to_string(i) + " ended up somewhere else when it slept: " +
                       std::to_string(drift));
     }
@@ -4360,6 +4481,10 @@ static void runTests() {
     testAGrippyFloorStopsASlideSooner();
     testABoxAtRestStaysAtRestAtEveryFriction();
     testASlideStopsWhereTheFrictionSaysAtALowFriction();
+    testAStackOfBoxesSleeps();
+    testABoxLandingOnASleepingBoxStillWakesIt();
+    testABouncingBoxTurnsRoundAtTheTouchNotBeforeIt();
+    testAFastBouncingBoxDoesNotGoThroughAThinFloor();
 
     testASphereIsTheSameSizeWhicheverWayItIsTurned();
     testABallLandsOnTheTerrainInsteadOfFallingThroughIt();

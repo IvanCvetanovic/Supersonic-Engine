@@ -28,6 +28,14 @@ namespace {
 constexpr float kRestitution = 0.3f;
 constexpr float kRestVelocity = 0.1f;
 
+// How far a BOUNCING body (a pair with a restitution) may go into what it meets in the one step that carries it there (0.15 m, 7.5 pixels at 50 a metre). A pair that is apart
+// but closing inside this step is a speculative contact, and its restitution used to be applied at once, turning the body round up to a whole
+// step's travel BEFORE it touched (a stone of restitution 0.15 dropped 100 pixels turned round 5 pixels over the floor): Box2D has no contact
+// until the shapes meet and bounces at the touch. Now such a pair is left alone for the step that closes it, the next step finds a real
+// overlap and bounces from the velocity the body arrived with, and the positional correction takes the burial out. Deeper than this the
+// old rule stands, because a body that fast could go through what it meets.
+constexpr float kBounceBurial = 0.15f;
+
 // Slower than this along a contact's surface and the contact is taken to be at rest, so
 // its first friction axis is chosen from the normal alone and not from a direction that
 // is noise (the step's friction axes: PhysicsSystem's velocity solve).
@@ -613,13 +621,15 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // returns early when there are fewer than two colliders, and a lone body
         // resting on the floor is exactly the case that must still be able to
         // sleep.
-        if (rigidBody.allowSleep) {
-            const bool still =
-                glm::dot(rigidBody.velocity, rigidBody.velocity) <
-                    kSleepLinearVelocity * kSleepLinearVelocity &&
-                glm::dot(rigidBody.angularVelocity, rigidBody.angularVelocity) <
-                    kSleepAngularVelocity * kSleepAngularVelocity;
+        const bool still =
+            glm::dot(rigidBody.velocity, rigidBody.velocity) <
+                kSleepLinearVelocity * kSleepLinearVelocity &&
+            glm::dot(rigidBody.angularVelocity, rigidBody.angularVelocity) <
+                kSleepAngularVelocity * kSleepAngularVelocity;
+        // What a neighbour's contact is told about this body (the wake rule below), judged here, before gravity is added.
+        rigidBody.stirringAtStepStart = !still;
 
+        if (rigidBody.allowSleep) {
             if (!still) {
                 rigidBody.sleepTimer = 0.0f;
             } else {
@@ -1181,12 +1191,12 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
             // An awake but equally still neighbour must NOT count, or two crates
             // settling side by side hold each other awake forever, which is the
-            // usual way a sleep implementation ends up never sleeping.
-            const bool moving =
-                glm::dot(otherRigid->velocity, otherRigid->velocity) >=
-                    kSleepLinearVelocity * kSleepLinearVelocity ||
-                glm::dot(otherRigid->angularVelocity, otherRigid->angularVelocity) >=
-                    kSleepAngularVelocity * kSleepAngularVelocity;
+            // usual way a sleep implementation ends up never sleeping. "Still" is
+            // what the neighbour's velocity was when the step began: by now its
+            // gravity for this step is in the live velocity (0.16 m/s at 60 Hz, over
+            // the 0.05 threshold), and judged on that every awake body that rests on
+            // anything is moving, which is exactly the stack that never slept.
+            const bool moving = otherRigid->stirringAtStepStart;
             if (!moving) return;
         }
 
@@ -1706,6 +1716,18 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             const float restitution = (std::abs(alongNormal) < kRestVelocity)
                                     ? 0.0f
                                     : combineRestitution(bounceA, bounceB);
+
+            // A bounce is for a CONTACT, not for a gap: a pair that is apart and
+            // will meet inside this step is let through, and bounces next step.
+            // Not for a body that is moved AFTER the solve (integrateAfterSolve): it moves by the velocity the solve leaves it, so what the solve does
+            // not take out of its approach it buries itself with.
+            // (Under the world ground plane the flag is ignored, as the integrate loop ignores it.)
+            if (speculative && restitution > 0.0f && alongNormal < 0.0f && !(rigidA && rigidA->integrateAfterSolve && !settings.hasGroundPlane) &&
+                !(rigidB && rigidB->integrateAfterSolve && !settings.hasGroundPlane)) {
+                const float gap = -penetration;
+                const float travel = -alongNormal * deltaTime;
+                if (travel >= gap && travel - gap <= kBounceBurial) continue;
+            }
 
             // The bounce says how fast the body should be leaving; the
             // allowance says it may still approach fast enough to close the

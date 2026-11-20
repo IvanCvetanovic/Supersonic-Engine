@@ -1313,6 +1313,12 @@ struct RigidBodyComponent {
     // - an editor gizmo, a script, a debugger scrub - wakes it instead of
     // leaving it hanging wherever it was put.
     glm::vec3 sleepPosition{0.0f};
+
+    // Whether the velocity the LAST solve left this body was at or over the sleep thresholds. Written by PhysicsSystem at the top of each
+    // step, before gravity is added to the velocity, and read by the contact wake rule: by the time contacts are found this step's own
+    // gravity (0.16 m/s at 60 Hz, over the 0.05 m/s threshold) is in the velocity, so a body at rest looked like a moving one, and two
+    // bodies in contact - a stack, two crates side by side - held each other awake for ever. Runtime state, not serialised, not hashed.
+    bool stirringAtStepStart{false};
 };
 
 // The surface a collider presents when it has no rigid body: level geometry.

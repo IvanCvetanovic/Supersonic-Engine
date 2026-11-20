@@ -378,20 +378,23 @@ void checkTrail(const char* scene, const Trail& actual, const Trail& recorded) {
 // Recorded on the engine at 5781518, the commit before integrateAfterSolve, and RE-recorded when the friction solve was given axes that are fixed
 // for a contact's step and a signed accumulator each (PhysicsSystem, the velocity solve): the plane world's first 34 ticks are as they were, the mixed
 // world's boxes are in contact from its first tick and none of its checkpoints is.
+// Re-recorded once more when a body in contact stopped holding its neighbour awake (the wake rule reads a neighbour's velocity from the START of the
+// step, not with the step's own gravity in it): the mixed world's stacks now sleep, and its checkpoints from tick 34 on moved; the plane world's did not.
+// Re-recorded again when restitution was applied at the contact and not at a gap (a pair closing inside the step is left alone for the step that closes it): every scene whose bodies bounce moved.
 constexpr Trail kRecordedMixedWorld = {{
     0xe08cd43302dbec6cull, // tick 1
     0xa6e1908d778c0e06ull, // tick 2
     0x7609f47e5177622dull, // tick 3
     0x6778872f60252346ull, // tick 5
     0x3945becb19643f76ull, // tick 8
-    0x741abc2fb1de2b0dull, // tick 13
-    0x115cb5437ab90b60ull, // tick 21
-    0x2668b2f92c019284ull, // tick 34
-    0x75805b8a32bad9d8ull, // tick 55
-    0x59b40e36824458ecull, // tick 89
-    0xb7110e9df29ff8c0ull, // tick 144
-    0xdd372a3acdd659f5ull, // tick 233
-    0xeb60df113430e4e5ull, // tick 377
+    0x7ea2bae27ca5103cull, // tick 13
+    0x43f7501d05d3afa8ull, // tick 21
+    0x44cf9d8097bca63bull, // tick 34
+    0xd2dbce085db1d895ull, // tick 55
+    0x7210ffb5cb586e99ull, // tick 89
+    0xa9d4509c461cb61aull, // tick 144
+    0xb9a5b9e47fbda82full, // tick 233
+    0x60142c735d6f57afull, // tick 377
 }};
 constexpr Trail kRecordedPlaneWorld = {{
     0xff6a8bc1da27ac5bull, // tick 1
@@ -402,11 +405,11 @@ constexpr Trail kRecordedPlaneWorld = {{
     0x8cab6aeb7b8f581aull, // tick 13
     0x13e511022cac31adull, // tick 21
     0x5fc3b1c7fbc9f185ull, // tick 34
-    0xbc57fe27de6e048cull, // tick 55
-    0xe93a445c00dd2d97ull, // tick 89
-    0x0187f7f8393bc49bull, // tick 144
-    0xa34a6512b66a055full, // tick 233
-    0x5390a18df1e53557ull, // tick 377
+    0x1ccf0187b45a1d46ull, // tick 55
+    0xdbe93c72f6f4016aull, // tick 89
+    0x471937bc047f913bull, // tick 144
+    0xd420c4ad58fb483aull, // tick 233
+    0x1b7f3c7dc12a1ee8ull, // tick 377
 }};
 
 } // namespace
@@ -479,7 +482,8 @@ static void testTheCanonicalSceneHashesToTheSameNumberOnEveryBuild() {
     // And once more, deliberately, from 6794834318059694172, when friction's two tangent axes were fixed for the step (the solver had derived
     // the axis again on every pass from the contact's sliding direction, with one unsigned accumulator, and walked a box at rest sideways at a
     // combined friction of 0.4 to 0.6). The scene's boxes land on a floor and rest there, which is what the change touches.
-    constexpr uint64_t kCanonical = 5315541090559602734ull;
+    // Re-recorded again when restitution was applied at the contact and not at a gap (a pair closing inside the step is left alone for the step that closes it): every scene whose bodies bounce moved.
+    constexpr uint64_t kCanonical = 11629067755464590730ull;
 
     const uint64_t actual = runFor(240);
     CHECK_MSG(actual == kCanonical,
