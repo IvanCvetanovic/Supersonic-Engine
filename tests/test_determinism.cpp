@@ -381,20 +381,21 @@ void checkTrail(const char* scene, const Trail& actual, const Trail& recorded) {
 // Re-recorded once more when a body in contact stopped holding its neighbour awake (the wake rule reads a neighbour's velocity from the START of the
 // step, not with the step's own gravity in it): the mixed world's stacks now sleep, and its checkpoints from tick 34 on moved; the plane world's did not.
 // Re-recorded again when restitution was applied at the contact and not at a gap (a pair closing inside the step is left alone for the step that closes it): every scene whose bodies bounce moved.
+// Re-recorded again with the rest speed of the bounce tied to gravity (an approach slower than twice what gravity adds in a step is not a bounce): the scenes whose bodies bounce moved.
 constexpr Trail kRecordedMixedWorld = {{
-    0xe08cd43302dbec6cull, // tick 1
-    0xa6e1908d778c0e06ull, // tick 2
-    0x7609f47e5177622dull, // tick 3
-    0x6778872f60252346ull, // tick 5
-    0x3945becb19643f76ull, // tick 8
-    0x7ea2bae27ca5103cull, // tick 13
-    0x43f7501d05d3afa8ull, // tick 21
-    0x44cf9d8097bca63bull, // tick 34
-    0xd2dbce085db1d895ull, // tick 55
-    0x7210ffb5cb586e99ull, // tick 89
-    0xa9d4509c461cb61aull, // tick 144
-    0xb9a5b9e47fbda82full, // tick 233
-    0x60142c735d6f57afull, // tick 377
+    0x6639a751603c3c0bull, // tick 1
+    0xf8caa43318cd9829ull, // tick 2
+    0x9fd49068da4b9ae0ull, // tick 3
+    0x4e58ce94e50475e3ull, // tick 5
+    0x7f6bb982783926e6ull, // tick 8
+    0x70e409f360fa51deull, // tick 13
+    0xe259220a8690a7eeull, // tick 21
+    0x37944497f4820818ull, // tick 34
+    0xdb8a524f5433f94dull, // tick 55
+    0xdcbdd3404b95bedeull, // tick 89
+    0x493d4718feee54f1ull, // tick 144
+    0xbaf7e3d6e3c76ffaull, // tick 233
+    0x8b3871801fce8913ull, // tick 377
 }};
 constexpr Trail kRecordedPlaneWorld = {{
     0xff6a8bc1da27ac5bull, // tick 1
@@ -483,7 +484,8 @@ static void testTheCanonicalSceneHashesToTheSameNumberOnEveryBuild() {
     // the axis again on every pass from the contact's sliding direction, with one unsigned accumulator, and walked a box at rest sideways at a
     // combined friction of 0.4 to 0.6). The scene's boxes land on a floor and rest there, which is what the change touches.
     // Re-recorded again when restitution was applied at the contact and not at a gap (a pair closing inside the step is left alone for the step that closes it): every scene whose bodies bounce moved.
-    constexpr uint64_t kCanonical = 11629067755464590730ull;
+    // Re-recorded again with the rest speed of the bounce tied to gravity (an approach slower than twice what gravity adds in a step is not a bounce): the scenes whose bodies bounce moved.
+    constexpr uint64_t kCanonical = 9336017844395371136ull;
 
     const uint64_t actual = runFor(240);
     CHECK_MSG(actual == kCanonical,

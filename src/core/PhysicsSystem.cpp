@@ -1712,8 +1712,12 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 + glm::cross(spinB, constraint.armB);
             const float alongNormal = glm::dot(velocityB - velocityA, constraint.normal);
 
-            // Bounce dies out near rest, or a settling box jitters forever.
-            const float restitution = (std::abs(alongNormal) < kRestVelocity)
+            // Bounce dies out near rest, or a settling box jitters forever. "Near rest" is an approach slower than what gravity alone adds in a
+            // step, twice over (Box2D's own threshold is a fixed 1 m/s, which is the same idea for its 1/60 s step): a body lying on a floor is
+            // pulled into it by g * dt every step, 0.16 m/s at 9.81 and 60 Hz and 1.3 m/s where a game carries a stronger gravity, and a
+            // fixed 0.1 m/s let that look like an impact, so every resting body with a restitution bounced in place for ever.
+            const float restThreshold = std::max(kRestVelocity, 2.0f * glm::length(settings.gravity) * deltaTime);
+            const float restitution = (std::abs(alongNormal) < restThreshold)
                                     ? 0.0f
                                     : combineRestitution(bounceA, bounceB);
 
